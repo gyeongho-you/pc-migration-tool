@@ -1,0 +1,134 @@
+"""프로그램별 백업/복원 규칙(JSON) 스키마와 로더.
+
+규칙 파일 형식::
+
+    {
+      "id": "revit",
+      "name": "Autodesk Revit",
+      "detect": {
+        "display_name_patterns": ["Autodesk Revit"],  # Uninstall DisplayName 부분일치(대소문자 무시)
+        "install_paths": ["%ProgramFiles%\\Autodesk"],  # 존재하면 감지
+        "registry_keys": []                           # 참고용(현재 감지는 DisplayName/경로만 사용)
+      },
+      "paths": [
+        {"path": "%APPDATA%\\Autodesk\\Revit", "dest": "revit/appdata",
+         "kind": "dir", "description": "..."}
+      ],
+      "manual_warnings": ["..."],
+      "notes": "확인 필요 항목 등"
+    }
+
+detect 조건은 하나 이상 있어야 하며, paths 는 백업과 복원에 공통으로 쓰인다
+(path = 원본/복원 위치, dest = 패키지 내부 상대 경로).
+"""
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from pathlib import Path, PurePosixPath, PureWindowsPath
+
+
+class RuleError(ValueError):
+    """규칙 파일 스키마 위반."""
+
+
+@dataclass(frozen=True)
+class PathRule:
+    path: str
+    dest: str
+    kind: str = "dir"  # "dir" | "file"
+    description: str = ""
+
+
+@dataclass(frozen=True)
+class Rule:
+    id: str
+    name: str
+    display_name_patterns: tuple[str, ...] = ()
+    install_paths: tuple[str, ...] = ()
+    registry_keys: tuple[str, ...] = ()
+    paths: tuple[PathRule, ...] = ()
+    manual_warnings: tuple[str, ...] = ()
+    notes: str = ""
+
+
+def _str_list(obj: dict, key: str, where: str) -> tuple[str, ...]:
+    value = obj.get(key, [])
+    if not isinstance(value, list) or not all(isinstance(v, str) and v for v in value):
+        raise RuleError(f"{where}: '{key}' 는 비어 있지 않은 문자열 배열이어야 합니다")
+    return tuple(value)
+
+
+def _check_dest(dest: str, where: str) -> None:
+    # 패키지 밖으로 나가는 경로(.., 절대경로)는 허용하지 않는다.
+    win = PureWindowsPath(dest)
+    posix = PurePosixPath(dest)
+    if (win.is_absolute() or posix.is_absolute() or win.drive
+            or ".." in win.parts or ".." in posix.parts):
+        raise RuleError(f"{where}: dest '{dest}' 는 안전한 상대 경로여야 합니다")
+
+
+def parse_rule(data: object, source: str = "<rule>") -> Rule:
+    if not isinstance(data, dict):
+        raise RuleError(f"{source}: 최상위는 객체여야 합니다")
+    for key in ("id", "name"):
+        if not isinstance(data.get(key), str) or not data[key].strip():
+            raise RuleError(f"{source}: '{key}' 문자열이 필요합니다")
+    detect = data.get("detect")
+    if not isinstance(detect, dict):
+        raise RuleError(f"{source}: 'detect' 객체가 필요합니다")
+    patterns = _str_list(detect, "display_name_patterns", source)
+    install_paths = _str_list(detect, "install_paths", source)
+    reg_keys = _str_list(detect, "registry_keys", source)
+    if not (patterns or install_paths or reg_keys):
+        raise RuleError(f"{source}: detect 에 감지 조건이 하나 이상 필요합니다")
+
+    raw_paths = data.get("paths", [])
+    if not isinstance(raw_paths, list):
+        raise RuleError(f"{source}: 'paths' 는 배열이어야 합니다")
+    paths = []
+    for i, p in enumerate(raw_paths):
+        where = f"{source}: paths[{i}]"
+        if not isinstance(p, dict):
+            raise RuleError(f"{where} 는 객체여야 합니다")
+        for key in ("path", "dest"):
+            if not isinstance(p.get(key), str) or not p[key].strip():
+                raise RuleError(f"{where}: '{key}' 문자열이 필요합니다")
+        kind = p.get("kind", "dir")
+        if kind not in ("dir", "file"):
+            raise RuleError(f"{where}: kind 는 'dir' 또는 'file' 이어야 합니다")
+        _check_dest(p["dest"], where)
+        paths.append(PathRule(p["path"], p["dest"], kind, str(p.get("description", ""))))
+
+    warnings = _str_list(data, "manual_warnings", source)
+    notes = data.get("notes", "")
+    if not isinstance(notes, str):
+        raise RuleError(f"{source}: 'notes' 는 문자열이어야 합니다")
+    return Rule(data["id"], data["name"], patterns, install_paths, reg_keys,
+                tuple(paths), warnings, notes)
+
+
+def load_rule_file(path: Path) -> Rule:
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        raise RuleError(f"{path}: JSON 파싱 실패: {e}") from e
+    return parse_rule(data, str(path))
+
+
+def load_rules(rules_dir: Path) -> list[Rule]:
+    """디렉터리의 *.json 을 모두 로드한다. id 중복은 오류."""
+    rules: list[Rule] = []
+    seen: set[str] = set()
+    for f in sorted(Path(rules_dir).glob("*.json")):
+        rule = load_rule_file(f)
+        if rule.id in seen:
+            raise RuleError(f"{f}: 중복된 규칙 id '{rule.id}'")
+        seen.add(rule.id)
+        rules.append(rule)
+    return rules
+
+
+def default_rules_dir() -> Path:
+    """저장소의 rules/ (소스 트리 실행 기준)."""
+    return Path(__file__).resolve().parents[2] / "rules"
