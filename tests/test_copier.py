@@ -130,9 +130,3 @@ def test_report_json_and_cli(tmp_path, capsys):
     assert main(["copy", str(tmp_path / "missing"), str(tmp_path / "d2"),
                  "--report", str(report)]) == 1
     assert json.loads(report.read_text(encoding="utf-8"))["failed_count"] == 1
-
-
-def test_cli_unimplemented_subcommands(capsys):
-    assert main(["export"]) == 2
-    assert main(["import", "--dry-run"]) == 2
-    assert "구현되지 않았습니다" in capsys.readouterr().err

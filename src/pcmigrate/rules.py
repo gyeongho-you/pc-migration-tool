@@ -1,4 +1,4 @@
-"""프로그램별 백업/복원 규칙(JSON) 스키마와 로더.
+r"""프로그램별 백업/복원 규칙(JSON) 스키마와 로더.
 
 규칙 파일 형식::
 
@@ -15,8 +15,13 @@
          "kind": "dir", "description": "..."}
       ],
       "manual_warnings": ["..."],
+      "version": "1",                   # 선택. 규칙 파일 버전
+      "exclude": ["*.lic"],             # 선택. 제외할 파일명 glob
       "notes": "확인 필요 항목 등"
     }
+
+path 의 폴더 이름에는 glob(``*``, ``?``)을 쓸 수 있다(예: ``%APPDATA%\Autodesk\AutoCAD *``).
+registry_keys 는 ``HKLM\SOFTWARE\...`` 형식이며 키가 존재하면 감지로 본다.
 
 detect 조건은 하나 이상 있어야 하며, paths 는 백업과 복원에 공통으로 쓰인다
 (path = 원본/복원 위치, dest = 패키지 내부 상대 경로).
@@ -50,6 +55,8 @@ class Rule:
     paths: tuple[PathRule, ...] = ()
     manual_warnings: tuple[str, ...] = ()
     notes: str = ""
+    version: str = "1"  # 규칙 파일 버전(패키지 manifest 에 기록)
+    exclude: tuple[str, ...] = ()  # 백업에서 제외할 파일명 glob(예: "*.lic")
 
 
 def _str_list(obj: dict, key: str, where: str) -> tuple[str, ...]:
@@ -104,8 +111,12 @@ def parse_rule(data: object, source: str = "<rule>") -> Rule:
     notes = data.get("notes", "")
     if not isinstance(notes, str):
         raise RuleError(f"{source}: 'notes' 는 문자열이어야 합니다")
+    version = data.get("version", "1")
+    if not isinstance(version, str) or not version.strip():
+        raise RuleError(f"{source}: 'version' 은 비어 있지 않은 문자열이어야 합니다")
+    exclude = _str_list(data, "exclude", source)
     return Rule(data["id"], data["name"], patterns, install_paths, reg_keys,
-                tuple(paths), warnings, notes)
+                tuple(paths), warnings, notes, version, exclude)
 
 
 def load_rule_file(path: Path) -> Rule:
