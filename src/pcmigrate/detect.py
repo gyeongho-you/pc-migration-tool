@@ -90,21 +90,46 @@ def parse_winget_export(text: str) -> list[Program]:
     return programs
 
 
-def winget_export(runner: Runner = _subprocess_runner) -> list[Program]:
-    """`winget export` 를 임시 파일로 실행해 패키지 목록을 반환한다. 실패 시 빈 목록."""
+def winget_export_raw(runner: Runner = _subprocess_runner) -> str | None:
+    """`winget export` 를 임시 파일로 실행해 JSON 원문을 반환한다. 실패 시 None."""
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "winget.json"
         try:
             code, _ = runner(["winget", "export", "-o", str(out),
                               "--accept-source-agreements"])
         except (OSError, subprocess.SubprocessError):
-            return []
+            return None
         if code != 0 or not out.exists():
-            return []
+            return None
         try:
-            return parse_winget_export(out.read_text(encoding="utf-8-sig"))
+            text = out.read_text(encoding="utf-8-sig")
+            json.loads(text)
         except (json.JSONDecodeError, OSError):
-            return []
+            return None
+        return text
+
+
+def winget_export(runner: Runner = _subprocess_runner) -> list[Program]:
+    """winget 패키지 목록을 반환한다. 실패 시 빈 목록."""
+    text = winget_export_raw(runner)
+    return parse_winget_export(text) if text is not None else []
+
+
+def registry_key_exists(key: str) -> bool:
+    r"""``HKLM\SOFTWARE\...`` 형식 키의 존재 여부(읽기 전용, 64/32비트 뷰 모두 확인)."""
+    import winreg
+
+    hive_name, _, sub = key.partition("\\")
+    hive = {"HKLM": winreg.HKEY_LOCAL_MACHINE, "HKCU": winreg.HKEY_CURRENT_USER}.get(hive_name.upper())
+    if hive is None or not sub:
+        return False
+    for view in (winreg.KEY_WOW64_64KEY, winreg.KEY_WOW64_32KEY):
+        try:
+            with winreg.OpenKey(hive, sub, 0, winreg.KEY_READ | view):
+                return True
+        except OSError:
+            continue
+    return False
 
 
 def detect_programs(registry_reader: RegistryReader = read_registry_programs,
@@ -114,16 +139,20 @@ def detect_programs(registry_reader: RegistryReader = read_registry_programs,
 
 def rule_matches(rule: Rule, programs: Iterable[Program],
                  path_exists: Callable[[str], bool] = os.path.exists,
-                 expand: Callable[[str], str] = os.path.expandvars) -> bool:
+                 expand: Callable[[str], str] = os.path.expandvars,
+                 key_exists: Callable[[str], bool] = registry_key_exists) -> bool:
     names = [p.name.lower() for p in programs]
     for pat in rule.display_name_patterns:
         if any(pat.lower() in n for n in names):
             return True
-    return any(path_exists(expand(p)) for p in rule.install_paths)
+    if any(path_exists(expand(p)) for p in rule.install_paths):
+        return True
+    return any(key_exists(k) for k in rule.registry_keys)
 
 
 def match_rules(rules: Iterable[Rule], programs: list[Program],
                 path_exists: Callable[[str], bool] = os.path.exists,
-                expand: Callable[[str], str] = os.path.expandvars) -> list[Rule]:
+                expand: Callable[[str], str] = os.path.expandvars,
+                key_exists: Callable[[str], bool] = registry_key_exists) -> list[Rule]:
     """감지된 프로그램의 규칙만 반환한다."""
-    return [r for r in rules if rule_matches(r, programs, path_exists, expand)]
+    return [r for r in rules if rule_matches(r, programs, path_exists, expand, key_exists)]
