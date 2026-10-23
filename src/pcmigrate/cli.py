@@ -251,6 +251,15 @@ def _cmd_import(args: argparse.Namespace) -> int:
     return 1 if report.failures else 0
 
 
+def _cmd_gui(args: argparse.Namespace) -> int:
+    try:
+        from .gui.app import main as gui_main
+    except ImportError as e:  # tkinter 가 없는 Python
+        print(f"그래픽 화면을 쓸 수 없습니다(tkinter 가 설치되지 않았을 수 있습니다): {e}", file=sys.stderr)
+        return 1
+    return gui_main([])
+
+
 # --------------------------------------------------------------------------- 파서
 
 def build_parser() -> argparse.ArgumentParser:
@@ -319,6 +328,8 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--dry-run", action="store_true", help="변경 없이 계획만 출력")
     c.add_argument("--report", help="결과 리포트(JSON) 저장 경로")
     c.set_defaults(func=_cmd_copy)
+    g = sub.add_parser("gui", help="그래픽 마법사(Tkinter)를 연다")
+    g.set_defaults(func=_cmd_gui)
     return p
 
 

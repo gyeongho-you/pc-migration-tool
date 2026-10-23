@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
+from .cancel import Cancelled
 from .checklist import _norm, _norm_company, _norm_display, bundle_reason
 from .envpaths import expand_env
 from .detect import Program
@@ -321,7 +322,8 @@ def scan_candidate(c: Candidate, per_limit: float, clock: Callable[[], float], b
 def discover(rules: list[Rule], programs: list[Program], expand: Expand = expand_env,
              with_sizes: bool = True, per_limit: float = 3.0, total_limit: float = 60.0,
              clock: Callable[[], float] = time.monotonic, min_size_kb: int = 0,
-             show_all: bool = False, progress: Callable[[str], None] | None = None) -> Discovery:
+             show_all: bool = False, progress: Callable[[str], None] | None = None,
+             cancel: Callable[[], bool] | None = None) -> Discovery:
     """규칙 없는 설치 프로그램과 사용자 데이터 폴더 후보를 찾는다.
 
     progress 가 있으면 진행 메시지(문자열)를 넘긴다. 출력 방식은 호출자(UI)가 정한다.
@@ -375,6 +377,8 @@ def discover(rules: list[Rule], programs: list[Program], expand: Expand = expand
         say(f"후보 폴더 {len(cands)}개의 크기를 계산합니다(읽기 전용, 폴더당 최대 {per_limit:g}초, "
             f"전체 최대 약 {total_limit:g}초)...")
     for i, c in enumerate(cands, 1):
+        if cancel is not None and cancel():
+            raise Cancelled()
         if with_sizes:
             scan_candidate(c, per_limit, clock, budget_end)
             if i % 20 == 0 and i < len(cands):
@@ -571,6 +575,11 @@ def load_selection(path: Path, expand: Expand = expand_env) -> list[ExtraItem]:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError) as e:
         raise SelectionError(f"선택 파일을 읽을 수 없습니다: {e}") from e
+    return items_from_selection(data, expand)
+
+
+def items_from_selection(data: object, expand: Expand = expand_env) -> list[ExtraItem]:
+    """선택 데이터(dict)에서 include:true 항목만 검증해 반환한다(GUI 도 같은 검증을 쓴다)."""
     if not isinstance(data, dict) or data.get("format") != SELECTION_FORMAT or not isinstance(
             data.get("candidates"), list):
         raise SelectionError("선택 파일 형식이 올바르지 않습니다")

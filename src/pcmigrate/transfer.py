@@ -11,9 +11,12 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import threading
+import time
 from pathlib import Path
 from typing import Callable
 
+from .cancel import Cancelled
 from .copier import (CLOUD_ONLY, FAILED, MISMATCH, SKIPPED_SAME, VERIFIED, WOULD_COPY, repair_file,
                      WOULD_OVERWRITE, FileResult, Report, verify_file)
 
@@ -49,6 +52,33 @@ def default_runner(args: list[str]) -> tuple[int, str]:
     except LookupError:
         text = proc.stdout.decode("utf-8", errors="replace")
     return proc.returncode, text
+
+
+def cancellable_runner(cancel: Callable[[], bool]) -> Runner:
+    """robocopy 를 Popen 으로 실행하며 취소 요청이 오면 프로세스를 종료한다(/Z 재시작 모드라 다시 실행하면 이어받음)."""
+    def run(args: list[str]) -> tuple[int, str]:
+        proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        chunks: list[bytes] = []
+        reader = threading.Thread(target=lambda: chunks.append(proc.stdout.read()), daemon=True)
+        reader.start()
+        while proc.poll() is None:
+            if cancel():
+                proc.terminate()
+                try:
+                    proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                reader.join(1)
+                raise Cancelled()
+            time.sleep(0.2)
+        reader.join(5)
+        raw = b"".join(chunks)
+        try:
+            text = raw.decode("oem", errors="replace")
+        except LookupError:
+            text = raw.decode("utf-8", errors="replace")
+        return proc.returncode, text
+    return run
 
 
 def validate_args(args: list[str]) -> None:
@@ -214,7 +244,7 @@ def _run(runner: Runner, args: list[str]) -> int:
 
 
 def _copy_with_robocopy(src: Path, dst: Path, log: Path, cloud: list[Path],
-                        runner: Runner) -> tuple[int, int]:
+                        runner: Runner, cancel: Callable[[], bool] | None = None) -> tuple[int, int]:
     """robocopy 실행. (최악 종료코드, 실행 횟수). 클라우드 전용 파일은 /XF 로 제외."""
     if not cloud:
         return _run(runner, base_args(src, dst, log, False)), 1
@@ -224,6 +254,8 @@ def _copy_with_robocopy(src: Path, dst: Path, log: Path, cloud: list[Path],
         skip_by_dir.setdefault(p.parent, []).append(p.name)
     worst = runs = 0
     for root, dirs, _files in os.walk(src, followlinks=False):
+        if cancel is not None and cancel():
+            raise Cancelled()
         dirs.sort()
         rel = Path(root).relative_to(src)
         args = base_args(Path(root), dst / rel, log, False)
@@ -238,7 +270,9 @@ def _copy_with_robocopy(src: Path, dst: Path, log: Path, cloud: list[Path],
 def transfer(src: Path, dst: Path, *, dry_run: bool = False, include_cloud: bool = False,
              runner: Runner = default_runner, attr_getter: AttrGetter = default_attr_getter,
              log_path: Path | None = None, warn: Callable[[str], None] = lambda m: None,
-             strict: bool = False, state_path: Path | None = None) -> Report:
+             strict: bool = False, state_path: Path | None = None,
+             progress: Callable[[str], None] | None = None,
+             cancel: Callable[[], bool] | None = None) -> Report:
     """src 폴더를 dst 로 robocopy 복사하고 SHA-256 으로 검증한다.
 
     strict=True 이면 상태 파일의 크기/mtime 일치를 믿지 않고 모든 파일을 다시 해시 검증하며,
@@ -297,7 +331,9 @@ def transfer(src: Path, dst: Path, *, dry_run: bool = False, include_cloud: bool
         report.meta["state_reset"] = state.reset_reason
         warn(state.reset_reason)
     try:
-        code, runs = _copy_with_robocopy(src, dst, log, skipped_cloud, runner)
+        if progress:
+            progress("robocopy 로 복사하는 중입니다(파일이 크면 오래 걸립니다)...")
+        code, runs = _copy_with_robocopy(src, dst, log, skipped_cloud, runner, cancel)
         ok, notes = interpret_exit(code)
         report.meta.update(robocopy_exit=code, robocopy_ok=ok, robocopy_notes=notes,
                            robocopy_runs=runs, robocopy_log=str(log))
@@ -305,7 +341,11 @@ def transfer(src: Path, dst: Path, *, dry_run: bool = False, include_cloud: bool
             report.results.append(FileResult(str(src), str(dst), FAILED,
                                              error=f"robocopy 종료코드 {code}: {', '.join(notes)}"))
         resumed = 0
-        for p in to_copy:
+        for n, p in enumerate(to_copy, 1):
+            if cancel is not None and cancel():
+                raise Cancelled()
+            if progress and n % 25 == 0:
+                progress(f"복사본 검증 중 {n}/{len(to_copy)}")
             rel = p.relative_to(src).as_posix()
             target = dst / p.relative_to(src)
             digest = None if strict else state.is_verified(rel, p, target)

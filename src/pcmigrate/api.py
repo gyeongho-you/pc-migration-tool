@@ -8,23 +8,28 @@
 """
 from __future__ import annotations
 
+import ctypes
 import json
+import platform
 import re
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
+from .cancel import Cancelled, CancelToken  # noqa: F401  (GUI 가 api 에서 가져다 쓴다)
 from .checklist import (Checklist, build_checklist, bundle_reason, load_package_programs,
                         manifest_warning_pairs, render as render_checklist, rule_warning_pairs)
 from .copier import Report, copy_tree
 from .detect import (Program, match_rules, parse_winget_export, read_registry_programs,
                      winget_export_raw, winget_list_raw)
-from .discover import (Discovery, ExtraItem, SelectionError, build_selection, discover, load_selection,
+from .discover import (Discovery, ExtraItem, SelectionError, build_selection, discover, items_from_selection,
+                       load_selection,
                        program_has_rule, secret_names, summarize)
 from .package import (ImportPlan, PackageError, apply_import, export_package, plan_import,
                       verify_package)
 from .rules import Rule, RuleError, load_rules
-from .transfer import transfer
+from .transfer import cancellable_runner, transfer
 
 NEEDS_CONFIRM = 2  # import 에 --yes 가 없어 복원하지 않고 종료
 
@@ -114,6 +119,51 @@ def discovery_summary(rules: list[Rule], programs: list[Program], deps: Deps) ->
         return None
 
 
+@dataclass
+class SystemInfo:
+    os_name: str
+    is_admin: bool | None  # None = 알 수 없음
+    python: str
+
+
+def system_info() -> SystemInfo:
+    """현재 PC 의 OS 와 관리자 권한 여부(GUI 상단 표시용, 읽기 전용)."""
+    admin: bool | None = None
+    try:
+        if sys.platform == "win32":
+            admin = bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except (AttributeError, OSError):
+        admin = None
+    return SystemInfo(f"{platform.system()} {platform.release()} ({platform.version()})", admin,
+                      platform.python_version())
+
+
+@dataclass
+class RuleMatchInfo:
+    rule: Rule
+    programs: list[str]  # 이름 패턴에 걸린 설치 프로그램
+    evidence: str  # 사람이 읽는 근거 한 줄
+
+
+def explain_matches(matched: list[Rule], programs: list[Program]) -> list[RuleMatchInfo]:
+    """규칙이 어떤 근거(설치 프로그램 이름 패턴 / 설치 경로 / 레지스트리 키)로 감지됐는지 설명한다."""
+    out = []
+    for r in matched:
+        names = []
+        for p in programs:
+            low = p.name.lower()
+            if any(pat.lower() in low for pat in r.display_name_patterns) and p.name not in names:
+                names.append(p.name)
+        if names:
+            ev = "설치 프로그램 이름 일치: " + ", ".join(names[:3]) + (" 외" if len(names) > 3 else "")
+        elif r.install_paths or r.registry_keys:
+            ev = "설치 경로 또는 레지스트리 키로 감지"
+        else:
+            ev = "근거 확인 필요"
+        out.append(RuleMatchInfo(r, names, ev))
+    return out
+
+
 # --------------------------------------------------------------------------- scan
 
 @dataclass
@@ -122,6 +172,7 @@ class ScanResult:
     matched: list[Rule]
     checklist: Checklist
     discovery: tuple[int, int] | None
+    match_info: list[RuleMatchInfo] = field(default_factory=list)
 
     def summary_dict(self) -> dict:
         return {"program_count": self.program_count,
@@ -137,7 +188,8 @@ def run_scan(rules_dir: str | Path, deps: Deps | None = None) -> ScanResult:
     matched = match_rules(rules, programs)
     cl = build_checklist(rule_warning_pairs(matched), programs_registry(programs), winget_programs(programs),
                          deps.winget_list(), rule_ids=[r.id for r in matched])
-    return ScanResult(len(programs), matched, cl, discovery_summary(rules, programs_registry(programs), deps))
+    return ScanResult(len(programs), matched, cl, discovery_summary(rules, programs_registry(programs), deps),
+                      explain_matches(matched, programs))
 
 
 # --------------------------------------------------------------------------- copy / transfer
@@ -148,11 +200,18 @@ def run_copy(src: str | Path, dst: str | Path, dry_run: bool = False) -> Report:
 
 def run_transfer(src: str | Path, dst: str | Path, *, dry_run: bool = False, include_cloud: bool = False,
                  log_path: str | Path | None = None, strict: bool = False, state_path: str | Path | None = None,
-                 warn: Callable[[str], None] = lambda m: None, deps: Deps | None = None) -> Report:
-    """대용량 전송. TransferError/OSError 는 그대로 전파한다."""
+                 warn: Callable[[str], None] = lambda m: None, deps: Deps | None = None,
+                 progress: Callable[[str], None] | None = None,
+                 cancel: Callable[[], bool] | None = None) -> Report:
+    """대용량 전송. TransferError/OSError 는 그대로 전파한다. 취소하면 Cancelled(진행 상태는 저장됨)."""
     deps = deps or Deps()
     kw = dict(dry_run=dry_run, include_cloud=include_cloud,
               log_path=Path(log_path) if log_path else None, warn=warn, strict=strict)
+    if progress:
+        kw["progress"] = progress
+    if cancel:
+        kw["cancel"] = cancel
+        kw["runner"] = cancellable_runner(cancel)
     if state_path:
         kw["state_path"] = Path(state_path)
     return deps.transfer(Path(src), Path(dst), **kw)
@@ -200,12 +259,14 @@ def run_checklist(rules_dir: str | Path, *, package: str | Path | None = None, s
 # --------------------------------------------------------------------------- discover
 
 def run_discover(rules_dir: str | Path, *, min_size_kb: int = 0, show_all: bool = False,
-                 progress: Callable[[str], None] | None = None, deps: Deps | None = None) -> Discovery:
+                 progress: Callable[[str], None] | None = None, deps: Deps | None = None,
+                 cancel: Callable[[], bool] | None = None) -> Discovery:
     deps = deps or Deps()
     rules = load_rules_checked(rules_dir)
     if progress:
         progress("설치된 프로그램 목록을 읽는 중...")
-    return discover(rules, deps.registry(), min_size_kb=min_size_kb, show_all=show_all, progress=progress)
+    return discover(rules, deps.registry(), min_size_kb=min_size_kb, show_all=show_all, progress=progress,
+                    cancel=cancel)
 
 
 def selection_json(d: Discovery, show_all: bool = False) -> str:
@@ -220,14 +281,16 @@ class ExtraPrep:
     risky: int = 0  # --allow-secrets 로 포함하는 비밀 정보 가능성 항목 수
 
 
-def prepare_extras(extra: str | Path | None, allow_secrets: bool) -> ExtraPrep:
-    """선택 파일을 검증하고 비밀 정보 가능성을 다시 검사한다. 위험한데 허용 안 했으면 ApiError."""
-    if not extra:
-        return ExtraPrep([])
-    try:
-        items = load_selection(Path(extra))
-    except SelectionError as e:
-        raise ApiError(f"선택 파일 오류: {e}") from e
+def prepare_extras(extra: str | Path | None, allow_secrets: bool,
+                   items: list[ExtraItem] | None = None) -> ExtraPrep:
+    """선택 파일(또는 이미 검증된 items)의 비밀 정보 가능성을 다시 검사한다. 위험한데 허용 안 했으면 ApiError."""
+    if items is None:
+        if not extra:
+            return ExtraPrep([])
+        try:
+            items = load_selection(Path(extra))
+        except SelectionError as e:
+            raise ApiError(f"선택 파일 오류: {e}") from e
     risky = []
     for it in items:
         names, complete = secret_names(it)
@@ -257,10 +320,11 @@ class ExportResult:
 
 
 def run_export(rules_dir: str | Path, output: str | Path, *, extra: str | Path | None = None,
-               allow_secrets: bool = False, deps: Deps | None = None) -> ExportResult:
+               allow_secrets: bool = False, deps: Deps | None = None,
+               extra_items: list[ExtraItem] | None = None) -> ExportResult:
     """설정 패키지 내보내기. OSError(출력 경로 문제)는 전파, 나머지 실패는 ApiError."""
     deps = deps or Deps()
-    extras = prepare_extras(extra, allow_secrets)
+    extras = prepare_extras(extra, allow_secrets, items=extra_items)
     rules = load_rules_checked(rules_dir)
     winget_text = deps.winget_export()
     registry = deps.registry()

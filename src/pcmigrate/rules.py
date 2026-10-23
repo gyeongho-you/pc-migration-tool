@@ -29,6 +29,7 @@ detect 조건은 하나 이상 있어야 하며, paths 는 백업과 복원에 �
 from __future__ import annotations
 
 import json
+import sys
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
@@ -141,5 +142,8 @@ def load_rules(rules_dir: Path) -> list[Rule]:
 
 
 def default_rules_dir() -> Path:
-    """저장소의 rules/ (소스 트리 실행 기준)."""
+    """저장소의 rules/ (소스 트리 실행 기준). PyInstaller exe 에서는 번들된 rules/ (--add-data "rules;rules")."""
+    bundled = getattr(sys, "_MEIPASS", None)
+    if getattr(sys, "frozen", False) and bundled:
+        return Path(bundled) / "rules"
     return Path(__file__).resolve().parents[2] / "rules"
