@@ -31,9 +31,11 @@ from . import __version__
 from .copier import (COPIED, FAILED, SKIPPED_SAME, WOULD_COPY, WOULD_OVERWRITE,
                      FileResult, Report, _backup_path, copy_file, sha256_file)
 from .detect import Program
+from .discover_data import EXTRA_ROOTS, RESTORE_DENY_SUBSTRINGS, ROOTS
 from .rules import Rule
 
 FORMAT_VERSION = 1
+EXTRA_ID = "extra"  # 규칙 없는 프로그램 중 사용자가 선택해 포함한 항목(manifest rule id)
 MANIFEST = "manifest.json"
 CHUNK = 1024 * 1024
 ZIP64_THRESHOLD = 2 * 1024 ** 3
@@ -88,9 +90,9 @@ def _usable_base(base_path: Path) -> bool:
     return base_path.is_absolute() and "%" not in str(base_path)
 
 
-def _excluded(name: str, rule: Rule) -> bool:
-    return any(fnmatch.fnmatch(name.lower(), pat.lower())
-               for pat in GLOBAL_EXCLUDE + rule.exclude)
+def _excluded(name: str, rule: Rule | None) -> bool:
+    extra = rule.exclude if rule is not None else ()
+    return any(fnmatch.fnmatch(name.lower(), pat.lower()) for pat in GLOBAL_EXCLUDE + extra)
 
 
 # --------------------------------------------------------------------------- export
@@ -150,6 +152,29 @@ def collect_items(rule: Rule, expand: Expand = os.path.expandvars
     return items, skipped
 
 
+def collect_extra_items(extras: list, expand: Expand = os.path.expandvars) -> tuple[list[Item], list[dict]]:
+    """discover 선택 파일로 고른 항목(ExtraItem)의 파일 목록. 읽기 전용, 라이선스/임시/링크 제외."""
+    keys = {r.template: r.key for r in ROOTS}
+    items: list[Item] = []
+    skipped: list[dict] = []
+    for ex in extras:
+        top = Path(ex.path)
+        files: list[Path] = []
+        if top.is_file():
+            files = [top]
+        else:
+            for root, dirs, names in os.walk(top, followlinks=False):
+                dirs.sort()
+                files.extend(Path(root) / n for n in sorted(names))
+        for f in files:
+            if f.is_symlink() or _excluded(f.name, None):
+                skipped.append({"rule": EXTRA_ID, "path": str(f), "reason": "제외 대상(라이선스/임시/링크)"})
+                continue
+            rel = ex.rel if f == top else f"{ex.rel}/{f.relative_to(top).as_posix()}"
+            items.append(Item(f"data/{EXTRA_ID}/{keys[ex.root]}/{rel}", f, EXTRA_ID, ex.root, rel))
+    return items, skipped
+
+
 def _write_entry(zf: zipfile.ZipFile, arc: str, src: Path) -> tuple[int, str]:
     """원본을 읽기 전용으로 스트리밍하며 zip 에 쓰고 (크기, sha256)을 반환한다."""
     size = src.stat().st_size
@@ -172,7 +197,7 @@ def _zip_time(path: Path) -> tuple:
 
 def export_package(rules: list[Rule], out: Path, programs: list[Program],
                    winget_text: str | None, expand: Expand = os.path.expandvars,
-                   winget_list_text: str | None = None,
+                   winget_list_text: str | None = None, extras: list | None = None,
                    now: Callable[[], datetime] = lambda: datetime.now(timezone.utc)) -> dict:
     """감지된 프로그램의 규칙(rules)으로 설정 패키지를 만든다. manifest dict 반환.
 
@@ -201,6 +226,26 @@ def export_package(rules: list[Rule], out: Path, programs: list[Program],
                                           "notes": rule.notes})
                 manifest["manual_warnings"].append({"rule": rule.id, "name": rule.name,
                                                     "items": list(rule.manual_warnings)})
+                for it in items:
+                    if it.arc in seen:
+                        manifest["failed"].append({"src": str(it.src), "error": f"중복된 패키지 경로 {it.arc}"})
+                        continue
+                    seen.add(it.arc)
+                    try:
+                        size, digest = _write_entry(zf, it.arc, it.src)
+                    except OSError as e:
+                        manifest["failed"].append({"src": str(it.src), "error": f"{type(e).__name__}: {e}"})
+                        continue
+                    manifest["files"].append({"arc": it.arc, "size": size, "sha256": digest,
+                                              "rule": it.rule_id, "base": it.base, "rel": it.rel})
+            if extras:
+                items, skipped = collect_extra_items(extras, expand)
+                manifest["skipped"] += skipped
+                manifest["extras"] = [{"root": e.root, "rel": e.rel} for e in extras]
+                manifest["manual_warnings"].append({
+                    "rule": EXTRA_ID, "name": "규칙 없는 프로그램(선택 포함)",
+                    "items": ["규칙 없이 사용자가 직접 골라 포함한 폴더입니다. 신 PC 에서 같은 버전의 프로그램을 설치한 뒤 "
+                              "복원하고, 라이선스/로그인은 직접 처리하세요."]})
                 for it in items:
                     if it.arc in seen:
                         manifest["failed"].append({"src": str(it.src), "error": f"중복된 패키지 경로 {it.arc}"})
@@ -313,10 +358,18 @@ def plan_import(path: Path, rules: list[Rule], expand: Expand = os.path.expandva
                for rid, r in by_id.items()}
     for f in manifest["files"]:
         rid, base = f["rule"], f["base"]
-        if rid not in by_id:
+        is_extra = rid == EXTRA_ID
+        if is_extra:
+            if base not in EXTRA_ROOTS:
+                plan.problems.append(f"허용되지 않은 복원 루트(extra): {base}")
+                continue
+            if base == "%USERPROFILE%" and not f["rel"].startswith("."):
+                plan.problems.append(f"홈 루트는 점으로 시작하는 항목만 복원할 수 있음: {f['rel']}")
+                continue
+        elif rid not in by_id:
             plan.problems.append(f"알 수 없는 규칙 id: {rid}")
             continue
-        if base not in allowed[rid]:
+        elif base not in allowed[rid]:
             plan.problems.append(f"규칙 {rid} 에 허용되지 않은 복원 위치: {base}")
             continue
         base_path = Path(expand(base))
@@ -327,8 +380,11 @@ def plan_import(path: Path, rules: list[Rule], expand: Expand = os.path.expandva
         if not _within(target, base_path):
             plan.problems.append(f"복원 대상이 허용 루트 밖: {target}")
             continue
-        if _excluded(target.name, by_id[rid]):
+        if _excluded(target.name, None if is_extra else by_id[rid]):
             plan.problems.append(f"복원 제외 대상(라이선스 등): {f['rel']}")
+            continue
+        if is_extra and any(d in str(target).lower() + "\\" for d in RESTORE_DENY_SUBSTRINGS):
+            plan.problems.append(f"복원이 금지된 위치(시작 프로그램/authorized_keys 등): {target}")
             continue
         backup = ""
         if target.is_file() and target.stat().st_size == f["size"] and sha256_file(target) == f["sha256"]:
@@ -339,7 +395,8 @@ def plan_import(path: Path, rules: list[Rule], expand: Expand = os.path.expandva
         else:
             status = WOULD_COPY
         plan.items.append({"entry": f["arc"], "target": str(target), "status": status,
-                           "backup": backup, "size": f["size"], "sha256": f["sha256"]})
+                           "backup": backup, "size": f["size"], "sha256": f["sha256"],
+                           "extra": is_extra})
     return plan
 
 

@@ -256,6 +256,8 @@ class Checklist:
     winget_available: bool = True
     has_winget_list: bool = False
     show_all: bool = False
+    # (규칙 없는 설치 프로그램 수, 설정 폴더 후보 수 또는 None=알 수 없음). None 이면 섹션 생략
+    discovery: tuple[int, int | None] | None = None
 
     @property
     def count(self) -> int:
@@ -290,13 +292,14 @@ def _install_hint(name: str, shown: list[CommonItem]) -> str:
 def build_checklist(rule_warnings: list[tuple[str, list[str]]], registry: list[Program] | None = None,
                     winget: list[Program] | None = None,
                     winget_list_text: str | None = None,
-                    rule_ids: list[str] | tuple[str, ...] = (), show_all: bool = False) -> Checklist:
+                    rule_ids: list[str] | tuple[str, ...] = (), show_all: bool = False,
+                    discovery: tuple[int, int | None] | None = None) -> Checklist:
     """rule_warnings: [(프로그램 이름, [경고...])]. 같은 문구는 하나로 합치고 출처를 병기한다.
 
     공통 경고는 설치 목록 이름/감지된 규칙에 관련된 것만(또는 항상 해당하는 것) 보여 주고,
     나머지는 생략 건수로 요약한다(show_all=True 이면 모두 표시).
     """
-    cl = Checklist(show_all=show_all)
+    cl = Checklist(show_all=show_all, discovery=discovery)
     names = [p.name.lower() for p in (registry or [])]
     rids = set(rule_ids)
     shown: list[CommonItem] = []
@@ -428,6 +431,14 @@ def render(cl: Checklist, fmt: str = "text") -> str:
     if cl.omitted and cl.show_all is False:
         lines.append(f"이 PC 에 없는 프로그램 관련 경고 {len(cl.omitted)}건 생략됨: " + ", ".join(cl.omitted)
                      + " (--all 로 모두 표시)")
+        lines.append("")
+    if cl.discovery is not None:
+        n, m = cl.discovery
+        lines.append(h1("규칙 없는 프로그램(요약)"))
+        extra = f", 설정 폴더 후보 {m}개" if m is not None else " (폴더 후보는 구 PC 에서 discover 로 확인)"
+        lines.append(f"규칙 없는 설치 프로그램 {n}개{extra} — pcmigrate discover 로 확인하세요.")
+        lines.append("규칙이 없는 프로그램의 설정은 자동으로 백업/복원되지 않으며 export 에 자동 포함되지도 않습니다. "
+                     "필요한 것만 discover --output-selection 으로 골라 export --extra 로 포함하세요.")
         lines.append("")
     lines.append("※ 라이선스는 복원하지 않습니다. 모든 항목은 직접 확인하세요.")
     return "\n".join(lines) + "\n"

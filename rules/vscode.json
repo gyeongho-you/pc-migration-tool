@@ -31,11 +31,11 @@
     }
   ],
   "manual_warnings": [
-    "확장은 파일 복사 대신 구 PC에서 'code --list-extensions' 로 목록을 만들고 신 PC에서 'code --install-extension' 으로 재설치하세요.",
+    "확장 프로그램: 구 PC에서 'code --list-extensions > extensions.txt' 로 목록 파일을 만든 뒤, 신 PC에서 PowerShell 로 'Get-Content extensions.txt | ForEach-Object { code --install-extension $_ }' 를 실행해 재설치하세요. 확장 폴더(%USERPROFILE%\\.vscode\\extensions)는 용량이 커서 복사하지 않습니다.",
     "Settings Sync(GitHub/Microsoft 계정)를 쓰고 있다면 신 PC에서 로그인으로 복원하는 편이 안전합니다."
   ],
-  "notes": "확인 필요: Insiders/포터블 설치본의 경로는 다름. workspaceStorage/globalStorage 는 용량이 크고 확장 의존적이라 제외함.",
-  "version": "2",
+  "notes": "확인 필요: Insiders/포터블 설치본의 경로는 다름. workspaceStorage/globalStorage 는 용량이 크고 확장 의존적이라 제외함. discover 는 이 규칙이 다루는 %APPDATA%\\Code 와 %USERPROFILE%\\.vscode 를 '규칙 없는 프로그램'으로 중복 표시하지 않는다(규칙이 있는 프로그램 쪽 폴더로 숨김, --all 로 확인).",
+  "version": "3",
   "exclude": [
     "*.lic"
   ]

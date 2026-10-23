@@ -11,6 +11,9 @@ from . import __version__
 from .copier import copy_tree
 from .checklist import (build_checklist, load_package_programs, manifest_warning_pairs,
                         render, rule_warning_pairs, write_output)
+from .discover import (SelectionError, build_selection, discover, load_selection, secret_names,
+                       summarize)
+from .discover import render as render_discovery
 from .detect import (match_rules, read_registry_programs, winget_export_raw, winget_list_raw,
                      parse_winget_export)
 from .package import PackageError, apply_import, export_package, plan_import, verify_package
@@ -60,6 +63,31 @@ def winget_programs(programs):
     return [p for p in programs if p.source == "winget"]
 
 
+def _print_discovery_hint(rules, programs) -> tuple[int, int] | None:
+    """규칙 없는 설치 프로그램/설정 폴더 후보 수를 알린다(크기 계산 없이 개수만)."""
+    try:
+        n, m = summarize(rules, programs)
+    except OSError:
+        return None
+    print(f"규칙 없는 설치 프로그램 {n}개, 설정 폴더 후보 {m}개 — pcmigrate discover 로 확인하세요"
+          "(자동으로 포함되지 않습니다).", file=sys.stderr)
+    return n, m
+
+
+def summarize_programs_only(rules, programs) -> int:
+    from .discover import program_has_rule
+    from .checklist import bundle_reason
+    seen: set[str] = set()
+    n = 0
+    for p in programs:
+        if p.name in seen:
+            continue
+        seen.add(p.name)
+        if not program_has_rule(p, rules) and not bundle_reason(p.name):
+            n += 1
+    return n
+
+
 def _print_checklist_hint(cl) -> None:
     print(f"수동 작업 {cl.count}건, pcmigrate checklist 로 확인하세요.", file=sys.stderr)
 
@@ -87,6 +115,7 @@ def _cmd_scan(args: argparse.Namespace) -> int:
     _print_checklist_hint(build_checklist(rule_warning_pairs(matched), programs_registry(programs),
                                           winget_programs(programs), winget_list_raw(),
                                           rule_ids=[r.id for r in matched]))
+    _print_discovery_hint(rules, programs_registry(programs))
     return 0
 
 
@@ -162,8 +191,18 @@ def _cmd_checklist(args: argparse.Namespace) -> int:
         matched = match_rules(rules, registry + winget)
         pairs = rule_warning_pairs(matched)
         rule_ids = [r.id for r in matched]
+    disc = None
+    try:
+        all_rules = load_rules(Path(args.rules))
+    except RuleError:
+        all_rules = None
+    if all_rules is not None:
+        if args.package:  # 구 PC 의 목록 기준: 폴더 후보는 이 PC 에서 알 수 없으므로 프로그램 수만
+            disc = (summarize_programs_only(all_rules, registry), None)
+        else:
+            disc = summarize(all_rules, registry)
     text = render(build_checklist(pairs, registry, winget, list_text, rule_ids=rule_ids,
-                                  show_all=args.all), args.format)
+                                  show_all=args.all, discovery=disc), args.format)
     if args.output:
         try:
             write_output(Path(args.output), text)
@@ -173,12 +212,77 @@ def _cmd_checklist(args: argparse.Namespace) -> int:
     else:
         sys.stdout.reconfigure(encoding="utf-8") if hasattr(sys.stdout, "reconfigure") else None
         print(text, end="")
+    if disc is not None:
+        n, m = disc
+        extra = f", 설정 폴더 후보 {m}개" if m is not None else ""
+        print(f"규칙 없는 설치 프로그램 {n}개{extra} — pcmigrate discover 로 확인하세요.", file=sys.stderr)
+    return 0
+
+
+def _load_extras(args: argparse.Namespace):
+    """--extra 선택 파일을 검증하고 비밀 정보 가능성을 다시 검사한다. (항목, 오류 코드) 반환."""
+    if not args.extra:
+        return [], 0
+    try:
+        items = load_selection(Path(args.extra))
+    except SelectionError as e:
+        print(f"선택 파일 오류: {e}", file=sys.stderr)
+        return None, 1
+    risky = []
+    for it in items:
+        names, complete = secret_names(it)
+        if names or not complete:
+            risky.append((it, names, complete))
+    if risky and not args.allow_secrets:
+        for it, names, complete in risky:
+            why = ", ".join(names) if names else "비밀 정보 검사를 끝내지 못함"
+            print(f"비밀 정보 가능성: {it.path} ({why})", file=sys.stderr)
+        print("비밀 정보(키, 토큰, 쿠키, 비밀번호 등)가 들어 있을 수 있는 항목이 선택되었습니다. 패키지는 만들지 않았습니다. "
+              "정말 포함하려면 내용을 확인한 뒤 --allow-secrets 를 붙여 다시 실행하세요.", file=sys.stderr)
+        return None, 1
+    if risky:
+        print(f"[주의] --allow-secrets: 비밀 정보 가능성이 있는 항목 {len(risky)}개를 패키지에 포함합니다. "
+              "패키지 파일을 안전하게 보관하세요.", file=sys.stderr)
+    return items, 0
+
+
+def _cmd_discover(args: argparse.Namespace) -> int:
+    if _unexpanded(output=args.output, output_selection=args.output_selection):
+        return 1
+    try:
+        rules = load_rules(Path(args.rules))
+    except RuleError as e:
+        print(f"규칙 오류: {e}", file=sys.stderr)
+        return 1
+    d = discover(rules, read_registry_programs(), min_size_kb=args.min_size_kb, show_all=args.all)
+    text = render_discovery(d, args.format, args.all)
+    if args.output:
+        try:
+            write_output(Path(args.output), text)
+        except OSError as e:
+            return _write_failed(args.output, e)
+        print(f"탐지 결과를 저장했습니다: {args.output}", file=sys.stderr)
+    else:
+        sys.stdout.reconfigure(encoding="utf-8") if hasattr(sys.stdout, "reconfigure") else None
+        print(text, end="")
+    if args.output_selection:
+        sel = json.dumps(build_selection(d, args.all), ensure_ascii=False, indent=2) + "\n"
+        try:
+            write_output(Path(args.output_selection), sel)
+        except OSError as e:
+            return _write_failed(args.output_selection, e)
+        print(f"선택 파일 템플릿을 저장했습니다(모두 include:false): {args.output_selection}", file=sys.stderr)
+    print(f"규칙 없는 설치 프로그램 {d.program_count}개, 설정 폴더 후보 {d.candidate_count}개"
+          f"(비밀 정보 가능성 {d.secret_count}개).", file=sys.stderr)
     return 0
 
 
 def _cmd_export(args: argparse.Namespace) -> int:
-    if _unexpanded(output=args.output):
+    if _unexpanded(output=args.output, extra=args.extra):
         return 1
+    extras, rc = _load_extras(args)
+    if extras is None:
+        return rc
     try:
         rules = load_rules(Path(args.rules))
     except RuleError as e:
@@ -194,7 +298,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
         print("경고: winget export 실패 - 레지스트리 목록만 포함됩니다.", file=sys.stderr)
     try:
         manifest = export_package(matched, Path(args.output), registry, winget_text,
-                                  winget_list_text=list_text)
+                                  winget_list_text=list_text, extras=extras)
     except PackageError as e:
         print(f"내보내기 실패: {e}", file=sys.stderr)
         return 1
@@ -207,6 +311,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
     _print_checklist_hint(build_checklist(manifest_warning_pairs(manifest), registry,
                                           parse_winget_export(winget_text) if winget_text else [],
                                           list_text, rule_ids=[r["id"] for r in manifest["rules"]]))
+    _print_discovery_hint(rules, registry)
     return 1 if manifest["failed"] else 0
 
 
@@ -239,12 +344,21 @@ def _cmd_import(args: argparse.Namespace) -> int:
     if args.dry_run or not args.yes:  # --dry-run 이 --yes 보다 우선
         print(json.dumps(out, ensure_ascii=False, indent=2))
         _print_warnings(plan.warnings)
+        n_extra = sum(1 for it in plan.items if it.get("extra"))
+        if n_extra:
+            print(f"[주의] 규칙 없이 선택 포함된 파일 {n_extra}개가 있습니다. 실제 복원은 --yes 와 --allow-extra 가 모두 필요합니다.",
+                  file=sys.stderr)
         if args.dry_run:
             print("미리보기입니다. 실제 변경은 없었습니다.", file=sys.stderr)
             return 0
         print("미리보기만 출력했고 아무것도 쓰지 않았습니다. "
               "실제 복원하려면 --yes 를 붙여 다시 실행하세요.", file=sys.stderr)
         return NEEDS_CONFIRM
+    n_extra = sum(1 for it in plan.items if it.get("extra"))
+    if n_extra and not args.allow_extra:
+        print(f"패키지에 규칙 없이 선택 포함된 파일 {n_extra}개가 있습니다. 내용을 미리보기로 확인한 뒤 "
+              "--allow-extra 를 붙여 다시 실행하세요(복원하지 않았습니다).", file=sys.stderr)
+        return 1
     print("실제 복원을 시작합니다. 덮어쓸 파일은 .bak 으로 백업됩니다.", file=sys.stderr)
     report = apply_import(Path(args.package), plan)
     if args.report:
@@ -277,8 +391,20 @@ def build_parser() -> argparse.ArgumentParser:
     k.add_argument("--package", help="export 한 .zip 의 manifest/프로그램 목록 기준으로 작성(신 PC 용)")
     k.set_defaults(func=_cmd_checklist)
 
+    dv = sub.add_parser("discover", help="규칙 없는 설치 프로그램과 설정 폴더 후보 탐지(읽기 전용)")
+    dv.add_argument("--format", choices=("text", "md", "json"), default="text")
+    dv.add_argument("--output", help="파일로 저장(기존 파일은 .bak 보존)")
+    dv.add_argument("--min-size-kb", type=int, default=0, help="이 크기(KB)보다 작은 후보는 숨김(비밀 정보 가능성 제외)")
+    dv.add_argument("--all", action="store_true", help="제조사 번들, 규칙이 있는 프로그램 쪽 폴더, 연결 못 한 폴더도 표시")
+    dv.add_argument("--output-selection", help="export --extra 용 선택 파일 템플릿 생성(모두 include:false)")
+    dv.add_argument("--rules", default=str(default_rules_dir()), help="규칙 JSON 폴더")
+    dv.set_defaults(func=_cmd_discover)
+
     e = sub.add_parser("export", help="설정 패키지(.zip) 내보내기")
     e.add_argument("--output", required=True, help="생성할 .zip 경로")
+    e.add_argument("--extra", help="discover --output-selection 으로 만들고 사용자가 고른 선택 파일(규칙 없는 폴더 포함)")
+    e.add_argument("--allow-secrets", action="store_true",
+                   help="선택 항목에 비밀 정보 가능성이 있어도 포함(내용을 확인한 경우에만)")
     e.add_argument("--rules", default=str(default_rules_dir()), help="규칙 JSON 폴더")
     e.set_defaults(func=_cmd_export)
 
@@ -286,6 +412,7 @@ def build_parser() -> argparse.ArgumentParser:
     i.add_argument("package", help="export 로 만든 .zip")
     i.add_argument("--dry-run", action="store_true", help="변경 없이 미리보기만 출력(--yes 보다 우선)")
     i.add_argument("--yes", action="store_true", help="미리보기 확인 후 실제 복원 수행")
+    i.add_argument("--allow-extra", action="store_true", help="규칙 없이 선택 포함된 파일의 복원을 허용")
     i.add_argument("--rules", default=str(default_rules_dir()), help="규칙 JSON 폴더")
     i.add_argument("--report", help="결과 리포트(JSON) 저장 경로")
     i.set_defaults(func=_cmd_import)

@@ -25,6 +25,7 @@ class Program:
     publisher: str = ""
     source: str = "registry"  # "registry" | "winget"
     winget_id: str = ""
+    install_location: str = ""  # 레지스트리 InstallLocation(없으면 빈 문자열). discover 의 연결 근거
 
 
 # reader() -> Program 목록. 기본 구현은 winreg 사용(Windows 전용).
@@ -65,7 +66,8 @@ def read_registry_programs() -> list[Program]:
                         name = val("DisplayName")
                         if not name or val("SystemComponent") == "1":
                             continue
-                        p = Program(name, val("DisplayVersion"), val("Publisher"))
+                        p = Program(name, val("DisplayVersion"), val("Publisher"),
+                                    install_location=val("InstallLocation"))
                         found[(p.name, p.version)] = p
                 except OSError:
                     continue

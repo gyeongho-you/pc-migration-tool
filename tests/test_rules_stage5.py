@@ -9,7 +9,7 @@ from pcmigrate.rules import load_rules
 REPO_RULES = Path(__file__).resolve().parents[1] / "rules"
 NEW_RULES = ["rhino", "sketchup", "archicad", "lumion", "enscape", "bluebeam"]
 WARNING_ONLY = ["vray", "navisworks", "browser"]
-ALL_IDS = {"revit", "autocad", "vscode", *NEW_RULES, *WARNING_ONLY}
+ALL_IDS = {"revit", "autocad", "vscode", "jetbrains", *NEW_RULES, *WARNING_ONLY}
 
 
 @pytest.fixture(scope="module")
