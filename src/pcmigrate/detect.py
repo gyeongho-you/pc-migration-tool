@@ -115,6 +115,20 @@ def winget_export(runner: Runner = _subprocess_runner) -> list[Program]:
     return parse_winget_export(text) if text is not None else []
 
 
+def winget_list_raw(runner: Runner = _subprocess_runner) -> str | None:
+    """`winget list`(winget 소스로 매칭된 설치 항목) 출력 원문. 실패/빈 출력이면 None.
+
+    표를 열 위치로 자르지 않는다(한글 폭/이름 잘림에 취약). 원문만 돌려주고
+    checklist.parse_winget_list 가 알려진 PackageIdentifier 토큰을 찾아 이름을 연결한다.
+    """
+    try:
+        code, out = runner(["winget", "list", "--source", "winget", "--disable-interactivity",
+                            "--accept-source-agreements"])
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return out if code == 0 and out.strip() else None
+
+
 def registry_key_exists(key: str) -> bool:
     r"""``HKLM\SOFTWARE\...`` 형식 키의 존재 여부(읽기 전용, 64/32비트 뷰 모두 확인)."""
     import winreg

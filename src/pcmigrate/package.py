@@ -164,6 +164,7 @@ def _zip_time(path: Path) -> tuple:
 
 def export_package(rules: list[Rule], out: Path, programs: list[Program],
                    winget_text: str | None, expand: Expand = os.path.expandvars,
+                   winget_list_text: str | None = None,
                    now: Callable[[], datetime] = lambda: datetime.now(timezone.utc)) -> dict:
     """감지된 프로그램의 규칙(rules)으로 설정 패키지를 만든다. manifest dict 반환.
 
@@ -177,7 +178,8 @@ def export_package(rules: list[Rule], out: Path, programs: list[Program],
         "created": now().isoformat(timespec="seconds"),
         "rules": [], "files": [], "skipped": [], "failed": [],
         "programs": {"registry": "programs/registry.json",
-                     "winget": "programs/winget.json" if winget_text else None},
+                     "winget": "programs/winget.json" if winget_text else None,
+                     "winget_list": "programs/winget-list.txt" if winget_list_text else None},
         "manual_warnings": [],
     }
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -207,6 +209,8 @@ def export_package(rules: list[Rule], out: Path, programs: list[Program],
                                                              ensure_ascii=False, indent=2))
             if winget_text:
                 zf.writestr("programs/winget.json", winget_text)
+            if winget_list_text:
+                zf.writestr("programs/winget-list.txt", winget_list_text)
             zf.writestr(MANIFEST, json.dumps(manifest, ensure_ascii=False, indent=2))
         problems = verify_package(tmp)[1]
         if problems:
@@ -272,7 +276,8 @@ def verify_package(path: Path) -> tuple[dict | None, list[str]]:
             n, h = _hash_entry(zf, arc)
             if n != size or h != digest:
                 problems.append(f"크기/해시 불일치: {arc}")
-        extra = set(names) - listed - {MANIFEST, "programs/registry.json", "programs/winget.json"}
+        extra = set(names) - listed - {MANIFEST, "programs/registry.json", "programs/winget.json",
+                                        "programs/winget-list.txt"}
         for e in sorted(extra):
             problems.append(f"manifest 에 없는 엔트리: {e}")
     return manifest, problems

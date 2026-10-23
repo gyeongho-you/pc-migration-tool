@@ -14,7 +14,7 @@ import subprocess
 from pathlib import Path
 from typing import Callable
 
-from .copier import (CLOUD_ONLY, FAILED, SKIPPED_SAME, VERIFIED, WOULD_COPY,
+from .copier import (CLOUD_ONLY, FAILED, MISMATCH, SKIPPED_SAME, VERIFIED, WOULD_COPY,
                      WOULD_OVERWRITE, FileResult, Report, verify_file)
 
 STATE_NAME = ".pcmigrate-state.json"
@@ -179,6 +179,18 @@ class State:
         self._dirty = 0
 
 
+def _state_conflict(state: State, rel: str, src: Path, sha256: str) -> bool:
+    """상태 파일이 '검증 완료'로 기록한 해시가 지금 원본 해시와 다른데 크기/mtime 은 같은 경우."""
+    e = state.files.get(rel)
+    if not e or not e["verified"] or e["sha256"] == sha256:
+        return False
+    try:
+        ss = src.stat()
+    except OSError:
+        return False
+    return ss.st_size == e["size"] and ss.st_mtime_ns == e["mtime_ns"]
+
+
 # --------------------------------------------------------------------------- 전송
 
 def _run(runner: Runner, args: list[str]) -> int:
@@ -211,9 +223,13 @@ def _copy_with_robocopy(src: Path, dst: Path, log: Path, cloud: list[Path],
 
 def transfer(src: Path, dst: Path, *, dry_run: bool = False, include_cloud: bool = False,
              runner: Runner = default_runner, attr_getter: AttrGetter = default_attr_getter,
-             log_path: Path | None = None, warn: Callable[[str], None] = lambda m: None
-             ) -> Report:
-    """src 폴더를 dst 로 robocopy 복사하고 SHA-256 으로 검증한다."""
+             log_path: Path | None = None, warn: Callable[[str], None] = lambda m: None,
+             strict: bool = False) -> Report:
+    """src 폴더를 dst 로 robocopy 복사하고 SHA-256 으로 검증한다.
+
+    strict=True 이면 상태 파일의 크기/mtime 일치를 믿지 않고 모든 파일을 다시 해시 검증하며,
+    상태 파일에 기록된 해시와 어긋나면 불일치로 보고한다.
+    """
     src, dst = Path(src), Path(dst)
     if not src.is_dir():
         raise TransferError(f"원본 폴더가 없습니다: {src}")
@@ -236,6 +252,7 @@ def transfer(src: Path, dst: Path, *, dry_run: bool = False, include_cloud: bool
         report.results.append(FileResult(str(p), "", CLOUD_ONLY, error="클라우드 전용 파일(건너뜀)"))
     report.meta["cloud_only_count"] = len(cloud)
     report.meta["include_cloud"] = include_cloud
+    report.meta["strict"] = strict
 
     if dry_run:
         # robocopy /L 은 목록 확인용, 리포트는 크기 비교로 만든다. 아무것도 쓰지 않는다.
@@ -274,13 +291,16 @@ def transfer(src: Path, dst: Path, *, dry_run: bool = False, include_cloud: bool
         for p in to_copy:
             rel = p.relative_to(src).as_posix()
             target = dst / p.relative_to(src)
-            digest = state.is_verified(rel, p, target)
+            digest = None if strict else state.is_verified(rel, p, target)
             if digest is not None:
                 resumed += 1
                 report.results.append(FileResult(str(p), str(target), VERIFIED,
                                                  p.stat().st_size, digest))
                 continue
             res = verify_file(p, target)
+            if strict and res.status == VERIFIED and _state_conflict(state, rel, p, res.sha256):
+                res.status = MISMATCH
+                res.error = "상태 파일의 검증 해시와 원본이 어긋남(크기/mtime 은 동일)"
             state.record(rel, p, res.sha256, res.status == VERIFIED)
             report.results.append(res)
         report.meta["resumed_skipped"] = resumed

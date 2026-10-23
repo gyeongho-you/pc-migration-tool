@@ -8,13 +8,27 @@ from pathlib import Path
 
 from . import __version__
 from .copier import copy_tree
-from .detect import (match_rules, read_registry_programs, winget_export_raw,
+from .checklist import (build_checklist, load_package_programs, manifest_warning_pairs,
+                        render, rule_warning_pairs, write_output)
+from .detect import (match_rules, read_registry_programs, winget_export_raw, winget_list_raw,
                      parse_winget_export)
-from .package import PackageError, apply_import, export_package, plan_import
+from .package import PackageError, apply_import, export_package, plan_import, verify_package
 from .transfer import TransferError, transfer
 from .rules import RuleError, default_rules_dir, load_rules
 
 NEEDS_CONFIRM = 2  # import 에 --yes 가 없어 복원하지 않고 종료
+
+
+def programs_registry(programs):
+    return [p for p in programs if p.source == "registry"]
+
+
+def winget_programs(programs):
+    return [p for p in programs if p.source == "winget"]
+
+
+def _print_checklist_hint(cl) -> None:
+    print(f"수동 작업 {cl.count}건, pcmigrate checklist 로 확인하세요.", file=sys.stderr)
 
 
 def _detect(winget_text: str | None = None):
@@ -37,6 +51,8 @@ def _cmd_scan(args: argparse.Namespace) -> int:
              "notes": r.notes} for r in matched],
     }
     print(json.dumps(out, ensure_ascii=False, indent=2))
+    _print_checklist_hint(build_checklist(rule_warning_pairs(matched), programs_registry(programs),
+                                          winget_programs(programs), winget_list_raw()))
     return 0
 
 
@@ -59,7 +75,8 @@ def _cmd_transfer(args: argparse.Namespace) -> int:
     try:
         report = transfer(Path(args.src), Path(args.dst), dry_run=args.dry_run,
                           include_cloud=args.include_cloud,
-                          log_path=Path(args.log) if args.log else None, warn=warn)
+                          log_path=Path(args.log) if args.log else None, warn=warn,
+                          strict=args.strict)
     except (TransferError, OSError) as e:
         print(f"전송 실패: {e}", file=sys.stderr)
         return 1
@@ -74,6 +91,35 @@ def _cmd_transfer(args: argparse.Namespace) -> int:
     return 1 if report.failures else 0
 
 
+def _cmd_checklist(args: argparse.Namespace) -> int:
+    if args.package:
+        manifest, problems = verify_package(Path(args.package))
+        if manifest is None or problems:
+            print("패키지 검증 실패: " + "; ".join(problems[:3]), file=sys.stderr)
+            return 1
+        registry, winget, list_text = load_package_programs(Path(args.package))
+        pairs = manifest_warning_pairs(manifest)
+    else:
+        try:
+            rules = load_rules(Path(args.rules))
+        except RuleError as e:
+            print(f"규칙 오류: {e}", file=sys.stderr)
+            return 1
+        winget_text = winget_export_raw()
+        winget = parse_winget_export(winget_text) if winget_text else []
+        list_text = winget_list_raw() if winget_text else None
+        registry = read_registry_programs()
+        pairs = rule_warning_pairs(match_rules(rules, registry + winget))
+    text = render(build_checklist(pairs, registry, winget, list_text), args.format)
+    if args.output:
+        write_output(Path(args.output), text)
+        print(f"체크리스트를 저장했습니다: {args.output}", file=sys.stderr)
+    else:
+        sys.stdout.reconfigure(encoding="utf-8") if hasattr(sys.stdout, "reconfigure") else None
+        print(text, end="")
+    return 0
+
+
 def _cmd_export(args: argparse.Namespace) -> int:
     try:
         rules = load_rules(Path(args.rules))
@@ -82,13 +128,15 @@ def _cmd_export(args: argparse.Namespace) -> int:
         return 1
     winget_text = winget_export_raw()
     registry = read_registry_programs()
+    list_text = winget_list_raw() if winget_text else None
     matched = match_rules(rules, registry + (parse_winget_export(winget_text) if winget_text else []))
     if not matched:
         print("감지된 프로그램 규칙이 없어 프로그램 목록만 내보냅니다.", file=sys.stderr)
     if winget_text is None:
         print("경고: winget export 실패 - 레지스트리 목록만 포함됩니다.", file=sys.stderr)
     try:
-        manifest = export_package(matched, Path(args.output), registry, winget_text)
+        manifest = export_package(matched, Path(args.output), registry, winget_text,
+                                  winget_list_text=list_text)
     except (PackageError, OSError) as e:
         print(f"내보내기 실패: {e}", file=sys.stderr)
         return 1
@@ -96,6 +144,9 @@ def _cmd_export(args: argparse.Namespace) -> int:
                       "files": len(manifest["files"]), "skipped": len(manifest["skipped"]),
                       "failed": len(manifest["failed"])}, ensure_ascii=False))
     _print_warnings(manifest.get("manual_warnings", []))
+    _print_checklist_hint(build_checklist(manifest_warning_pairs(manifest), registry,
+                                          parse_winget_export(winget_text) if winget_text else [],
+                                          list_text))
     return 1 if manifest["failed"] else 0
 
 
@@ -152,6 +203,13 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--rules", default=str(default_rules_dir()), help="규칙 JSON 폴더")
     s.set_defaults(func=_cmd_scan)
 
+    k = sub.add_parser("checklist", help="수동 작업/수동 설치 체크리스트 출력")
+    k.add_argument("--format", choices=("text", "md"), default="text")
+    k.add_argument("--output", help="파일로 저장(기존 파일은 .bak 보존)")
+    k.add_argument("--rules", default=str(default_rules_dir()), help="규칙 JSON 폴더")
+    k.add_argument("--package", help="export 한 .zip 의 manifest/프로그램 목록 기준으로 작성(신 PC 용)")
+    k.set_defaults(func=_cmd_checklist)
+
     e = sub.add_parser("export", help="설정 패키지(.zip) 내보내기")
     e.add_argument("--output", required=True, help="생성할 .zip 경로")
     e.add_argument("--rules", default=str(default_rules_dir()), help="규칙 JSON 폴더")
@@ -171,6 +229,8 @@ def build_parser() -> argparse.ArgumentParser:
     t.add_argument("--report", help="결과 리포트(JSON) 저장 경로")
     t.add_argument("--log", help="robocopy 로그 경로(기본: 대상 폴더 안)")
     t.add_argument("--dry-run", action="store_true", help="robocopy /L 로 목록만 확인(쓰기 없음)")
+    t.add_argument("--strict", action="store_true",
+                   help="이어받기 시 상태 파일을 믿지 않고 모든 파일을 SHA-256 으로 다시 검증")
     t.add_argument("--include-cloud", action="store_true",
                    help="OneDrive 클라우드 전용 파일도 포함(대량 다운로드 발생)")
     t.set_defaults(func=_cmd_transfer)
