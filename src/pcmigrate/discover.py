@@ -18,8 +18,9 @@ from pathlib import Path
 from typing import Callable
 
 from .checklist import _norm, _norm_company, _norm_display, bundle_reason
+from .envpaths import expand_env
 from .detect import Program
-from .discover_data import (DOT_HINTS, DOT_SKIP, EXTRA_ROOTS, ROOTS, SECRET_PATTERNS, SKIP_NAMES,
+from .discover_data import (BROWSER_VENDOR_DIRS, DOT_HINTS, DOT_SKIP, EXTRA_ROOTS, ROOTS, SECRET_PATTERNS, SKIP_NAMES,
                             SKIP_PREFIXES, SKIP_SUBSTRINGS, Root)
 from .rules import Rule
 
@@ -41,6 +42,7 @@ class Link:
     programs: list[str]
     grade: str
     reason: str
+    weak: bool = False  # 제조사 폴더 하나가 여러 프로그램에 연결된 경우 등 근거가 약함
 
 
 @dataclass
@@ -228,7 +230,9 @@ def link_candidate(name: str, path: str, programs: list[Program], is_home: bool)
     for _, n, _r in chosen:
         if n not in names:
             names.append(n)
-    return Link(names[:MAX_LINKED_NAMES], CERTAIN if top == 3 else PROBABLE, chosen[0][2])
+    weak = top < 3 and len(names) > 1
+    reason = chosen[0][2] + (f" — 근거 약함: 여러 프로그램({len(names)}개)에 연결됨" if weak else "")
+    return Link(names[:MAX_LINKED_NAMES], CERTAIN if top == 3 else PROBABLE, reason, weak)
 
 
 def program_has_rule(p: Program, rules: list[Rule]) -> bool:
@@ -277,10 +281,20 @@ def scan_tree(path: Path, deadline: float, clock: Callable[[], float]) -> tuple[
     return size, files, newest, secrets, complete
 
 
+def _flag_name(c: Candidate) -> None:
+    """폴더/파일 이름만으로 판단하는 비밀 정보 가능성(크기 스캔과 무관하게 항상 적용)."""
+    base = os.path.basename(c.path)
+    low = base.lower()
+    if any(s in low for s in SECRET_PATTERNS) and base not in c.secret:
+        c.secret.append(base)
+    if c.is_dir and low in BROWSER_VENDOR_DIRS:
+        tag = f"브라우저 프로필/쿠키 가능성({base})"
+        if tag not in c.secret:
+            c.secret.append(tag)
+
+
 def scan_candidate(c: Candidate, per_limit: float, clock: Callable[[], float], budget_end: float) -> None:
-    low = os.path.basename(c.path).lower()
-    if any(s in low for s in SECRET_PATTERNS):
-        c.secret.append(os.path.basename(c.path))
+    _flag_name(c)
     if not c.is_dir:
         try:
             st = os.stat(c.path)
@@ -304,11 +318,20 @@ def scan_candidate(c: Candidate, per_limit: float, clock: Callable[[], float], b
 
 # --------------------------------------------------------------------------- 탐지 본체
 
-def discover(rules: list[Rule], programs: list[Program], expand: Expand = os.path.expandvars,
+def discover(rules: list[Rule], programs: list[Program], expand: Expand = expand_env,
              with_sizes: bool = True, per_limit: float = 3.0, total_limit: float = 60.0,
              clock: Callable[[], float] = time.monotonic, min_size_kb: int = 0,
-             show_all: bool = False) -> Discovery:
-    """규칙 없는 설치 프로그램과 사용자 데이터 폴더 후보를 찾는다."""
+             show_all: bool = False, progress: Callable[[str], None] | None = None) -> Discovery:
+    """규칙 없는 설치 프로그램과 사용자 데이터 폴더 후보를 찾는다.
+
+    progress 가 있으면 진행 메시지(문자열)를 넘긴다. 출력 방식은 호출자(UI)가 정한다.
+    """
+    def say(msg: str) -> None:
+        if progress is not None:
+            progress(msg)
+
+    t0 = clock()
+    say("설치 프로그램 목록과 규칙을 대조하는 중...")
     d = Discovery(with_sizes=with_sizes)
     reg = [p for p in programs if p.source == "registry"] or list(programs)
     seen_names: set[str] = set()
@@ -328,6 +351,7 @@ def discover(rules: list[Rule], programs: list[Program], expand: Expand = os.pat
         ruleless.append(p)
     ruleless.sort(key=lambda p: p.name.lower())
 
+    say(f"규칙 없는 설치 프로그램 {len(ruleless)}개. 설정 폴더 후보를 찾는 중...")
     concrete = rule_concrete_paths(rules, expand)
     all_programs = ruleless + rule_programs + [bp for bp, _ in d.bundles]
     entries = {p.name: ProgramEntry(p) for p in ruleless}
@@ -347,13 +371,18 @@ def discover(rules: list[Rule], programs: list[Program], expand: Expand = os.pat
 
     start = clock()
     budget_end = start + total_limit
-    for c in cands:
+    if with_sizes:
+        say(f"후보 폴더 {len(cands)}개의 크기를 계산합니다(읽기 전용, 폴더당 최대 {per_limit:g}초, "
+            f"전체 최대 약 {total_limit:g}초)...")
+    for i, c in enumerate(cands, 1):
         if with_sizes:
             scan_candidate(c, per_limit, clock, budget_end)
+            if i % 20 == 0 and i < len(cands):
+                say(f"  크기 계산 {i}/{len(cands)}")
         else:
-            low = os.path.basename(c.path).lower()
-            if any(s in low for s in SECRET_PATTERNS):
-                c.secret.append(os.path.basename(c.path))
+            _flag_name(c)
+    if with_sizes:
+        say(f"완료: 소요 {clock() - t0:.1f}초")
 
     def too_small(c: Candidate) -> bool:
         return (min_size_kb > 0 and c.size is not None and c.size < min_size_kb * 1024 and not c.secret)
@@ -389,7 +418,7 @@ def discover(rules: list[Rule], programs: list[Program], expand: Expand = os.pat
     return d
 
 
-def summarize(rules: list[Rule], programs: list[Program], expand: Expand = os.path.expandvars) -> tuple[int, int]:
+def summarize(rules: list[Rule], programs: list[Program], expand: Expand = expand_env) -> tuple[int, int]:
     """(규칙 없는 설치 프로그램 수, 설정 폴더 후보 수). 크기 계산 없이 개수만(빠름)."""
     d = discover(rules, programs, expand, with_sizes=False)
     return d.program_count, d.candidate_count
@@ -518,7 +547,7 @@ def build_selection(d: Discovery, show_all: bool = False) -> dict:
         "candidates": [{
             "include": False, "root": c.root, "rel": c.rel, "path": c.path,
             "programs": c.link.programs if c.link else [], "grade": c.link.grade if c.link else NONE,
-            "secret": c.secret,
+            "secret": c.secret, "requires_allow_secrets": bool(c.secret),
         } for c in cands],
     }
 
@@ -536,7 +565,7 @@ def _safe_top_rel(rel: str) -> None:
         raise SelectionError(f"안전하지 않은 rel(루트 바로 아래 항목 이름 하나여야 함): {rel!r}")
 
 
-def load_selection(path: Path, expand: Expand = os.path.expandvars) -> list[ExtraItem]:
+def load_selection(path: Path, expand: Expand = expand_env) -> list[ExtraItem]:
     """선택 파일에서 include:true 항목만 검증해 반환한다. root 는 허용 목록, rel 은 최상위 이름 하나."""
     try:
         data = json.loads(Path(path).read_text(encoding="utf-8"))

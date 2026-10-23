@@ -23,6 +23,54 @@ python -m pcmigrate <명령> ...
 `pcmigrate` 명령은 pip의 스크립트 폴더가 PATH에 없으면 "찾을 수 없다"고 나옵니다.
 그럴 때는 위처럼 `python -m pcmigrate`를 쓰세요. 도움말: `python -m pcmigrate --help`
 
+## 다른 PC(구 PC)에서 실행하기
+
+구 PC에는 이 도구가 없을 수 있습니다. 설치 없이 읽기 전용으로만 돌려도 되고, 아무것도 수정하지 않습니다.
+
+1. **Python 3.10 이상 확인** — `python --version` (없으면 python.org 에서 설치, 다른 패키지는 필요 없음)
+2. **저장소 받기** — GitHub 에서 zip 을 받아 풀거나 `git clone <저장소 주소>`
+3. **설치 없이 실행(권장)** — 저장소 폴더에서:
+
+   cmd:
+   ```
+   cd C:\path\to\pc-migration-tool
+   set PYTHONPATH=src
+   python -m pcmigrate scan
+   ```
+   PowerShell:
+   ```
+   cd C:\path\to\pc-migration-tool
+   $env:PYTHONPATH = "src"
+   python -m pcmigrate scan
+   ```
+   설치해서 쓰려면 `python -m pip install -e .` (이후 어디서나 `python -m pcmigrate`).
+
+4. **구 PC에서 읽기 전용으로 돌릴 3개 명령** (출력 폴더는 저장소 밖으로, 예: USB `E:\`):
+
+   cmd:
+   ```
+   python -m pcmigrate scan
+   python -m pcmigrate discover --format md --output E:\pcm\discover.md
+   python -m pcmigrate checklist --format md --output E:\pcm\checklist.md
+   ```
+   PowerShell:
+   ```
+   python -m pcmigrate scan
+   python -m pcmigrate discover --format md --output E:\pcm\discover.md
+   python -m pcmigrate checklist --format md --output E:\pcm\checklist.md
+   ```
+   `discover` 는 폴더 크기를 계산하느라 1분 안팎 걸릴 수 있고, 진행 상황이 화면(stderr)에 표시됩니다.
+
+5. **결과 파일에는 개인 정보가 들어 있습니다**(설치된 프로그램 목록, 사용자 폴더 경로, 비밀 정보 가능성이 있는 폴더 이름).
+   **저장소에 두거나 커밋하지 말고**, 남에게 공유하기 전에 내용을 확인하세요.
+
+6. **인터넷이 없는 PC** — 이 도구는 외부 의존성이 없습니다. 저장소 폴더를 통째로 USB 나 공유 폴더로 복사한 뒤
+   구 PC에서 위 3번처럼 `PYTHONPATH=src` 로 실행하면 됩니다(Python 3.10+ 만 설치되어 있으면 됩니다).
+   `winget` 이 없거나 느려도 동작하며, 이 경우 winget 매칭은 건너뛰고 레지스트리 목록만 씁니다.
+
+환경변수가 대소문자만 다른 중복(예: Git Bash 에서 `PROGRAMDATA=...` 로 지정)으로 의도와 다른 경로가 잡히면
+`python -m pcmigrate --env PROGRAMDATA=D:\pd discover` 처럼 `--env NAME=VALUE` 로 경로 해석용 값을 덮어쓸 수 있습니다.
+
 ## 권장 사용 순서
 
 구 PC에서:
@@ -37,6 +85,17 @@ python -m pcmigrate <명령> ...
 사진/도면/프로젝트 같은 대용량은 설정 패키지가 아니라 `transfer`로 옮깁니다.
 `python -m pcmigrate transfer <원본폴더> <대상> --dry-run` 으로 먼저 확인한 뒤 `--dry-run` 없이 실행하세요.
 중단되면 같은 명령을 다시 실행하면 이어받습니다(`--strict` 는 모든 파일을 다시 해시 검증).
+
+`transfer` 는 **대상 폴더에 두 개의 파일을 남깁니다**(원본에는 아무것도 쓰지 않습니다):
+
+| 파일 | 용도 | 위치 바꾸기 |
+|---|---|---|
+| `.pcmigrate-state.json` | 이어받기 진행 상태(검증 끝난 파일의 크기/수정 시각/해시) | `--state-file <경로>` |
+| `.pcmigrate-robocopy.log` | robocopy 로그 | `--log <경로>` |
+
+상태 파일이 손상되었거나 원본 경로가 다르면 무시하고 전부 다시 검증합니다. 전송을 마친 뒤 지워도 됩니다(다음 실행 때 전체를 다시 검증).
+`--strict` 는 상태 파일을 믿지 않고 모든 파일을 SHA-256 으로 다시 확인하며, 크기·수정 시각은 같은데 내용이 어긋난 파일은
+원본에서 그 파일만 다시 복사합니다(어긋났던 사본은 `.bak` 으로 보존).
 
 체크리스트는 `1. 새 PC 에서 먼저 설치 → 2. 로그인·인증 → 3. 데이터 복사/기타` 순서이고,
 이 PC에 없는 프로그램 관련 경고는 생략됩니다(`--all` 로 모두 표시).

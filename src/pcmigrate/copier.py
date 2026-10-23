@@ -142,6 +142,38 @@ def verify_file(src: Path, dst: Path) -> FileResult:
     return res
 
 
+def repair_file(src: Path, dst: Path) -> FileResult:
+    """내용이 어긋난 dst 를 원본에서 다시 복사한다(원본은 읽기만).
+
+    임시 이름(.pcmigrate-part)에 복사해 크기+SHA-256 을 확인한 뒤, 기존 dst 는 .bak 으로 보존하고 교체한다.
+    robocopy 는 크기/시간이 같으면 건너뛰므로 이 경로로만 복구할 수 있다.
+    """
+    src, dst = Path(src), Path(dst)
+    res = FileResult(str(src), str(dst), FAILED)
+    tmp = dst.with_name(dst.name + PART_SUFFIX)
+    try:
+        res.size = src.stat().st_size
+        res.sha256 = sha256_file(src)
+        shutil.copyfile(src, tmp)
+        shutil.copystat(src, tmp, follow_symlinks=True)
+        if tmp.stat().st_size != res.size or sha256_file(tmp) != res.sha256:
+            raise OSError("재복사 후 크기/해시 검증 실패")
+        if dst.exists():
+            bak = _backup_path(dst)
+            os.replace(dst, bak)
+            res.backup = str(bak)
+        os.replace(tmp, dst)
+        res.status = COPIED
+    except Exception as e:
+        res.status = FAILED
+        res.error = f"{type(e).__name__}: {e}"
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+    return res
+
+
 def _is_within(child: Path, parent: Path) -> bool:
     try:
         child.resolve().relative_to(parent.resolve())

@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable
 
+from .envpaths import expand_env
 from .rules import Rule
 
 UNINSTALL_SUBKEY = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"
@@ -155,7 +156,7 @@ def detect_programs(registry_reader: RegistryReader = read_registry_programs,
 
 def rule_matches(rule: Rule, programs: Iterable[Program],
                  path_exists: Callable[[str], bool] = os.path.exists,
-                 expand: Callable[[str], str] = os.path.expandvars,
+                 expand: Callable[[str], str] = expand_env,
                  key_exists: Callable[[str], bool] = registry_key_exists) -> bool:
     names = [p.name.lower() for p in programs]
     for pat in rule.display_name_patterns:
@@ -168,7 +169,7 @@ def rule_matches(rule: Rule, programs: Iterable[Program],
 
 def match_rules(rules: Iterable[Rule], programs: list[Program],
                 path_exists: Callable[[str], bool] = os.path.exists,
-                expand: Callable[[str], str] = os.path.expandvars,
+                expand: Callable[[str], str] = expand_env,
                 key_exists: Callable[[str], bool] = registry_key_exists) -> list[Rule]:
     """감지된 프로그램의 규칙만 반환한다."""
     return [r for r in rules if rule_matches(r, programs, path_exists, expand, key_exists)]

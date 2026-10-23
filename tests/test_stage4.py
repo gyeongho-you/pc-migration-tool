@@ -26,22 +26,29 @@ def same_size_tamper(path: Path, new: bytes):
     os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))
 
 
-def test_default_resume_trusts_state_but_strict_catches_same_size_tamper(tmp_path):
+def test_default_resume_trusts_state_but_strict_catches_and_repairs_same_size_tamper(tmp_path):
     src = make_src(tmp_path)
     dst = tmp_path / "dst"
     transfer(src, dst, runner=FakeRobocopy())
     target = dst / "a.dwg"
+    original = (src / "a.dwg").read_bytes()
     same_size_tamper(target, b"Z" * target.stat().st_size)
 
     rep = transfer(src, dst, runner=FakeRobocopy(skip=["a.dwg"]))  # 기본: 상태 신뢰
-    assert rep.failures == [] and rep.meta["strict"] is False  # 알려진 한계(문서화)
+    assert rep.failures == [] and rep.meta["strict"] is False  # 알려진 한계(문서화), 기본 동작 유지
+    assert target.read_bytes() != original
 
-    rep = transfer(src, dst, runner=FakeRobocopy(skip=["a.dwg"]), strict=True)
+    rep = transfer(src, dst, runner=FakeRobocopy(skip=["a.dwg"]), strict=True)  # robocopy 는 건너뛰어도 strict 가 복구
     st = {Path(r.src).name: r.status for r in rep.results}
-    assert st["a.dwg"] == MISMATCH and st["b.rvt"] == VERIFIED
+    assert st["a.dwg"] == VERIFIED and st["b.rvt"] == VERIFIED and rep.failures == []
     assert rep.meta["strict"] is True and rep.meta["resumed_skipped"] == 0
+    assert target.read_bytes() == original and (src / "a.dwg").read_bytes() == original
+    assert [Path(r["file"]).name for r in rep.meta["repaired"]] == ["a.dwg"]
+    assert (dst / "a.dwg.bak").read_bytes() == b"Z" * len(original)  # 손상된 사본은 .bak 보존
     state = json.loads((dst / STATE_NAME).read_text(encoding="utf-8"))
-    assert state["files"]["a.dwg"]["verified"] is False  # 상태도 정정됨
+    assert state["files"]["a.dwg"]["verified"] is True
+    rep2 = transfer(src, dst, runner=FakeRobocopy(skip=["a.dwg"]), strict=True)  # 재실행은 깨끗
+    assert rep2.failures == [] and "repaired" not in rep2.meta
 
 
 def test_strict_rehashes_every_file(tmp_path, monkeypatch):

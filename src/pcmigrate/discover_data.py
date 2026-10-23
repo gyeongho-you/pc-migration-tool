@@ -68,7 +68,15 @@ SECRET_PATTERNS: tuple[str, ...] = (
     "credentials", "credential", "token", "secret", "keychain", ".ssh", ".aws", ".kube",
     "login data", "cookies", "id_rsa", "id_ed25519", "logins.json", "key4.db", ".netrc",
     ".git-credentials", ".npmrc", ".pypirc", ".kdbx", "c.pwd", "password", "authorized_keys",
+    "user data",  # Chromium 계열 브라우저의 프로필 루트
 )
+
+# 브라우저 프로필/쿠키 DB 가 들어 있을 수 있는 제조사/브라우저 폴더(소문자 완전 일치). 이름만으로 '비밀 정보 가능성'
+# 으로 본다(하위에 Chrome/Edge/Firefox 프로필이 있는 상위 제조사 폴더 포함, 예: %LOCALAPPDATA%\Google).
+BROWSER_VENDOR_DIRS: frozenset[str] = frozenset({
+    "google", "chrome", "chromium", "microsoft edge", "edge", "mozilla", "firefox", "bravesoftware", "brave",
+    "opera software", "opera", "vivaldi", "yandex", "naver", "whale", "naver whale",
+})
 
 # --------------------------------------------------------------------------- 가져오기 방어
 # export --extra 로 들어온 항목을 복원할 때 거부할 경로 조각(소문자). 시작 프로그램 등록 경로를 통한 실행을 막는다.

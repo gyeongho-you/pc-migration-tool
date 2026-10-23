@@ -27,6 +27,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Callable
 
+from .envpaths import expand_env
 from . import __version__
 from .copier import (COPIED, FAILED, SKIPPED_SAME, WOULD_COPY, WOULD_OVERWRITE,
                      FileResult, Report, _backup_path, copy_file, sha256_file)
@@ -106,7 +107,7 @@ class Item:
     rel: str   # base 기준 상대 경로(posix)
 
 
-def collect_items(rule: Rule, expand: Expand = os.path.expandvars
+def collect_items(rule: Rule, expand: Expand = expand_env
                   ) -> tuple[list[Item], list[dict]]:
     """규칙에 따라 백업할 파일 목록과 건너뛴 항목(사유 포함)을 만든다. 읽기 전용."""
     items: list[Item] = []
@@ -152,7 +153,7 @@ def collect_items(rule: Rule, expand: Expand = os.path.expandvars
     return items, skipped
 
 
-def collect_extra_items(extras: list, expand: Expand = os.path.expandvars) -> tuple[list[Item], list[dict]]:
+def collect_extra_items(extras: list, expand: Expand = expand_env) -> tuple[list[Item], list[dict]]:
     """discover 선택 파일로 고른 항목(ExtraItem)의 파일 목록. 읽기 전용, 라이선스/임시/링크 제외."""
     keys = {r.template: r.key for r in ROOTS}
     items: list[Item] = []
@@ -196,7 +197,7 @@ def _zip_time(path: Path) -> tuple:
 
 
 def export_package(rules: list[Rule], out: Path, programs: list[Program],
-                   winget_text: str | None, expand: Expand = os.path.expandvars,
+                   winget_text: str | None, expand: Expand = expand_env,
                    winget_list_text: str | None = None, extras: list | None = None,
                    now: Callable[[], datetime] = lambda: datetime.now(timezone.utc)) -> dict:
     """감지된 프로그램의 규칙(rules)으로 설정 패키지를 만든다. manifest dict 반환.
@@ -347,7 +348,7 @@ class ImportPlan:
         return self.manifest.get("manual_warnings", [])
 
 
-def plan_import(path: Path, rules: list[Rule], expand: Expand = os.path.expandvars) -> ImportPlan:
+def plan_import(path: Path, rules: list[Rule], expand: Expand = expand_env) -> ImportPlan:
     """검증 후 복원 계획을 만든다. 파일 시스템은 읽기만 한다."""
     manifest, problems = verify_package(path)
     plan = ImportPlan(manifest or {}, problems=list(problems))

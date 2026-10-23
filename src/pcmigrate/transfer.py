@@ -14,7 +14,7 @@ import subprocess
 from pathlib import Path
 from typing import Callable
 
-from .copier import (CLOUD_ONLY, FAILED, MISMATCH, SKIPPED_SAME, VERIFIED, WOULD_COPY,
+from .copier import (CLOUD_ONLY, FAILED, MISMATCH, SKIPPED_SAME, VERIFIED, WOULD_COPY, repair_file,
                      WOULD_OVERWRITE, FileResult, Report, verify_file)
 
 STATE_NAME = ".pcmigrate-state.json"
@@ -179,6 +179,20 @@ class State:
         self._dirty = 0
 
 
+def _repair_and_reverify(src: Path, dst: Path, before, report: Report):
+    """strict 에서 불일치로 판정된 파일만 재복사하고 다시 해시 검증한다. 실패하면 원래 불일치 결과를 유지."""
+    rep = repair_file(src, dst)
+    if rep.status == FAILED:
+        before.error = f"{before.error}; 재복사 실패: {rep.error}"
+        return before
+    after = verify_file(src, dst)
+    after.backup = rep.backup
+    if after.status == VERIFIED:
+        report.meta.setdefault("repaired", []).append({"file": str(dst), "backup": rep.backup,
+                                                       "reason": before.error})
+    return after
+
+
 def _state_conflict(state: State, rel: str, src: Path, sha256: str) -> bool:
     """상태 파일이 '검증 완료'로 기록한 해시가 지금 원본 해시와 다른데 크기/mtime 은 같은 경우."""
     e = state.files.get(rel)
@@ -224,11 +238,13 @@ def _copy_with_robocopy(src: Path, dst: Path, log: Path, cloud: list[Path],
 def transfer(src: Path, dst: Path, *, dry_run: bool = False, include_cloud: bool = False,
              runner: Runner = default_runner, attr_getter: AttrGetter = default_attr_getter,
              log_path: Path | None = None, warn: Callable[[str], None] = lambda m: None,
-             strict: bool = False) -> Report:
+             strict: bool = False, state_path: Path | None = None) -> Report:
     """src 폴더를 dst 로 robocopy 복사하고 SHA-256 으로 검증한다.
 
     strict=True 이면 상태 파일의 크기/mtime 일치를 믿지 않고 모든 파일을 다시 해시 검증하며,
-    상태 파일에 기록된 해시와 어긋나면 불일치로 보고한다.
+    상태 파일에 기록된 해시와 어긋나면 불일치로 보고한다. 해시가 어긋난 파일은(robocopy 는 크기/시간이 같으면
+    건너뛰므로) 원본에서 그 파일만 다시 복사해 교체하고(기존 대상 파일은 .bak 보존) 다시 검증한다.
+    state_path 로 진행 상태 파일 위치를 바꿀 수 있다(기본: 대상 폴더 안 .pcmigrate-state.json).
     """
     src, dst = Path(src), Path(dst)
     if not src.is_dir():
@@ -275,7 +291,8 @@ def transfer(src: Path, dst: Path, *, dry_run: bool = False, include_cloud: bool
 
     dst.mkdir(parents=True, exist_ok=True)
     log = Path(log_path) if log_path else dst / LOG_NAME
-    state = State(dst / STATE_NAME, src)
+    state = State(Path(state_path) if state_path else dst / STATE_NAME, src)
+    report.meta["state_file"] = str(state.path)
     if state.reset_reason:
         report.meta["state_reset"] = state.reset_reason
         warn(state.reset_reason)
@@ -298,6 +315,8 @@ def transfer(src: Path, dst: Path, *, dry_run: bool = False, include_cloud: bool
                                                  p.stat().st_size, digest))
                 continue
             res = verify_file(p, target)
+            if strict and res.status == MISMATCH:
+                res = _repair_and_reverify(p, target, res, report)
             if strict and res.status == VERIFIED and _state_conflict(state, rel, p, res.sha256):
                 res.status = MISMATCH
                 res.error = "상태 파일의 검증 해시와 원본이 어긋남(크기/mtime 은 동일)"
