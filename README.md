@@ -175,7 +175,9 @@ pyinstaller --noconfirm --console   --paths src --add-data "rules;rules" -n pcmi
 검증한 범위(Windows 11, 일반 사용자 권한, PATH 에서 Python 제외): `--version`, `scan`, `checklist --output`, `discover`,
 `transfer`(미리보기/실복사/목록 저장), `verify`(정상/변조 감지), `manifest`, 한글·공백 경로, GUI 를 띄워 정상 종료.
 **검증하지 못한 것**: 아주 깨끗한 새 Windows 설치(이 PC 는 개발 PC 라 Visual C++ 런타임 등이 이미 있음), USB 드라이브에서의 실행,
-실제 SmartScreen/백신 반응, 창 모드 exe 에서 복사 도구 창이 번쩍이는지 눈으로 확인(코드에서는 숨김 옵션을 줌).
+실제 SmartScreen/백신 반응, 창 모드 exe 에서 복사 도구 창이 번쩍이는지 눈으로 확인(코드에서는 숨김 옵션을 줌),
+**실제 OneDrive PC 에서의 클라우드 전용 파일 동작**(감지/건너뜀이 현장 환경에서 기대대로인지 확인 필요). 참고로 robocopy 의 `/xa:O`(오프라인 속성 제외)가 클라우드 전용 파일을 정확히 건너뛰는지는
+공식 문서로 확인되지 않았고, **이 도구는 `/xa:O` 에 의존하지 않습니다**(자체 속성 검사로 감지).
 
 ## 1TB 이전 가이드 (외장 드라이브 / 랜선)
 
@@ -239,6 +241,7 @@ pyinstaller --noconfirm --console   --paths src --add-data "rules;rules" -n pcmi
    cmd:         net share 이전=D:\이전 /GRANT:접속계정,CHANGE
    PowerShell:  New-SmbShare -Name 이전 -Path D:\이전 -ChangeAccess 접속계정
    ```
+   (`net share` 는 아래 [각주 1](#net-note) 참고. `New-SmbShare` 문서: [참고 링크](#참고-링크) 절)
 4. **접속 테스트(구 PC 에서)**:
    ```
    cmd / PowerShell:  ping 192.168.50.2
@@ -246,10 +249,28 @@ pyinstaller --noconfirm --console   --paths src --add-data "rules;rules" -n pcmi
    PowerShell:        Test-Path \\192.168.50.2\이전
    ```
    탐색기 주소창에 `\\192.168.50.2\이전` 을 입력해 열리는지, 폴더 안에 새 텍스트 파일을 만들었다 지워서 **쓰기**가 되는지 확인합니다.
-   접속이 꼬였으면 `net use * /delete` 로 기존 연결을 끊고 다시 시도합니다.
+   접속이 꼬였으면 `net use * /delete` 로 기존 연결을 끊고 다시 시도합니다. (`net use` 는 [각주 1](#net-note) 참고)
 5. **링크 속도 확인**: 설정 > 네트워크 및 인터넷 > 이더넷 > 속성의 "링크 속도"가 **1000/1000(Mbps)** 인지 봅니다(PowerShell: `Get-NetAdapter | Format-Table Name, LinkSpeed`).
    100Mbps 로 나오면 케이블(CAT5e 이상인지)이나 어댑터를 바꿔 보세요. 기가비트에서 이론 최대는 약 110MB/s 이고 실제는 환경에 따라 크게 다릅니다.
-6. **전송 중**: 구 PC 는 이 도구가 잠자기를 막습니다. **새 PC 는 직접** 전원을 연결하고 잠자기를 꺼 두세요(공유 폴더가 끊기지 않게). 끊겨도 같은 설정으로 다시 실행하면 이어받습니다.
+6. **전송 중 (받는 PC 는 직접 해야 합니다)**: 이 도구는 **보내는 PC(도구를 실행하는 PC)의 절전만** 막습니다. 공유 폴더를 가진 **받는 새 PC 는 도구가 건드리지 못하므로**
+   사용자가 전송 전에 직접 ① 전원 어댑터를 연결하고 ② 잠자기를 꺼 두세요. 안 그러면 새 PC 가 잠들어 공유 폴더가 끊깁니다(끊겨도 같은 설정으로 다시 실행하면 이어받습니다).
+   ```
+   cmd:           powercfg /change standby-timeout-ac 0      ← 전원 연결 시 잠자기까지의 시간(분). 0 = 안 함 (powercfg /? 도움말 기준)
+   되돌리기:      powercfg /change standby-timeout-ac 30     ← 전송 전에 적어 둔 원래 값(분)으로. 현재 값은 `powercfg /query` 로 확인
+   ```
+   (관리자 권한이 필요할 수 있습니다. 이 README 에서는 확인하지 못했습니다.)
+   네트워크 어댑터의 전원 절약도 끕니다: **장치 관리자 > 네트워크 어댑터 > (사용 중인 어댑터) 속성 > 전원 관리 탭 > "전원을 절약하기 위해 이 장치를 끌 수 있음" 체크 해제**.
+   PowerShell 로 하려면 `Set-NetAdapterPowerManagement` 문서([참고 링크](#참고-링크) 절)를 보세요(옵션 이름은 이 README 에서 확인하지 못했습니다).
+   전송이 끝나면 위 설정을 원래대로 되돌리세요(체크 다시 켜기, 잠자기 시간 복구).
+
+**SMB 서명과 로그온 주의**: Microsoft 문서([Control SMB signing behavior](https://learn.microsoft.com/en-us/windows-server/storage/file-server/smb-signing))에 따르면
+Windows 11 24H2 의 **Pro/Enterprise/Education 은 SMB 서명을 기본으로 요구**하고 **Home 은 요구하지 않습니다**. 서명을 지원하지 못하는 NAS 나 게스트(익명) 접속은 실패할 수 있습니다.
+Microsoft 는 서명을 끄는 우회를 권장하지 않으므로, 이 문서도 끄는 방법을 안내하지 않습니다. **이 도구는 SMB 서명 등 Windows 의 네트워크/보안 설정을 바꾸지 않습니다**(필요하면 사용자가 직접 확인).
+또한 **비밀번호가 없는 로컬 계정은 네트워크 로그온이 되지 않습니다**: [Accounts: Limit local account use of blank passwords to console logon only](https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-10/security/threat-protection/security-policy-settings/accounts-limit-local-account-use-of-blank-passwords-to-console-logon-only).
+
+<a id="net-note"></a>
+**각주 1 (net use / net share)**: Microsoft Learn 의 현재 Windows commands 목록에는 `net use`, `net share` 페이지가 없습니다. 두 명령은 Windows 11 에서도 동작하지만
+공식 문서는 보관본([보관본 문서(Windows Server 2012 R2/2012)](https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-server-2012-r2-and-2012/gg651155(v=ws.11)))뿐이라, 옵션은 `net use /?`, `net share /?` 로 직접 확인하세요.
 
 네트워크 오류는 쉬운 문구로 나옵니다: 공유 폴더를 찾을 수 없음(IP/공유 이름/프로필 확인), 로그인 실패(계정/비밀번호), 이미 다른 계정으로 연결됨(`net use * /delete`), 쓰기 권한 없음(공유 권한).
 
@@ -288,6 +309,9 @@ pyinstaller --noconfirm --console   --paths src --add-data "rules;rules" -n pcmi
 ### 안전하게 돌리기 위한 약속
 
 - **절전 방지**: 복사 중에는 시스템이 잠자기로 들어가지 않게 합니다(화면 끄기는 건드리지 않음, 끝나거나 오류가 나면 반드시 원래대로). 실패하면 경고만 하고 계속하니 전원 설정도 확인하세요. 노트북은 전원을 연결하세요. 명령줄에서 끄려면 `--no-keep-awake`.
+- **OneDrive "클라우드 전용" 파일**: 클라우드에만 있는 파일은 읽는 순간 자동으로 내려받아지는 것이 일반적인 동작입니다(이번에 공식 문서로 확인하지는 못했습니다). 그러면 **구 PC 의 디스크 공간을 쓰고 로컬 상태가 바뀔 수** 있고, 1TB 규모면 시간과 공간이 크게 늘어납니다.
+  이 도구는 **파일 속성으로 클라우드 전용 파일을 감지해 기본으로 건너뛰고**, 리포트에 `cloud_only` 로 남깁니다(`--include-cloud` 를 줄 때만 포함). 필요한 파일은 복사 전에 직접 내려받아 두세요:
+  탐색기에서 해당 폴더를 우클릭 > **"이 디바이스에 항상 유지"** ([Microsoft 안내](https://support.microsoft.com/en-us/office/0e6860d3-d9f3-4971-b321-7092438fb38e)). 내려받는 동안 디스크 여유 공간을 확인하세요.
 - **프로그램 종료 후 복사**: CAD/BIM 등 파일을 쓰는 프로그램을 모두 닫으세요. 사용 중인 파일은 복사/검사에 실패하고 "다른 프로그램이 파일을 사용 중" 으로 안내됩니다. 닫은 뒤 "실패한 것만 다시 시도"를 누르세요.
 - **여유 공간 사전 검사**: 대상의 여유 공간이 원본 총량 + 5% 보다 적으면 시작하지 않습니다(네트워크 경로는 조회되면 같은 검사, 안 되면 경고만).
 - **FAT32 차단**: 대상이 FAT32 인데 4GB 보다 큰 파일이 있으면 복사 전에 막습니다(분할 저장은 지원하지 않습니다). NTFS 로 포맷하거나 다른 드라이브를 쓰세요. exFAT 는 경고만 합니다.
@@ -468,3 +492,21 @@ python -m pytest -q
 ```
 
 테스트는 `tmp_path`와 mock만 사용하며 실제 레지스트리, winget, 사용자 파일은 건드리지 않습니다.
+
+## 참고 링크
+
+공식 문서 링크 모음입니다(링크 내용은 바뀔 수 있습니다).
+
+- [robocopy](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/robocopy) — 복사 도구 옵션 설명
+- [Get-FileHash](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.utility/get-filehash) — PowerShell 로 SHA-256 확인
+- [최대 경로 길이](https://learn.microsoft.com/en-us/windows/win32/fileio/maximum-file-path-limitation) — 260자 제한과 `\\?\` 접두
+- [파일 시스템 기능 비교](https://learn.microsoft.com/en-us/windows/win32/fileio/filesystem-functionality-comparison) — NTFS/FAT32/exFAT 차이(4GB 제한 등)
+- [BitLocker 복구 키 찾기](https://support.microsoft.com/en-us/windows/finding-your-bitlocker-recovery-key-in-windows-6b71ad27-0b89-ea08-f143-056f5ab347d6) — 드라이브가 암호화돼 있을 때
+- [SMB 보안](https://learn.microsoft.com/en-us/windows-server/storage/file-server/smb-security) — 공유 폴더 보안 개요
+- [Control SMB signing behavior](https://learn.microsoft.com/en-us/windows-server/storage/file-server/smb-signing) — SMB 서명 기본값
+- [New-SmbShare](https://learn.microsoft.com/en-us/powershell/module/smbshare/new-smbshare) — PowerShell 로 공유 폴더 만들기
+- [Set-NetConnectionProfile](https://learn.microsoft.com/en-us/powershell/module/netconnection/set-netconnectionprofile) — 네트워크 프로필(개인/공용) 변경
+- [Set-NetAdapterPowerManagement](https://learn.microsoft.com/en-us/powershell/module/netadapter/set-netadapterpowermanagement) — 어댑터 전원 관리
+- [winget export](https://learn.microsoft.com/en-us/windows/package-manager/winget/export) — 설치 프로그램 목록 내보내기
+- [OneDrive: 이 디바이스에 항상 유지](https://support.microsoft.com/en-us/office/0e6860d3-d9f3-4971-b321-7092438fb38e) — 클라우드 전용 파일 내려받기
+- [AutoCAD 참조 도면 경로](https://help.autodesk.com/cloudhelp/2026/ENU/AutoCAD-LT/files/GUID-AB6D738D-DD2F-41ED-9B56-45B64A467CF8.htm) — **AutoCAD LT 문서**이므로 최신 AutoCAD/Civil 3D 와 같은지는 확인되지 않았습니다
