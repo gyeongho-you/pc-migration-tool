@@ -4,13 +4,17 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 
 from . import __version__, envpaths
-from .api import (NEEDS_CONFIRM, ApiError, Deps, check_unexpanded, format_write_error, run_checklist,
-                  run_copy, run_discover, run_export, run_import, run_scan, run_transfer, selection_json)
+from .api import (NEEDS_CONFIRM, ApiError, Deps, check_unexpanded, format_write_error, report_inside, run_checklist,
+                  run_copy, run_discover, run_export, run_import, run_manifest, run_scan, run_transfer, run_verify,
+                  selection_json)
 from .checklist import write_output
 from .detect import read_registry_programs, winget_export_raw, winget_list_raw
+from .manifest import ManifestError, build_manifest, verify_against_manifest
+from .progress import ProgressInfo, format_info
 from .discover import render as render_discovery
 from .discover import summarize
 from .package import export_package, plan_import
@@ -22,7 +26,7 @@ def _deps() -> Deps:
     """이 모듈의 현재 이름들을 주입한다(테스트가 cli.<이름> 을 바꿔치기할 수 있도록 호출 시점에 조회)."""
     return Deps(registry=read_registry_programs, winget_export=winget_export_raw,
                 winget_list=winget_list_raw, summarize=summarize, export=export_package,
-                plan=plan_import, transfer=transfer)
+                plan=plan_import, transfer=transfer, manifest=build_manifest, verify=verify_against_manifest)
 
 
 def _err(*lines: str) -> None:
@@ -109,18 +113,64 @@ def _cmd_copy(args: argparse.Namespace) -> int:
     return 1 if report.failures else 0
 
 
+PRECHECK_LINES = (
+    "시작 전 확인: ① CAD 등 모든 프로그램을 종료하세요(사용 중인 파일은 복사/검사에 실패합니다).",
+    "시작 전 확인: ② 노트북은 전원을 연결하세요. 복사 중 PC 가 잠들지 않도록 이 도구가 절전을 막지만 전원이 꺼지면 멈춥니다.",
+    "시작 전 확인: ③ 외장 드라이브는 NTFS 로 포맷된 것을 쓰고 USB 3.x 포트에 꽂으세요(FAT32 는 4GB 넘는 파일을 저장할 수 없습니다).",
+    "시작 전 확인: ④ 원본 삭제나 PC 포맷은 검사가 끝나 '실패 0' 을 확인하기 전까지 절대 하지 마세요.",
+)
+
+
+def _cli_progress():
+    """진행 줄은 10초마다(또는 단계가 바뀔 때) 한 번만 출력한다. 오래 걸리는 작업에서 화면이 넘치지 않게."""
+    state = {"last": 0.0, "phase": ""}
+
+    def cb(msg: str) -> None:
+        now = time.monotonic()
+        phase = msg.split(" ", 1)[0]
+        if phase != state["phase"] or now - state["last"] >= 10:
+            state["phase"], state["last"] = phase, now
+            print(f"[진행] {msg}", file=sys.stderr)
+    return cb
+
+
+def _cli_hint():
+    seen: set[str] = set()
+
+    def cb(info: ProgressInfo) -> None:
+        if info.hint and info.hint not in seen:
+            seen.add(info.hint)
+            print(f"[힌트] {info.hint}", file=sys.stderr)
+    return cb
+
+
+def _chunk_bytes(mb: float | None) -> int | None:
+    return int(mb * 1024 * 1024) if mb else None
+
+
 def _cmd_transfer(args: argparse.Namespace) -> int:
     def warn(msg: str) -> None:
         print(f"[경고] {msg}", file=sys.stderr)
 
-    if _unexpanded(src=args.src, dst=args.dst, report=args.report, log=args.log, state_file=args.state_file):
+    if _unexpanded(src=args.src, dst=args.dst, report=args.report, log=args.log, state_file=args.state_file,
+                   manifest_out=args.manifest_out, use_manifest=args.use_manifest):
         return 1
+    if not (args.dry_run or args.verify_only):
+        _err(*PRECHECK_LINES)
     try:
         report = run_transfer(args.src, args.dst, dry_run=args.dry_run, include_cloud=args.include_cloud,
                               log_path=args.log, strict=args.strict, state_path=args.state_file, warn=warn,
-                              deps=_deps())
+                              deps=_deps(), progress=_cli_progress(), progress_info=_cli_hint(),
+                              verify_only=args.verify_only, retry_failed=args.retry_failed, workers=args.workers,
+                              chunk=_chunk_bytes(args.chunk_mb), keep_awake=not args.no_keep_awake,
+                              manifest_out=args.manifest_out, use_manifest=args.use_manifest,
+                              verify_dest=args.verify_dest, copy_mode=args.copy_mode,
+                              copy_threads=args.copy_threads)
     except TransferError as e:
         print(f"전송 실패: {e}", file=sys.stderr)
+        return 1
+    except ManifestError as e:
+        print(f"해시 목록 오류: {e}", file=sys.stderr)
         return 1
     except OSError as e:
         return _write_failed(args.dst, e)
@@ -130,14 +180,65 @@ def _cmd_transfer(args: argparse.Namespace) -> int:
         except OSError as e:
             return _write_failed(args.report, e)
     d = report.to_dict()
-    print(json.dumps({"dry_run": d["dry_run"], "summary": d["summary"], "robocopy_exit": d.get("robocopy_exit"),
-                      "cloud_only_count": d["cloud_only_count"]}, ensure_ascii=False))
+    print(json.dumps({"dry_run": d["dry_run"], "mode": d.get("mode"), "summary": d["summary"],
+                      "robocopy_exit": d.get("robocopy_exit"), "cloud_only_count": d["cloud_only_count"],
+                      "total_files": d.get("total_files"), "total_bytes": d.get("total_bytes")}, ensure_ascii=False))
     for item in d.get("repaired", []):
         print(f"[복구] 내용이 어긋난 파일을 원본에서 다시 복사했습니다: {item['file']} (이전 사본: {item['backup']})",
               file=sys.stderr)
+    if d.get("manifest_out"):
+        print(f"[목록] 해시 목록을 저장했습니다: {d['manifest_out']} (파일 {d.get('manifest_files', 0):,}개)", file=sys.stderr)
+        if d.get("dest_verification") == "deferred":
+            print(f"[다음 단계] 대상 검사는 새 PC 에서 하세요: pcmigrate verify --manifest <목록 파일> --target <새 PC 의 폴더>",
+                  file=sys.stderr)
+    if d.get("keep_awake") == "failed":
+        print("[경고] 절전 방지를 켜지 못했습니다. 전원 설정에서 잠자기를 꺼 두세요.", file=sys.stderr)
     for r in report.failures[:50]:
         print(f"실패: {r.src} -> {r.error}", file=sys.stderr)
     return 1 if report.failures else 0
+
+
+def _cmd_manifest(args: argparse.Namespace) -> int:
+    if _unexpanded(src=args.src, out=args.out):
+        return 1
+    try:
+        r = run_manifest(args.src, args.out, workers=args.workers, chunk=_chunk_bytes(args.chunk_mb),
+                         progress=_cli_progress(), progress_info=_cli_hint(), deps=_deps())
+    except ManifestError as e:
+        print(f"해시 목록 오류: {e}", file=sys.stderr)
+        return 1
+    except OSError as e:
+        return _write_failed(args.out, e)
+    print(json.dumps({"manifest": str(r.path), "files": r.files, "bytes": r.bytes, "errors": len(r.errors),
+                      "seconds": round(r.seconds, 1), "io": r.io}, ensure_ascii=False))
+    for e in r.errors[:50]:
+        print(f"읽지 못함: {e.src} -> {e.error}", file=sys.stderr)
+    return 1 if r.errors else 0
+
+
+def _cmd_verify(args: argparse.Namespace) -> int:
+    if _unexpanded(manifest=args.manifest, target=args.target, report=args.report):
+        return 1
+    if report_inside(args.report, args.target):
+        print("리포트는 검사할 폴더 밖에 저장하세요(검사는 대상 폴더를 읽기만 하고 아무것도 쓰지 않습니다).", file=sys.stderr)
+        return 1
+    try:
+        rep = run_verify(args.manifest, args.target, workers=args.workers, chunk=_chunk_bytes(args.chunk_mb),
+                         progress=_cli_progress(), progress_info=_cli_hint(), find_extras=not args.no_extras, deps=_deps())
+    except ManifestError as e:
+        print(f"해시 목록 오류: {e}", file=sys.stderr)
+        return 1
+    if args.report:
+        try:
+            rep.write(Path(args.report))
+        except OSError as e:
+            return _write_failed(args.report, e)
+    d = rep.to_dict()
+    print(json.dumps({"summary": d["summary"], "extra_files": d.get("extra_files"),
+                      "manifest_complete": d.get("manifest_complete"), "seconds": d.get("seconds")}, ensure_ascii=False))
+    for r in rep.failures[:50]:
+        print(f"실패: {r.src} -> {r.error}", file=sys.stderr)
+    return 1 if rep.failures else 0
 
 
 def _cmd_checklist(args: argparse.Namespace) -> int:
@@ -320,7 +421,38 @@ def build_parser() -> argparse.ArgumentParser:
                         "내용이 어긋난 파일은 원본에서 다시 복사(기존 사본은 .bak 보존)")
     t.add_argument("--include-cloud", action="store_true",
                    help="OneDrive 클라우드 전용 파일도 포함(대량 다운로드 발생)")
+    t.add_argument("--verify-only", action="store_true", help="복사 없이 원본과 대상을 비교만 하고 리포트를 갱신(대상은 항상 다시 읽음)")
+    t.add_argument("--retry-failed", action="store_true", help="전체를 다시 복사하지 않고 검사가 끝나지 않았거나 실패한 파일만 다시 복사/검사")
+    t.add_argument("--workers", type=int, help="파일 단위 병렬 검사 개수(기본 2, 최대 8). 느린 USB/HDD 에서는 1 이 나을 수 있음")
+    t.add_argument("--chunk-mb", type=float, help="읽기 청크 크기(MB, 기본 4)")
+    t.add_argument("--no-keep-awake", action="store_true", help="전송 중 절전 방지를 끈다(기본은 시스템 절전을 막음)")
+    t.add_argument("--manifest-out", help="원본 기준 해시 목록(.jsonl)을 저장. 네트워크 대상이면 대상 검사를 미루고 새 PC 에서 verify 로 비교")
+    t.add_argument("--use-manifest", help="원본 해시를 이 목록에서 가져와 원본을 다시 읽지 않음(외장 드라이브 2단계: 외장 -> 새 PC)")
+    g = t.add_mutually_exclusive_group()
+    g.add_argument("--verify-dest", dest="verify_dest", action="store_const", const=True, default=None,
+                   help="--manifest-out 과 함께여도 대상을 지금 다시 읽어 검사(네트워크면 오래 걸림)")
+    g.add_argument("--no-verify-dest", dest="verify_dest", action="store_const", const=False,
+                   help="대상 검사를 미룬다(해시 목록만 만들고 새 PC 에서 verify)")
+    t.add_argument("--copy-threads", type=int, help="복사 도구가 동시에 복사할 파일 수(기본 4, 1~16). 작은 파일이 많을 때 빠르며, 느린 HDD/USB 에서는 1 을 권장")
+    t.add_argument("--copy-mode", choices=("restartable", "normal", "unbuffered"), default="restartable",
+                   help="복사 방식: restartable(기본, 끊겨도 이어받음) / normal / unbuffered(아주 큰 파일에 유리)")
     t.set_defaults(func=_cmd_transfer)
+
+    m = sub.add_parser("manifest", help="원본(로컬)을 읽어 해시 목록 파일을 만든다(읽기 전용)")
+    m.add_argument("src", help="원본 폴더(읽기만 함)")
+    m.add_argument("--out", required=True, help="해시 목록 파일(.jsonl) 저장 경로")
+    m.add_argument("--workers", type=int)
+    m.add_argument("--chunk-mb", type=float)
+    m.set_defaults(func=_cmd_manifest)
+
+    v = sub.add_parser("verify", help="해시 목록과 로컬 폴더를 비교(누락/내용 다름/추가 파일). 대상은 읽기만 함")
+    v.add_argument("--manifest", required=True, help="구 PC 에서 만든 해시 목록(.jsonl)")
+    v.add_argument("--target", required=True, help="검사할 로컬 폴더(새 PC)")
+    v.add_argument("--report", help="결과 리포트(JSON). 검사할 폴더 밖에 저장해야 함")
+    v.add_argument("--workers", type=int)
+    v.add_argument("--chunk-mb", type=float)
+    v.add_argument("--no-extras", action="store_true", help="목록에 없는 추가 파일 찾기를 건너뜀")
+    v.set_defaults(func=_cmd_verify)
 
     c = sub.add_parser("copy", help="소규모 폴더/파일을 해시 검증하며 복사(대용량은 transfer)")
     c.add_argument("src")

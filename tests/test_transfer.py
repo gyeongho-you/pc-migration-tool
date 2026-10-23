@@ -125,7 +125,7 @@ def test_robocopy_failure_code_reported(tmp_path):
     src = make_src(tmp_path)
     rep = transfer(src, tmp_path / "dst", runner=FakeRobocopy(code=8))
     assert rep.meta["robocopy_ok"] is False
-    assert any("종료코드 8" in r.error for r in rep.failures)
+    assert any("종료 코드 8" in r.error for r in rep.failures)
 
 
 def test_dst_inside_src_or_same_rejected(tmp_path):
@@ -162,12 +162,12 @@ def test_resume_skips_rehash_of_verified_files(tmp_path, monkeypatch):
     src = make_src(tmp_path)
     dst = tmp_path / "dst"
     transfer(src, dst, runner=FakeRobocopy())
-    state = json.loads((dst / STATE_NAME).read_text(encoding="utf-8"))
-    assert len(state["files"]) == 3 and all(e["verified"] for e in state["files"].values())
+    state = tr.read_state_entries(dst / STATE_NAME)
+    assert len(state) == 3 and all(e["verified"] for e in state.values())
 
     calls = []
     real = tr.verify_file
-    monkeypatch.setattr(tr, "verify_file", lambda s, d: (calls.append(s), real(s, d))[1])
+    monkeypatch.setattr(tr, "verify_file", lambda s, d, **kw: (calls.append(s), real(s, d, **kw))[1])
     rep = transfer(src, dst, runner=FakeRobocopy())
     assert calls == [] and rep.meta["resumed_skipped"] == 3
 
@@ -203,12 +203,12 @@ def test_corrupt_or_mismatched_state_causes_full_reverify(tmp_path, content, mon
     (dst / STATE_NAME).write_text(content.replace("SRC", str(src)), encoding="utf-8")
     calls = []
     real = tr.verify_file
-    monkeypatch.setattr(tr, "verify_file", lambda s, d: (calls.append(s), real(s, d))[1])
+    monkeypatch.setattr(tr, "verify_file", lambda s, d, **kw: (calls.append(s), real(s, d, **kw))[1])
     rep = transfer(src, dst, runner=FakeRobocopy())
     assert len(calls) == 3 and rep.failures == []
     if "OTHER" in content or "broken" in content or "[]" == content or "99" in content or '"x"' in content:
         assert "state_reset" in rep.meta
-    json.loads((dst / STATE_NAME).read_text(encoding="utf-8"))  # 정상 상태로 다시 저장됨
+    assert len(tr.read_state_entries(dst / STATE_NAME)) == 3  # 정상 상태로 다시 저장됨
 
 
 def test_state_not_trusted_when_destination_changed(tmp_path):
@@ -245,8 +245,8 @@ def test_cloud_only_skipped_by_default_and_warned(tmp_path):
     assert any("클라우드" in w for w in warnings) and any("b.rvt" in w for w in warnings)
     # 폴더별 실행 + 해당 폴더에서만 /XF
     assert all("/MIR" not in c for c in rc.calls)
-    xf_calls = [c for c in rc.calls if "/XF" in c]
-    assert len(xf_calls) == 1 and xf_calls[0][xf_calls[0].index("/XF") + 1:] == ["b.rvt"]
+    xf_calls = [c for c in rc.calls if c[c.index("/XF") + 1:] != [tr.OWN_PATTERN]]  # 기록 파일 제외 패턴만 있는 호출은 제외
+    assert len(xf_calls) == 1 and xf_calls[0][xf_calls[0].index("/XF") + 1:] == [tr.OWN_PATTERN, "b.rvt"]
     assert all("/LEV:1" in c for c in rc.calls)
 
 
@@ -256,7 +256,7 @@ def test_include_cloud_copies_everything(tmp_path):
     rep = transfer(src, tmp_path / "dst", runner=rc, attr_getter=cloud_getter("b.rvt"),
                    include_cloud=True)
     assert {r.status for r in rep.results} == {VERIFIED}
-    assert len(rc.calls) == 1 and "/XF" not in rc.calls[0]
+    assert len(rc.calls) == 1 and rc.calls[0][rc.calls[0].index("/XF") + 1:] == [tr.OWN_PATTERN]  # 클라우드 파일 이름은 제외하지 않음
 
 
 # --------------------------------------------------------------------- CLI

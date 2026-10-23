@@ -47,3 +47,9 @@ class WizardState:
     transfer_preview_key: tuple | None = None  # 마지막으로 dry-run 한 (src, dst)
     transfer_report: Any = None  # copier.Report
     transfer_was_dry_run: bool = True
+    transfer_mode: str = "external"  # external | network | local (texts.MODE_*)
+    transfer_stage: int = 1  # 외장/랜선은 1단계(구 PC), 2단계(새 PC)
+    transfer_blocked: str = ""  # 미리보기에서 드러난 시작 불가 이유(여유 공간 부족, FAT32 4GB 초과)
+    transfer_progress: Any = None  # progress.ProgressInfo
+    verify_manifest: str = ""  # 2단계(랜선): 목록 파일
+    verify_target: str = ""  # 2단계(랜선): 검사할 폴더

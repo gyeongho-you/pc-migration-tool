@@ -45,8 +45,8 @@ def test_default_resume_trusts_state_but_strict_catches_and_repairs_same_size_ta
     assert target.read_bytes() == original and (src / "a.dwg").read_bytes() == original
     assert [Path(r["file"]).name for r in rep.meta["repaired"]] == ["a.dwg"]
     assert (dst / "a.dwg.bak").read_bytes() == b"Z" * len(original)  # 손상된 사본은 .bak 보존
-    state = json.loads((dst / STATE_NAME).read_text(encoding="utf-8"))
-    assert state["files"]["a.dwg"]["verified"] is True
+    state = tr.read_state_entries(dst / STATE_NAME)
+    assert state["a.dwg"]["verified"] is True
     rep2 = transfer(src, dst, runner=FakeRobocopy(skip=["a.dwg"]), strict=True)  # 재실행은 깨끗
     assert rep2.failures == [] and "repaired" not in rep2.meta
 
@@ -57,7 +57,7 @@ def test_strict_rehashes_every_file(tmp_path, monkeypatch):
     transfer(src, dst, runner=FakeRobocopy())
     calls = []
     real = tr.verify_file
-    monkeypatch.setattr(tr, "verify_file", lambda s, d: (calls.append(s), real(s, d))[1])
+    monkeypatch.setattr(tr, "verify_file", lambda s, d, **kw: (calls.append(s), real(s, d, **kw))[1])
     rep = transfer(src, dst, runner=FakeRobocopy(), strict=True)
     assert len(calls) == 3 and rep.failures == []
 

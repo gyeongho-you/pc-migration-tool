@@ -75,9 +75,13 @@ def read_registry_programs() -> list[Program]:
     return list(found.values())
 
 
+# 창 모드 exe(--noconsole)에서 winget/robocopy 같은 콘솔 프로그램을 부를 때 검은 창이 번쩍이지 않게 하고, 없는 표준 입력 핸들 오류를 피한다.
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
 def _subprocess_runner(args: list[str]) -> tuple[int, str]:
-    proc = subprocess.run(args, capture_output=True, text=True, encoding="utf-8",
-                          errors="replace", timeout=300)
+    proc = subprocess.run(args, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300,
+                          stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
     return proc.returncode, proc.stdout
 
 

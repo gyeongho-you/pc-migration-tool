@@ -72,16 +72,17 @@ def test_discover_cancel(tmp_path):
 def test_transfer_cancel_keeps_state_and_resumes(tmp_path):
     src = make_src(tmp_path)
     dst = tmp_path / "dst"
-    n = []
+    rc = FakeRobocopy()
+    infos = []
 
-    def cancel():
-        n.append(1)
-        return len(n) >= 3  # 검증 루프 중 취소
+    def cancel():  # 복사가 끝나고 파일 1개를 검사한 뒤에 취소
+        return any(i.phase == "verify" and i.done_files >= 1 for i in infos)
 
     msgs = []
     with pytest.raises(Cancelled):
-        transfer(src, dst, runner=FakeRobocopy(), cancel=cancel, progress=msgs.append)
-    assert (dst / STATE_NAME).exists() and any("robocopy" in m for m in msgs)
+        transfer(src, dst, runner=rc, cancel=cancel, progress=msgs.append, progress_info=infos.append, workers=1,
+                 min_report_interval=0)
+    assert (dst / STATE_NAME).exists() and any("복사" in m for m in msgs)
     rep = transfer(src, dst, runner=FakeRobocopy())  # 같은 설정으로 다시 실행하면 이어받는다
     assert rep.failures == [] and rep.meta["resumed_skipped"] >= 1
 
@@ -90,10 +91,14 @@ def test_transfer_progress_reports_verification(tmp_path):
     src = tmp_path / "src"
     src.mkdir()
     for i in range(60):
-        (src / f"f{i}.txt").write_bytes(b"x")
-    msgs = []
-    transfer(src, tmp_path / "dst", runner=FakeRobocopy(), progress=msgs.append)
-    assert any(m.startswith("복사본 검증 중 25/60") for m in msgs) and any("50/60" in m for m in msgs)
+        (src / f"f{i}.txt").write_bytes(b"x" * 100)
+    msgs, infos = [], []
+    transfer(src, tmp_path / "dst", runner=FakeRobocopy(), progress=msgs.append, progress_info=infos.append,
+             min_report_interval=0)
+    assert any(m.startswith("검사 ") and "파일" in m and "%" in m for m in msgs)
+    phases = {i.phase for i in infos}
+    assert {"verify"} <= phases and infos[-1].phase == "verify" and infos[-1].done_files == 60
+    assert infos[-1].total_bytes == 60 * 100 * 2  # 원본 1회 + 대상 1회 읽기(원본 해시 재사용 없음)
 
 
 def test_run_transfer_passes_cancel_and_progress_only_when_given(tmp_path):
@@ -103,7 +108,7 @@ def test_run_transfer_passes_cancel_and_progress_only_when_given(tmp_path):
     assert "cancel" not in seen and "progress" not in seen and "runner" not in seen  # CLI 호출 형태 그대로
     tok = CancelToken()
     api.run_transfer("s", "d", deps=d, cancel=tok, progress=lambda m: None)
-    assert seen["cancel"] is tok and callable(seen["runner"]) and callable(seen["progress"])
+    assert seen["cancel"] is tok and callable(seen["progress"]) and "runner" not in seen  # 실행기는 transfer 가 만든다
 
 
 def test_cancellable_runner_runs_and_cancels_real_process():

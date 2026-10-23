@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ctypes
 import json
+import os
 import platform
 import re
 import sys
@@ -29,7 +30,10 @@ from .discover import (Discovery, ExtraItem, SelectionError, build_selection, di
 from .package import (ImportPlan, PackageError, apply_import, export_package, plan_import,
                       verify_package)
 from .rules import Rule, RuleError, load_rules
-from .transfer import cancellable_runner, transfer
+from . import fs
+from .manifest import build_manifest, verify_against_manifest
+from .progress import ProgressInfo
+from .transfer import transfer
 
 NEEDS_CONFIRM = 2  # import 에 --yes 가 없어 복원하지 않고 종료
 
@@ -59,6 +63,9 @@ class Deps:
     export: Callable = export_package
     plan: Callable = plan_import
     transfer: Callable = transfer
+    manifest: Callable = build_manifest
+    verify: Callable = verify_against_manifest
+    describe_destination: Callable = fs.describe_destination
 
 
 # --------------------------------------------------------------------------- 공통 보조
@@ -201,19 +208,74 @@ def run_transfer(src: str | Path, dst: str | Path, *, dry_run: bool = False, inc
                  log_path: str | Path | None = None, strict: bool = False, state_path: str | Path | None = None,
                  warn: Callable[[str], None] = lambda m: None, deps: Deps | None = None,
                  progress: Callable[[str], None] | None = None,
-                 cancel: Callable[[], bool] | None = None) -> Report:
-    """대용량 전송. TransferError/OSError 는 그대로 전파한다. 취소하면 Cancelled(진행 상태는 저장됨)."""
+                 cancel: Callable[[], bool] | None = None,
+                 progress_info: Callable[[ProgressInfo], None] | None = None,
+                 verify_only: bool = False, retry_failed: bool = False, workers: int | None = None,
+                 chunk: int | None = None, keep_awake: bool = True, manifest_out: str | Path | None = None,
+                 use_manifest: str | Path | None = None, verify_dest: bool | None = None,
+                 copy_mode: str = "restartable", copy_threads: int | None = None) -> Report:
+    """대용량 전송. TransferError/OSError 는 그대로 전파한다. 취소하면 Cancelled(진행 상태는 저장됨).
+
+    기본값이 아닌 인자만 하위 함수로 넘기므로 이전 호출 형태가 그대로 동작한다.
+    """
     deps = deps or Deps()
-    kw = dict(dry_run=dry_run, include_cloud=include_cloud,
-              log_path=Path(log_path) if log_path else None, warn=warn, strict=strict)
-    if progress:
-        kw["progress"] = progress
-    if cancel:
-        kw["cancel"] = cancel
-        kw["runner"] = cancellable_runner(cancel)
+    kw: dict = dict(dry_run=dry_run, include_cloud=include_cloud,
+                    log_path=Path(log_path) if log_path else None, warn=warn, strict=strict)
     if state_path:
         kw["state_path"] = Path(state_path)
+    if progress:
+        kw["progress"] = progress
+    if progress_info:
+        kw["progress_info"] = progress_info
+    if cancel:
+        kw["cancel"] = cancel
+    extras = dict(verify_only=verify_only, retry_failed=retry_failed, workers=workers, chunk=chunk, manifest_out=manifest_out,
+                  use_manifest=use_manifest, verify_dest=verify_dest)
+    kw.update({k: v for k, v in extras.items() if v})
+    if verify_dest is not None:
+        kw["verify_dest"] = verify_dest
+    if not keep_awake:
+        kw["keep_awake"] = False
+    if copy_mode != "restartable":
+        kw["copy_mode"] = copy_mode
+    if copy_threads:
+        kw["copy_threads"] = copy_threads
     return deps.transfer(Path(src), Path(dst), **kw)
+
+
+def run_manifest(src: str | Path, out: str | Path, *, workers: int | None = None, chunk: int | None = None,
+                 cancel: Callable[[], bool] | None = None, progress: Callable[[str], None] | None = None,
+                 progress_info: Callable[[ProgressInfo], None] | None = None, deps: Deps | None = None):
+    """구 PC: 원본(로컬)을 읽어 해시 목록 파일을 만든다(원본은 읽기만 함)."""
+    deps = deps or Deps()
+    return deps.manifest(Path(src), Path(out), workers=workers, chunk=chunk, cancel=cancel, progress=progress,
+                         progress_info=progress_info)
+
+
+def run_verify(manifest: str | Path, target: str | Path, *, workers: int | None = None, chunk: int | None = None,
+               cancel: Callable[[], bool] | None = None, progress: Callable[[str], None] | None = None,
+               progress_info: Callable[[ProgressInfo], None] | None = None, find_extras: bool = True,
+               deps: Deps | None = None) -> Report:
+    """새 PC: 해시 목록과 로컬 대상 폴더를 비교한다. 대상 폴더는 읽기만 한다."""
+    deps = deps or Deps()
+    return deps.verify(Path(manifest), Path(target), workers=workers, chunk=chunk, cancel=cancel, progress=progress,
+                       progress_info=progress_info, find_extras=find_extras)
+
+
+def destination_info(dst: str | Path, deps: Deps | None = None) -> fs.DestInfo:
+    """복사 대상의 종류(이동식/고정/네트워크), 파일 시스템, 여유 공간(읽기 전용 조회)."""
+    return (deps or Deps()).describe_destination(str(dst))
+
+
+def report_inside(path: str | Path | None, folder: str | Path) -> bool:
+    """path 가 folder 안에 있는지(verify 의 읽기 전용 보장: 리포트를 대상 폴더 안에 쓰지 못하게 할 때 쓴다)."""
+    if not path:
+        return False
+    try:
+        Path(os.path.realpath(path)).relative_to(os.path.realpath(folder))
+        return True
+    except ValueError:
+        return False
 
 
 # --------------------------------------------------------------------------- checklist

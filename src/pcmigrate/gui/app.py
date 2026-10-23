@@ -48,6 +48,46 @@ def setup_logging(path: str | None = None) -> str:
     return path
 
 
+class RoadmapDialog(tk.Toplevel):
+    """전체 이전 순서: 번호, 체크박스, '도구가 도와줌 / 직접 하셔야 함' 표시. 내용은 texts.py 의 ROADMAP_* 에서 온다."""
+
+    def __init__(self, parent: tk.Misc, controller: Controller) -> None:
+        super().__init__(parent)
+        self.c = controller
+        self.title(T.ROADMAP_TITLE)
+        self.transient(parent.winfo_toplevel())
+        self.geometry("760x620")
+        canvas = tk.Canvas(self, highlightthickness=0)
+        bar = ttk.Scrollbar(self, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=bar.set)
+        bar.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        body = ttk.Frame(canvas, padding=12)
+        win = canvas.create_window((0, 0), window=body, anchor="nw")
+        body.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda e: canvas.itemconfigure(win, width=e.width))
+        intro = ttk.Label(body, text=T.ROADMAP_INTRO, justify="left")
+        intro.pack(anchor="w", fill="x")
+        autowrap(intro, 30)
+        self.vars: dict[str, tk.BooleanVar] = {}
+        self.who_labels: dict[str, ttk.Label] = {}
+        for heading, items in ((T.ROADMAP_OLD_HEADING, T.ROADMAP_OLD), (T.ROADMAP_NEW_HEADING, T.ROADMAP_NEW)):
+            ttk.Label(body, text=heading, font=STAGE_FONT).pack(anchor="w", pady=(14, 4))
+            for i, (key, title, who, detail) in enumerate(items, 1):
+                row = ttk.Frame(body)
+                row.pack(fill="x", pady=3)
+                var = tk.BooleanVar(value=key in self.c.roadmap_marks)
+                self.vars[key] = var
+                ttk.Checkbutton(row, text=f"{i}) {title}", variable=var, command=lambda k=key: self.c.toggle_roadmap(k)).pack(anchor="w")
+                who_label = ttk.Label(row, text=who, foreground="#1b6e2f" if who == T.WHO_TOOL else "#8a4b00" if who == T.WHO_HUMAN else "#0b5394")
+                who_label.pack(anchor="w", padx=(24, 0))
+                self.who_labels[key] = who_label
+                d = ttk.Label(row, text=detail, justify="left", foreground=MUTED_FG)
+                d.pack(anchor="w", fill="x", padx=(24, 0))
+                autowrap(d, 40)
+        self.bind("<Escape>", lambda e: (self.destroy(), "break")[1])
+
+
 class ErrorDialog(tk.Toplevel):
     """오류 대화상자: '무엇이 잘못됐나요 / 어떻게 하면 되나요' 두 줄 + 접힌 '상세 보기'(traceback)."""
 
@@ -198,7 +238,19 @@ class App(tk.Tk):
                 pass
         title = T.HELP_TITLE.format(screen=T.TITLES.get(screen, T.CRUMB_HOME))
         self.help_dialog = TextDialog(self, title, T.HELP.get(screen, ""))
+        self.help_dialog.roadmap_btn = ttk.Button(self.help_dialog, text=T.BTN_ROADMAP, command=self.show_roadmap)  # ? 에서도 전체 순서를 열 수 있게
+        self.help_dialog.roadmap_btn.pack(side="left", padx=12, pady=(0, 12))
         return self.help_dialog
+
+    def show_roadmap(self) -> RoadmapDialog:
+        """전체 이전 순서(체크 목록)를 연다. 이미 열려 있으면 닫고 새로 만든다(체크 상태는 컨트롤러에 있다)."""
+        if getattr(self, "roadmap_dialog", None) is not None:
+            try:
+                self.roadmap_dialog.destroy()
+            except tk.TclError:
+                pass
+        self.roadmap_dialog = RoadmapDialog(self, self.c)
+        return self.roadmap_dialog
 
     def _on_return(self, event):
         w = self.focus_get()
@@ -241,12 +293,17 @@ class App(tk.Tk):
                     self.cancel_btn.pack(side="top", pady=(4, 0))
             else:
                 self.progress.stop()
+                self.progress.configure(mode="indeterminate", value=0)
                 self.cancel_btn.pack_forget()
                 self.stage.configure(text=T.READY)
                 self.status.configure(text="")
                 self.note.configure(text="")
         elif kind == "progress":
             self.status.configure(text=str(payload))
+        elif kind == "progress_info":
+            if payload.total_bytes:  # 바이트를 알 수 있으면 비율 막대로 바꿔 보여 준다
+                self.progress.stop()
+                self.progress.configure(mode="determinate", maximum=100, value=payload.fraction * 100)
         elif kind == "cancelled":
             self.status.configure(text=T.CANCELLED.format(task=payload))
         elif kind == "error":
@@ -275,7 +332,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         app = App()
     except tk.TclError as e:
-        print(f"화면을 열 수 없습니다(디스플레이가 없는 환경일 수 있습니다): {e}", file=sys.stderr)
+        if sys.stderr is not None:  # 창 모드 exe 에서는 표준 오류가 없다
+            print(f"화면을 열 수 없습니다(디스플레이가 없는 환경일 수 있습니다): {e}", file=sys.stderr)
         return 1
     app.mainloop()
     return 0

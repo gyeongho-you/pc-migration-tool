@@ -297,6 +297,8 @@ class BaseView(ttk.Frame):
         self.help_btn = ttk.Button(row, text=T.BTN_HELP, width=3, command=lambda: self.app.show_help(self.name))
         self.help_btn.pack(side="right")
         add_tooltip(self.help_btn, T.HELP_TOOLTIP)
+        self.roadmap_btn = ttk.Button(row, text=T.BTN_ROADMAP, command=lambda: self.app.show_roadmap())
+        self.roadmap_btn.pack(side="right", padx=6)
         if sub:
             lbl = ttk.Label(self, text=sub, justify="left")
             lbl.pack(anchor="w", fill="x", pady=(2, 8))
