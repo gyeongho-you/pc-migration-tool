@@ -1,4 +1,4 @@
-"""구 PC 흐름: 스캔 -> 규칙 없는 프로그램 확인 -> 체크리스트 -> 설정 패키지 내보내기."""
+"""구 PC 흐름: 조사 -> 규칙에 없는 프로그램 확인 -> 해야 할 일 목록 -> 설정 패키지 만들기."""
 from __future__ import annotations
 
 import os
@@ -6,8 +6,10 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from .. import state as S
-from .common import (LICENSE_NOTE, OK_FG, PRIVACY_NOTE, SECRET_BG, SECRET_FG, WARN_FG, BaseView, clear,
-                     make_text, make_tree, open_location, set_text)
+from .. import texts as T
+from ..controller import friendly_error
+from .common import (INFO_BG, MUTED_FG, SECRET_BG, SECRET_FG, WARN_FG, BaseView, ResultSummary, TreeTooltip, add_tooltip,
+                     autowrap, clear, make_text, make_tree, open_location, set_text, sort_tree)
 
 
 class ScanView(BaseView):
@@ -15,21 +17,28 @@ class ScanView(BaseView):
 
     def __init__(self, app, controller) -> None:
         super().__init__(app, controller)
-        self.nav = self.navbar(back=lambda: self.c.go(S.START), next_=lambda: self.c.go(S.OLD_DISCOVER))
-        self.nav["next"].state(["disabled"])
-        self.heading("1. 스캔", "이 PC 에 설치된 프로그램을 읽고(읽기 전용), 알려진 프로그램의 규칙과 대조합니다. 아무것도 쓰지 않습니다.")
+        self.navbar(back=lambda: self.c.go(S.START), next_=lambda: self.c.go(S.OLD_DISCOVER))
+        self.header(T.SCAN_HEADING, T.SCAN_SUB)
         top = ttk.Frame(self)
         top.pack(fill="x")
-        self.btn = ttk.Button(top, text="스캔 시작", command=lambda: self.guarded(self.c.start_scan))
+        self.btn = ttk.Button(top, text=T.BTN_SCAN, command=lambda: self.guarded(self.c.start_scan))
         self.btn.pack(side="left")
-        self.summary = ttk.Label(top, text="아직 스캔하지 않았습니다.")
+        self.primary = self.btn
+        self.summary = ttk.Label(top, text=T.SCAN_IDLE)
         self.summary.pack(side="left", padx=12)
-        ttk.Label(self, text="규칙과 일치한 프로그램(정밀 처리 대상)과 근거").pack(anchor="w", pady=(10, 2))
-        frame, self.tree = make_tree(self, [("rule", "프로그램(규칙)", 260), ("evidence", "근거", 560)], height=12)
+        ttk.Label(self, text=T.SCAN_TABLE_TITLE).pack(anchor="w", pady=(10, 2))
+        frame, self.tree = make_tree(self, [("rule", T.COL_PROGRAM_RULE, 260), ("evidence", T.COL_EVIDENCE, 560)], height=12)
         frame.pack(fill="both", expand=True)
+        self.tips = TreeTooltip(self.tree, lambda iid, col: self.tree.set(iid, self.tree["columns"][col]))
+        self.set_next_reason(T.WHY_SCAN_FIRST)
+        self.next_btn.state(["disabled"])
+        self.finish()
 
     def on_show(self) -> None:
-        self.nav["next"].state(["!disabled"] if self.c.state.scan else ["disabled"])
+        done = bool(self.c.state.scan)
+        self.next_btn.state(["!disabled"] if done else ["disabled"])
+        self.set_next_reason("" if done else T.WHY_SCAN_FIRST)
+        self.btn.focus_set()
 
     def on_event(self, kind, payload) -> None:
         if kind != "scan_done":
@@ -38,9 +47,10 @@ class ScanView(BaseView):
         clear(self.tree)
         for info in r.match_info:
             self.tree.insert("", "end", values=(info.rule.name, info.evidence))
-        extra = f", 규칙 없는 설치 프로그램 {r.discovery[0]}개" if r.discovery else ""
-        self.summary.configure(text=f"설치 프로그램 {r.program_count}개 확인, 규칙 일치 {len(r.matched)}개{extra}")
-        self.nav["next"].state(["!disabled"])
+        extra = T.SCAN_RESULT_EXTRA.format(n=r.discovery[0]) if r.discovery else ""
+        self.summary.configure(text=T.SCAN_RESULT.format(programs=r.program_count, rules=len(r.matched), more=extra))
+        self.next_btn.state(["!disabled"])
+        self.set_next_reason("")
 
 
 class DiscoverView(BaseView):
@@ -48,101 +58,168 @@ class DiscoverView(BaseView):
 
     def __init__(self, app, controller) -> None:
         super().__init__(app, controller)
-        self.nav = self.navbar(back=lambda: self.c.go(S.OLD_SCAN), next_=lambda: self.c.go(S.OLD_CHECKLIST))
+        self.navbar(back=lambda: self.c.go(S.OLD_SCAN), next_=lambda: self.c.go(S.OLD_CHECKLIST))
         self._bg = ttk.Style().lookup("TFrame", "background") or "#f0f0f0"
-        self.heading("2. 규칙 없는 프로그램 확인",
-                     "규칙이 없는 프로그램의 설정 폴더 후보입니다. 아무것도 자동으로 포함되지 않습니다. "
-                     "패키지에 넣을 항목만 직접 선택하세요(행을 클릭하면 선택/해제).")
+        self.header(T.DISC_HEADING, T.DISC_SUB)
         top = ttk.Frame(self)
         top.pack(fill="x")
-        ttk.Button(top, text="탐지 시작", command=lambda: self.guarded(self.c.start_discover)).pack(side="left")
-        self.info = ttk.Label(top, text="읽기 전용입니다. 폴더 크기를 계산하느라 1분 안팎 걸릴 수 있습니다(취소 가능).")
+        self.start_btn = ttk.Button(top, text=T.BTN_DISCOVER, command=lambda: self.guarded(self.c.start_discover))
+        self.start_btn.pack(side="left")
+        self.primary = self.start_btn
+        self.info = ttk.Label(top, text=T.DISC_HINT)
         self.info.pack(side="left", padx=12)
+        autowrap(self.info, 160)
 
-        cols = [("sel", "선택", 50), ("warn", "경고", 60), ("prog", "프로그램", 200), ("path", "위치", 330),
-                ("size", "크기", 80), ("grade", "연결 근거", 200)]
+        cols = [("sel", T.DISC_COLS[0], 56), ("warn", T.DISC_COLS[1], 96), ("prog", T.DISC_COLS[2], 190),
+                ("path", T.DISC_COLS[3], 320), ("size", T.DISC_COLS[4], 80), ("grade", T.DISC_COLS[5], 90)]
         frame, self.tree = make_tree(self, cols, height=11)
         frame.pack(fill="both", expand=True, pady=6)
         self.tree.tag_configure("secret", background=SECRET_BG, foreground=SECRET_FG)
         self.tree.tag_configure("weak", foreground=WARN_FG)
         self.tree.bind("<Button-1>", self._click)
+        self.tree.bind("<space>", self._key_toggle)
         self.tree.bind("<<TreeviewSelect>>", self._show_detail)
+        self.tips = TreeTooltip(self.tree, self._tip_text)
 
-        self.detail = ttk.Label(self, text="", wraplength=860, justify="left")
-        self.detail.pack(anchor="w")
-        self.banner = tk.Label(self, text="", anchor="w", justify="left", wraplength=860)
+        self.detail = ttk.Label(self, text="", justify="left")
+        self.detail.pack(anchor="w", fill="x")
+        autowrap(self.detail)
+        self.banner = tk.Label(self, text="", anchor="w", justify="left")
         self.banner.pack(fill="x", pady=4)
+        autowrap(self.banner, 40)
         self.ack_var = tk.BooleanVar(value=False)
-        self.ack = ttk.Checkbutton(self, variable=self.ack_var, command=self._ack_changed,
-                                   text="⚠ 비밀 정보(키, 비밀번호, 쿠키 등)가 포함될 수 있음을 이해했습니다 "
-                                        "(체크해야 경고 항목을 선택할 수 있습니다)")
+        self.ack = ttk.Checkbutton(self, variable=self.ack_var, command=self._ack_changed, text=T.DISC_ACK)
         self.ack.pack(anchor="w")
-        self.count = ttk.Label(self, text="선택한 항목: 0개")
+        self.count = ttk.Label(self, text=T.DISC_SELECTED.format(n=0))
         self.count.pack(anchor="w", pady=(4, 0))
         self.rows: dict[str, object] = {}
+        self.finish()
 
     def on_show(self) -> None:
         self._refresh()
+        self.start_btn.focus_set()
 
     def on_event(self, kind, payload) -> None:
         if kind == "discover_done":
             d = payload
-            self.info.configure(text=f"규칙 없는 설치 프로그램 {d.program_count}개, 설정 폴더 후보 {d.candidate_count}개"
-                                     f"(비밀 정보 가능성 {d.secret_count}개)")
+            self.info.configure(text=T.DISC_SUMMARY.format(n=d.program_count, m=d.candidate_count, k=d.secret_count))
             self.ack_var.set(False)
             self._refresh()
         elif kind == "selection_changed":
             self._refresh()
 
+    def _tip_text(self, iid: str, col: int) -> str:
+        r = self.rows.get(iid)
+        if r is None:
+            return ""
+        return {1: ", ".join(r.secret), 2: r.programs, 3: r.path}.get(col, "")
+
     def _refresh(self) -> None:
+        sort_state = dict(getattr(self.tree, "_sort_state", {}))
         clear(self.tree)
         self.rows = {}
         rows = self.c.candidate_rows()
         for r in rows:
             checked = r.key in self.c.state.selected
-            mark = "☑" if checked else ("—" if not r.selectable else "☐")
-            warn = "⚠ 비밀" if r.secret else ("약함" if r.weak else "")
+            mark = T.CHECKED if checked else (T.LOCKED if not r.selectable else T.UNCHECKED)
+            warn = T.DISC_WARN_SECRET if r.secret else (T.DISC_WARN_WEAK if r.weak else "")
             tags = ("secret",) if r.secret else (("weak",) if r.weak else ())
-            iid = self.tree.insert("", "end", values=(mark, warn, r.programs, r.path, r.size, f"{r.grade}"), tags=tags)
+            iid = self.tree.insert("", "end", values=(mark, warn, r.programs, T.ellipsize_path(r.path), r.size, r.grade),
+                                   tags=tags)
             self.rows[iid] = r
+        for col, desc in sort_state.items():
+            sort_tree(self.tree, col, desc)
         n_secret = sum(1 for r in rows if r.secret)
         if n_secret:
-            self.banner.configure(
-                text=f"⚠ 비밀 정보 가능성 {n_secret}개 항목은 붉게 표시됩니다. 키/비밀번호/쿠키/토큰이 들어 있을 수 있어 기본적으로 선택할 수 "
-                     "없습니다. 정말 필요할 때만 아래 동의에 체크한 뒤 선택하세요.", bg=SECRET_BG, fg=SECRET_FG)
+            self.banner.configure(text=T.DISC_BANNER.format(icon=T.ICON_WARN, n=n_secret), bg=SECRET_BG, fg=SECRET_FG)
         else:
             self.banner.configure(text="", bg=self._bg, fg="black")
         sel = self.c.selected_rows()
         big = sum(1 for r in sel if r.size.endswith("GB"))
-        self.count.configure(text=f"선택한 항목: {len(sel)}개" + (f" (1GB 이상 {big}개 — 큰 폴더는 대용량 복사를 권장)" if big else ""))
+        self.count.configure(text=T.DISC_SELECTED.format(n=len(sel)) + (T.DISC_SELECTED_BIG.format(n=big) if big else ""))
         self.ack_var.set(self.c.state.secrets_ack)
+
+    def _toggle(self, iid: str) -> None:
+        r = self.rows.get(iid)
+        if r is not None:
+            self.guarded(self.c.set_selected, r.key, r.key not in self.c.state.selected)
 
     def _click(self, event) -> None:
         iid = self.tree.identify_row(event.y)
-        if not iid or iid not in self.rows:
-            return
-        r = self.rows[iid]
-        on = r.key not in self.c.state.selected
-        self.guarded(self.c.set_selected, r.key, on)
+        if iid:
+            self._toggle(iid)
+
+    def _key_toggle(self, _e=None):
+        sel = self.tree.selection()
+        if sel:
+            self._toggle(sel[0])
+        return "break"
 
     def _show_detail(self, _e=None) -> None:
         sel = self.tree.selection()
         if not sel or sel[0] not in self.rows:
             return
         r = self.rows[sel[0]]
-        text = f"{r.kind}: {r.path}\n연결 근거: {r.grade}" + (f" — {r.reason}" if r.reason else "")
+        text = T.DISC_DETAIL.format(kind=r.kind, path=r.path, grade=r.grade, reason=f" — {r.reason}" if r.reason else "")
         if r.secret:
-            text += "\n⚠ 비밀 정보 가능성: " + ", ".join(r.secret)
+            text += T.DISC_DETAIL_SECRET.format(names=", ".join(r.secret))
         self.detail.configure(text=text)
 
     def _ack_changed(self) -> None:
         on = self.ack_var.get()
-        if on and not messagebox.askyesno(
-                "비밀 정보 포함 확인", "비밀 정보(SSH 키, 클라우드 자격 증명, 브라우저 쿠키/저장된 비밀번호 등)가 들어 있을 수 있는 "
-                "항목을 선택할 수 있게 합니다.\n패키지 파일을 안전하게 보관할 수 있습니까?", parent=self):
+        if on and not messagebox.askyesno(T.DISC_ACK_DIALOG_TITLE, T.DISC_ACK_DIALOG, parent=self):
             self.ack_var.set(False)
             return
         self.c.set_secrets_ack(on)
+
+
+class CheckList(ttk.Frame):
+    """스크롤되는 체크박스 목록(긴 문장은 창 폭에 맞춰 줄바꿈, Tab 키로 이동, Space 로 체크)."""
+
+    def __init__(self, parent: tk.Misc, on_toggle) -> None:
+        super().__init__(parent)
+        self.on_toggle = on_toggle
+        self.canvas = tk.Canvas(self, highlightthickness=0, background="#ffffff")
+        ys = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
+        self.canvas.configure(yscrollcommand=ys.set)
+        self.canvas.grid(row=0, column=0, sticky="nsew")
+        ys.grid(row=0, column=1, sticky="ns")
+        self.rowconfigure(0, weight=1)
+        self.columnconfigure(0, weight=1)
+        self.inner = tk.Frame(self.canvas, background="#ffffff")
+        self.win = self.canvas.create_window((0, 0), window=self.inner, anchor="nw")
+        self.inner.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
+        self.canvas.bind("<Configure>", self._resize)
+        self.widgets: list[tuple[tk.Widget, str]] = []
+        self.vars: list[tk.BooleanVar] = []
+        self.canvas.bind("<MouseWheel>", lambda e: self.canvas.yview_scroll(-1 * (e.delta // 120), "units"))
+
+    def _resize(self, e) -> None:
+        self.canvas.itemconfigure(self.win, width=e.width)
+        for w, _t in self.widgets:
+            w.configure(wraplength=max(240, e.width - 50))
+
+    def set_items(self, items: list[tuple[str, bool, bool]]) -> None:
+        for w in self.inner.winfo_children():
+            w.destroy()
+        self.widgets, self.vars = [], []
+        width = max(240, self.canvas.winfo_width() - 50)
+        for text, has_box, checked in items:
+            if has_box:
+                var = tk.BooleanVar(value=checked)
+                # ttk.Checkbutton 은 줄바꿈(wraplength)을 지원하지 않아 tk.Checkbutton 을 쓴다(포커스 테두리 표시)
+                w = tk.Checkbutton(self.inner, text=text, variable=var, command=lambda t=text: self.on_toggle(t),
+                                   anchor="w", justify="left", background="#ffffff", activebackground="#eef3fb",
+                                   highlightthickness=2, highlightbackground="#ffffff", highlightcolor="#0b5394",
+                                   font="TkDefaultFont")
+                self.vars.append(var)
+            else:
+                w = tk.Label(self.inner, text=text, justify="left", anchor="w", foreground=MUTED_FG, background="#ffffff",
+                             font="TkDefaultFont")
+            w.configure(wraplength=width)
+            w.pack(anchor="w", fill="x", pady=2, padx=4)
+            self.widgets.append((w, text))
+        self.canvas.yview_moveto(0)
 
 
 class ChecklistView(BaseView):
@@ -151,48 +228,83 @@ class ChecklistView(BaseView):
     def __init__(self, app, controller) -> None:
         super().__init__(app, controller)
         self.navbar(back=lambda: self.c.go(S.OLD_DISCOVER), next_=lambda: self.c.go(S.OLD_EXPORT))
-        self.heading("3. 체크리스트", "신 PC 에서 직접 해야 할 일 목록입니다. 저장해 두고 이전 작업 때 확인하세요.")
+        self.header(T.CL_HEADING, T.CL_SUB)
         top = ttk.Frame(self)
         top.pack(fill="x")
-        ttk.Button(top, text="체크리스트 만들기", command=lambda: self.guarded(self.c.start_checklist)).pack(side="left")
-        self.save_btn = ttk.Button(top, text="파일로 저장...", command=self._save)
+        self.make_btn = ttk.Button(top, text=T.BTN_CL_MAKE, command=lambda: self.guarded(self.c.start_checklist))
+        self.make_btn.pack(side="left")
+        self.primary = self.make_btn
+        self.save_btn = ttk.Button(top, text=T.BTN_CL_SAVE, command=self._save)
         self.save_btn.pack(side="left", padx=8)
         self.save_btn.state(["disabled"])
-        ttk.Label(top, text="※ 저장 파일에는 개인 정보가 들어 있습니다.", foreground=WARN_FG).pack(side="left", padx=8)
+        self.reason = ttk.Label(top, text=T.WHY_CHECKLIST_FIRST, foreground=WARN_FG)
+        self.reason.pack(side="left", padx=4)
+        ttk.Label(top, text=T.CL_PRIVACY, foreground=WARN_FG).pack(side="right")
+
+        opts = ttk.Frame(self)
+        opts.pack(fill="x", pady=(6, 0))
+        self.all_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(opts, text=T.CL_SHOW_ALL, variable=self.all_var, command=self._rebuild).pack(side="left")
+        self.hidden_label = ttk.Label(opts, text="", foreground=MUTED_FG)
+        self.hidden_label.pack(side="left", padx=10)
+        self.progress_label = ttk.Label(opts, text="")
+        self.progress_label.pack(side="right")
+        ttk.Label(opts, text=T.CL_FILTER).pack(side="right", padx=(10, 2))
+        self.filter_var = tk.StringVar()
+        entry = ttk.Entry(opts, textvariable=self.filter_var, width=18)
+        entry.pack(side="right")
+        self.filter_var.trace_add("write", lambda *a: self._rebuild())
+
         self.nb = ttk.Notebook(self)
         self.nb.pack(fill="both", expand=True, pady=8)
-        self.texts: dict[str, tk.Text] = {}
-        for tab in ("요약", "1. 먼저 설치", "2. 로그인·인증", "3. 데이터·기타", "참고"):
-            frame, text = make_text(self.nb)
-            self.nb.add(frame, text=tab)
-            self.texts[tab] = text
+        self.lists: dict[str, CheckList] = {}
+        for tab in T.CL_TABS:
+            cl = CheckList(self.nb, lambda text, t=tab: self._toggle(t, text))
+            self.nb.add(cl, text=tab)
+            self.lists[tab] = cl
+        self.finish()
+
+    def on_show(self) -> None:
+        self.make_btn.focus_set()
 
     def on_event(self, kind, payload) -> None:
-        if kind != "checklist_done":
+        if kind == "checklist_done":
+            self.save_btn.state(["!disabled"])
+            self.reason.configure(text="")
+            self._rebuild()
+        elif kind == "checklist_marks":
+            self._update_progress()
+
+    def _rebuild(self) -> None:
+        if self.c.state.checklist is None:
             return
-        tabs = self.c.checklist_tabs()
-        for name, text in self.texts.items():
-            lines = tabs.get(name, [])
-            plain = 2 if name == "1. 먼저 설치" else (len(lines) if name in ("요약", "참고") else 0)  # 안내문은 체크박스 없이
-            body = "\n".join(("" if i < plain else "☐ ") + l for i, l in enumerate(lines)) if lines else "(해당 없음)"
-            set_text(text, body)
-        self.save_btn.state(["!disabled"])
+        show_all, query = self.all_var.get(), self.filter_var.get()
+        for tab, widget in self.lists.items():
+            items = self.c.checklist_items(tab, show_all, query)
+            widget.set_items(items or [(T.CL_EMPTY, False, False)])
+        hidden = 0 if show_all else self.c.checklist_hidden_count()
+        self.hidden_label.configure(text=T.CL_HIDDEN.format(n=hidden) if hidden else "")
+        self._update_progress()
+
+    def _toggle(self, tab: str, text: str) -> None:
+        self.c.toggle_check(tab, text)
+
+    def _update_progress(self) -> None:
+        done, total = self.c.checklist_progress(self.all_var.get())
+        self.progress_label.configure(text=T.CL_PROGRESS_MARK.format(done=done, total=total))
 
     def _save(self) -> None:
-        path = filedialog.asksaveasfilename(parent=self, title="체크리스트 저장", defaultextension=".md",
+        path = filedialog.asksaveasfilename(parent=self, title=T.CL_SAVE_TITLE, defaultextension=".md",
                                             filetypes=[("Markdown", "*.md"), ("텍스트", "*.txt")])
         if not path:
             return
-        if not messagebox.askokcancel("저장 확인", f"다음 위치에 저장합니다:\n{path}\n\n개인 정보 주의: "
-                                      f"이 파일에는 이 PC 의 설치 프로그램 목록 등이 들어 있습니다. 저장소에 커밋하거나 남에게 공유하지 마세요.\n"
-                                      "(같은 이름의 파일이 있으면 .bak 으로 보존합니다)", parent=self):
+        if not messagebox.askokcancel(T.CL_SAVE_TITLE, T.CL_SAVE_CONFIRM.format(path=path), parent=self):
             return
         try:
-            text = self.c.checklist_text("txt" if path.lower().endswith(".txt") else "md")
+            text = self.c.checklist_text("txt" if path.lower().endswith(".txt") else "md", self.all_var.get())
             self.c.save_text(path, text)
-            messagebox.showinfo("저장 완료", f"저장했습니다:\n{path}", parent=self)
-        except Exception as e:  # noqa: BLE001 - 한국어 메시지로 변환
-            from ..controller import friendly_error
+            messagebox.showinfo(T.SAVED_TITLE, T.SAVED_BODY.format(path=path), parent=self)
+        except Exception as e:  # noqa: BLE001 - 쉬운 문구로 바꿔 보여 준다
             fe = friendly_error(e)
             messagebox.showerror(fe.title, fe.message, parent=self)
 
@@ -202,41 +314,58 @@ class ExportView(BaseView):
 
     def __init__(self, app, controller) -> None:
         super().__init__(app, controller)
-        self.open_btn = ttk.Button(self, text="결과 위치 열기", command=self._open)
+        self.open_btn = ttk.Button(self, text=T.BTN_OPEN_LOCATION, command=self._open)
         self.open_btn.pack(side="bottom", anchor="e")
         self.open_btn.state(["disabled"])
         self.navbar(back=lambda: self.c.go(S.OLD_CHECKLIST))
-        self.heading("4. 설정 패키지 내보내기",
-                     "규칙에 따라 설정/템플릿/단축키와 프로그램 목록을 하나의 .zip 으로 만듭니다. 원본은 읽기만 하고 수정하지 않습니다.")
+        self.header(T.EXP_HEADING, T.EXP_SUB)
         row = ttk.Frame(self)
         row.pack(fill="x")
-        ttk.Label(row, text="저장할 파일:").pack(side="left")
+        ttk.Label(row, text=T.EXP_PATH_LABEL).pack(side="left")
         self.path_var = tk.StringVar()
-        ttk.Entry(row, textvariable=self.path_var).pack(side="left", fill="x", expand=True, padx=6)
-        ttk.Button(row, text="찾아보기...", command=self._browse).pack(side="left")
-        self.plan = ttk.Label(self, text="", wraplength=860, justify="left")
-        self.plan.pack(anchor="w", pady=8)
-        self.go_btn = ttk.Button(self, text="패키지 만들기...", command=self._export)
-        self.go_btn.pack(anchor="w")
-        ttk.Label(self, text=LICENSE_NOTE, foreground=WARN_FG).pack(anchor="w", pady=(8, 0))
-        ttk.Label(self, text=PRIVACY_NOTE, foreground=WARN_FG, wraplength=860, justify="left").pack(anchor="w")
-        frame, self.result = make_text(self, height=10)
-        frame.pack(fill="both", expand=True, pady=8)
+        entry = ttk.Entry(row, textvariable=self.path_var)
+        entry.pack(side="left", fill="x", expand=True, padx=6)
+        ttk.Button(row, text=T.BTN_BROWSE, command=self._browse).pack(side="left")
+        self.plan = ttk.Label(self, text="", justify="left")
+        self.plan.pack(anchor="w", fill="x", pady=8)
+        autowrap(self.plan)
+        act = ttk.Frame(self)
+        act.pack(fill="x")
+        self.go_btn = ttk.Button(act, text=T.BTN_EXPORT, command=self._export)
+        self.go_btn.pack(side="left")
+        self.primary = self.go_btn
+        self.reason = ttk.Label(act, text="", foreground=WARN_FG)
+        self.reason.pack(side="left", padx=8)
+        lic = ttk.Label(self, text=T.LICENSE_BANNER, foreground=WARN_FG, justify="left")
+        lic.pack(anchor="w", fill="x", pady=(8, 0))
+        autowrap(lic)
+        self.summary = ResultSummary(self)
+        self.summary.pack(fill="x", pady=6)
+        frame, self.result = make_text(self, height=9)
+        frame.pack(fill="both", expand=True, pady=4)
+        self.path_var.trace_add("write", lambda *a: self._update_reason())
+        self.finish()
+
+    def _update_reason(self) -> None:
+        why = self.c.export_reason(self.path_var.get())
+        self.reason.configure(text=why)
+        self.go_btn.state(["disabled"] if why == T.WHY_NEED_OUTPUT else ["!disabled"])
 
     def on_show(self) -> None:
         sel = self.c.selected_rows()
         secrets = sum(1 for r in sel if r.secret)
         scan = self.c.state.scan
-        rules = len(scan.matched) if scan else 0
-        text = f"포함될 내용: 규칙 일치 프로그램 {rules}개의 설정 + 프로그램 목록 + 직접 선택한 규칙 없는 항목 {len(sel)}개."
+        text = T.EXP_PLAN.format(rules=len(scan.matched) if scan else 0, n=len(sel))
         if secrets:
-            text += f"\n⚠ 선택 항목 중 비밀 정보 가능성이 있는 것이 {secrets}개 포함됩니다. 패키지 파일을 안전하게 보관하세요."
+            text += T.EXP_PLAN_SECRET.format(k=secrets)
         if not sel:
-            text += "\n(규칙 없는 항목은 선택하지 않았으므로 포함되지 않습니다.)"
+            text += T.EXP_PLAN_NONE
         self.plan.configure(text=text)
+        self._update_reason()
+        self.go_btn.focus_set()
 
     def _browse(self) -> None:
-        p = filedialog.asksaveasfilename(parent=self, title="설정 패키지 저장 위치", defaultextension=".zip",
+        p = filedialog.asksaveasfilename(parent=self, title=T.EXP_SAVE_TITLE, defaultextension=".zip",
                                          filetypes=[("설정 패키지", "*.zip")], initialfile="pcmigrate-settings.zip")
         if p:
             self.path_var.set(p)
@@ -244,11 +373,10 @@ class ExportView(BaseView):
     def _export(self) -> None:
         out = self.path_var.get().strip()
         if not out:
-            messagebox.showwarning("저장 위치", "저장할 파일 위치를 먼저 선택하세요.", parent=self)
+            messagebox.showwarning(T.EXP_NEED_PATH_TITLE, T.EXP_NEED_PATH, parent=self)
             return
-        exists = "\n※ 같은 이름의 파일이 있으면 .bak 으로 보존합니다." if os.path.exists(out) else ""
-        if not messagebox.askokcancel("패키지 만들기 확인", f"다음 위치에 설정 패키지를 만듭니다:\n{out}{exists}\n\n"
-                                      "원본 파일은 읽기만 하고 수정하지 않습니다. 계속할까요?", parent=self):
+        exists = T.EXP_EXISTS if os.path.exists(out) else ""
+        if not messagebox.askokcancel(T.EXP_CONFIRM_TITLE, T.EXP_CONFIRM.format(path=out, exists=exists), parent=self):
             return
         self.guarded(self.c.start_export, out, write_confirmed=True)
 
@@ -256,17 +384,18 @@ class ExportView(BaseView):
         if kind != "export_done":
             return
         m = payload.manifest
-        lines = [f"패키지를 만들었습니다: {self.c.state.export_output}", "",
-                 f"포함된 규칙: {', '.join(r['id'] for r in m['rules']) or '(없음)'}",
-                 f"파일 {len(m['files'])}개, 건너뜀 {len(m['skipped'])}개, 실패 {len(m['failed'])}개"]
-        if m["failed"]:
-            lines.append("⚠ 일부 파일을 읽지 못했습니다(상세는 아래).")
-            lines += [f"  - {f['src']}: {f['error']}" for f in m["failed"][:20]]
-        lines += ["", "신 PC 에서 직접 해야 할 일(요약):"]
+        failed = len(m["failed"])
+        self.summary.show(len(m["files"]), len(m["skipped"]), failed, T.EXP_DONE.format(path=self.c.state.export_output),
+                          T.EXP_FAILED_HEAD)
+        lines = [T.EXP_DONE.format(path=self.c.state.export_output), "",
+                 T.EXP_RULES.format(rules=", ".join(r["id"] for r in m["rules"]) or T.EXP_NO_RULES),
+                 T.EXP_COUNTS.format(files=len(m["files"]), skipped=len(m["skipped"]), failed=failed)]
+        lines += [f"  - {f['src']}: {T.friendly_detail(f['error'])}" for f in m["failed"][:20]]
+        lines += ["", T.EXP_TODO]
         for w in m.get("manual_warnings", []):
             for item in w.get("items", [])[:3]:
                 lines.append(f"  - {w.get('name')}: {item}")
-        lines += ["", LICENSE_NOTE]
+        lines += ["", T.LICENSE_NOTE]
         set_text(self.result, lines)
         self.open_btn.state(["!disabled"])
 

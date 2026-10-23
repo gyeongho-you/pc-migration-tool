@@ -1,4 +1,5 @@
 """GUI 컨트롤러 헤드리스 테스트(tkinter 불필요). 가짜 api 를 주입한다."""
+import errno
 import logging
 import threading
 import time
@@ -12,6 +13,7 @@ from pcmigrate.copier import FileResult, Report
 from pcmigrate.detect import Program
 from pcmigrate.discover import Candidate, Discovery, Link, ProgramEntry
 from pcmigrate.gui import state as S
+from pcmigrate.gui import texts as T
 from pcmigrate.gui.controller import Controller, GuardError, friendly_error
 from pcmigrate.gui.runner import Runner
 from pcmigrate.package import ImportPlan
@@ -213,9 +215,9 @@ def test_checklist_tabs_and_save_text(env, tmp_path):
         c.checklist_text()
     c.start_checklist()
     tabs = c.checklist_tabs()
-    assert list(tabs) == ["요약", "1. 먼저 설치", "2. 로그인·인증", "3. 데이터·기타", "참고"]
-    assert any("규칙 없는 설치 프로그램 1개" in l for l in tabs["요약"])
-    assert any("Rhino 8" in l for l in tabs["1. 먼저 설치"]) and any("winget import" in l for l in tabs["1. 먼저 설치"])
+    assert list(tabs) == list(T.CL_TABS)
+    assert any("규칙에 없는 프로그램 1개" in l for l in tabs[T.CL_TABS[0]])
+    assert any("Rhino 8" in l for l in tabs[T.CL_TABS[1]]) and any("winget import" in l for l in tabs[T.CL_TABS[1]])
     out = tmp_path / "sub" / "c.md"
     c.save_text(str(out), c.checklist_text("md"))
     assert "PC 이전 체크리스트" in out.read_text(encoding="utf-8")
@@ -290,7 +292,7 @@ def test_changing_package_invalidates_preview_and_blocked_package_cannot_apply(e
     c.set_preview_checked(True)
     c.confirm_final(True)
     ok, why = c.can_apply()
-    assert not ok and "검증에 실패" in why
+    assert not ok and why == T.G_PACKAGE_BLOCKED
     with pytest.raises(GuardError):
         c.start_apply()
     assert apply_calls(api) == []
@@ -337,10 +339,10 @@ def test_transfer_path_checks(env, tmp_path):
     assert not c.check_transfer_paths("", "").ok
     assert not c.check_transfer_paths(str(tmp_path / "none"), str(tmp_path / "d")).ok
     inside = c.check_transfer_paths(str(src), str(src / "inside"))
-    assert not inside.ok and "원본 폴더 안" in inside.lines[-1][1]
+    assert not inside.ok and inside.lines[-1][1] == T.G_DEST_INSIDE
     assert not c.check_transfer_paths(str(src), str(src)).ok
     good = c.check_transfer_paths(str(src), str(tmp_path / "dst"))
-    assert good.ok and "읽기만" in good.lines[0][1]
+    assert good.ok and good.lines[0][1] == T.G_SOURCE_OK
     unc = c.check_transfer_paths(str(src), "\\\\server\\share\\dst")
     assert unc.ok  # UNC 직접 입력 허용
 
@@ -411,7 +413,7 @@ def test_transfer_cancel_and_error_events(tmp_path):
     while c.state.busy and time.time() < deadline:
         c.pump()
         time.sleep(0.01)
-    assert not c.state.busy and ("cancelled", "대용량 복사") in events and "transfer_done" not in kinds(events)
+    assert not c.state.busy and ("cancelled", T.TASK_TRANSFER) in events and "transfer_done" not in kinds(events)
     assert c.cancel() is False  # 작업이 없으면 취소할 것도 없음
 
     api.transfer_wait = None
@@ -419,21 +421,51 @@ def test_transfer_cancel_and_error_events(tmp_path):
     c.runner = Runner(sync=True)
     c.start_transfer(dry_run=False, write_confirmed=True)
     err = [p for k, p in events if k == "error"][-1]
-    assert err.title == "복사를 시작할 수 없습니다" and "원본 폴더 안" in err.message and "Traceback" not in err.message
+    assert err.title == T.ERR_TITLES["transfer"] and "원본 폴더 안" in err.what and "Traceback" not in err.message
+    assert err.how == T.ERR_TRANSFER[1]
     assert not c.state.busy
 
 
 # --------------------------------------------------------------------- 오류 메시지 / 로그
 
-def test_friendly_errors_have_korean_message_and_traceback_only_in_detail():
+def test_friendly_errors_have_what_how_and_traceback_only_in_detail():
     e1 = friendly_error(real_api.ApiError("규칙 오류: x", lines=["a"]))
-    assert e1.message == "a\n규칙 오류: x" and e1.detail == ""
+    assert e1.what == "a\n규칙 오류: x" and e1.how == T.ERR_API_RULES and e1.detail == ""
     e2 = friendly_error(FileNotFoundError(3, "경로 없음", "Z:\\a"), "TB-TEXT")
-    assert "출력 경로를 만들 수 없습니다: Z:\\a" in e2.message and e2.detail == "TB-TEXT" and "TB-TEXT" not in e2.message
+    assert e2.what == T.ERR_PATH_MISSING[0].format(path=": Z:\\a") and e2.how == T.ERR_PATH_MISSING[1]
+    assert e2.detail == "TB-TEXT" and "TB-TEXT" not in e2.message
     e3 = friendly_error(KeyError("boom"), "Traceback (most recent call last)...")
-    assert "예상하지 못한 오류" in e3.title and "KeyError" in e3.message and "Traceback" not in e3.message
-    assert "Traceback" in e3.detail
-    assert friendly_error(GuardError("막음")).message == "막음"
+    assert e3.title == T.ERR_TITLES["unexpected"] and "KeyError" in e3.what and "Traceback" not in e3.message
+    assert e3.how == T.ERR_UNEXPECTED[1] and "Traceback" in e3.detail
+    g = friendly_error(GuardError("막음"))
+    assert g.what == "막음" and g.title == T.ERR_TITLES["guard"]
+
+
+@pytest.mark.parametrize("exc,texts", [
+    (FileNotFoundError(2, "no", "C:\\x"), T.ERR_PATH_MISSING),
+    (PermissionError(13, "denied", "C:\\x"), T.ERR_PERMISSION),
+    (OSError(errno.ENOSPC, "No space left on device", "C:\\x"), T.ERR_DISK_FULL),
+    (OSError(errno.EIO, "I/O error", "E:\\x"), T.ERR_DISCONNECTED),
+    (OSError(0, "network", "\\\\srv\\share\\x", 53), T.ERR_DISCONNECTED),  # winerror 53: 네트워크 경로를 찾을 수 없음
+    (OSError(0, "sharing violation", "C:\\a.dwg", 32), T.ERR_IN_USE),  # winerror 32: 다른 프로그램이 사용 중
+    (OSError(0, "disk full", "C:\\x", 112), T.ERR_DISK_FULL),
+    (OSError(0, "access denied", "C:\\x", 5), T.ERR_PERMISSION),
+    (OSError(999, "other", "C:\\x"), T.ERR_OS_GENERIC),
+])
+def test_common_os_errors_map_to_easy_messages(exc, texts):
+    e = friendly_error(exc)
+    assert e.title == T.ERR_TITLES["os"] and e.how == texts[1]
+    assert e.what == texts[0].format(path=f": {exc.filename}")
+    assert "Errno" not in e.message and "WinError" not in e.message  # 시스템 오류 문구가 그대로 나오지 않음
+
+
+def test_api_error_how_hints_by_kind():
+    assert friendly_error(real_api.ApiError("패키지 검증 실패: x")).how == T.ERR_API_PACKAGE
+    assert friendly_error(real_api.ApiError("비밀 정보가 들어 있을 수 있는 항목이 선택되었습니다. --allow-secrets")).how == T.ERR_API_SECRET
+    assert friendly_error(real_api.ApiError("선택 파일 오류: 존재하지 않는 항목")).how == T.ERR_API_SELECTION
+    assert friendly_error(real_api.ApiError("뭔가 다른 오류")).how == T.ERR_API_HOW
+    # api 문구 속 개발 용어는 쉬운 말로 바뀐다
+    assert "robocopy" not in friendly_error(real_api.ApiError("robocopy 종료코드 8")).what
 
 
 def test_unexpected_exception_in_task_becomes_error_event(env):
@@ -463,6 +495,114 @@ def test_log_contains_events_but_no_program_names_or_paths(tmp_path):
     c.start_scan()
     c.start_discover()
     text = "\n".join(records)
-    assert "task start: 스캔" in text and "event scan_done" in text
+    assert f"task start: {T.TASK_SCAN}" in text and "event scan_done" in text
     for secret in ("TOP-SECRET-APP-NAME", "Acme Tool", "C:\\fake", "credentials.json"):
         assert secret not in text
+
+
+# --------------------------------------------------------------------- 10단계: 목록 표시/체크/이유/요약/진행 문구
+
+def checklist_env(env):
+    from pcmigrate.checklist import build_checklist
+    c, api, ev = env
+    cl = build_checklist([("Demo", ["라이선스 재로그인"])], [Program("Rhino 8"), Program("Google Chrome")],
+                         [Program("a.b", source="winget", winget_id="a.b")], discovery=(1, 2), show_all=True)
+    c.state.checklist = SimpleNamespace(checklist=cl, text="", discovery=(1, 2))
+    return c, cl
+
+
+def test_checklist_hide_unrelated_warnings_toggle_matches_all_option(env):
+    c, cl = checklist_env(env)
+    hidden = c.checklist_hidden_count()
+    assert hidden >= 1 and all(l.endswith(T.CL_HIDDEN_MARK) for l in [*cl.login, *cl.data] if l.endswith(T.CL_HIDDEN_MARK))
+    login_all = c.checklist_tabs(show_all=True)[T.CL_TABS[2]]
+    login_default = c.checklist_tabs()[T.CL_TABS[2]]
+    assert len(login_all) > len(login_default) and not any(l.endswith(T.CL_HIDDEN_MARK) for l in login_default)
+    summary = c.checklist_tabs()[T.CL_TABS[0]]
+    assert any(T.CL_SUMMARY_OMITTED.format(n=hidden) == l for l in summary)  # 숨긴 개수 안내
+    assert not any("숨겼" in l for l in c.checklist_tabs(show_all=True)[T.CL_TABS[0]])
+
+
+def test_checklist_marks_persist_and_are_saved(env, tmp_path):
+    c, cl = checklist_env(env)
+    items = c.checklist_items(T.CL_TABS[2])
+    text = items[0][0]
+    assert items[0][1] is True and items[0][2] is False
+    c.toggle_check(T.CL_TABS[2], text)
+    assert c.checklist_items(T.CL_TABS[2])[0][2] is True  # 화면을 다시 만들어도 유지
+    done, total = c.checklist_progress()
+    assert done == 1 and total >= 2
+    md = c.checklist_text("md")
+    assert f"- [x] {text}" in md and "- [ ] " in md
+    c.toggle_check(T.CL_TABS[2], text)
+    assert f"- [x] {text}" not in c.checklist_text("md")
+    # 안내문(체크박스 없는 줄)과 요약/참고 탭에는 체크박스가 없다
+    guide = c.checklist_items(T.CL_TABS[1])[:len(T.CL_GUIDE)]
+    assert all(not has_box for _t, has_box, _c in guide) and all(not hb for _t, hb, _c in c.checklist_items(T.CL_TABS[0]))
+    assert "winget import" in c.checklist_text("txt")
+    c.save_text(str(tmp_path / "c.txt"), c.checklist_text("txt"))
+
+
+def test_checklist_filter_and_show_all_text(env):
+    c, cl = checklist_env(env)
+    only = c.checklist_tabs(query="Rhino")
+    assert all("rhino" in l.lower() for l in only[T.CL_TABS[1]][len(T.CL_GUIDE):])
+    assert c.checklist_tabs(query="없는검색어zzz")[T.CL_TABS[2]] == []
+    assert len(c.checklist_text("md", show_all=True)) > len(c.checklist_text("md", show_all=False))
+
+
+def test_reasons_for_disabled_buttons(env, tmp_path):
+    c, api, ev = env
+    assert c.export_reason("") == T.WHY_NEED_OUTPUT and c.export_reason("  ") == T.WHY_NEED_OUTPUT
+    assert c.export_reason("C:/x.zip") == ""
+    c.state.busy = True
+    assert c.export_reason("C:/x.zip") == T.WHY_BUSY and c.transfer_reasons() == (T.WHY_BUSY, T.WHY_BUSY)
+    c.state.busy = False
+    assert c.transfer_reasons() == (T.WHY_PATH_PROBLEM, T.WHY_PATH_PROBLEM)
+    src = tmp_path / "src"
+    src.mkdir()
+    c.state.transfer_src, c.state.transfer_dst = str(src), str(tmp_path / "dst")
+    assert c.transfer_reasons() == ("", T.WHY_PREVIEW_FIRST)  # 미리보기를 먼저 실행해 주세요
+    c.start_transfer(dry_run=True)
+    assert c.transfer_reasons() == ("", "")
+    # 복원 실행 버튼 이유(확인 창 단계는 이유가 아님)
+    assert c.apply_reason() == T.G_NEED_PREVIEW
+    c.set_package("p.zip")
+    c.start_preview()
+    assert c.apply_reason() == T.G_NEED_CHECK_PREVIEW
+    c.set_preview_checked(True)
+    assert c.apply_reason() == ""
+
+
+def test_result_counts_success_skipped_failed(env):
+    c, api, ev = env
+    rep = Report(dry_run=False, results=[FileResult("e", "a", "copied"), FileResult("e", "b", "copied"),
+                                         FileResult("e", "c", "skipped_identical"), FileResult("e", "d", "failed", error="SHA-256 불일치")])
+    c.state.import_result = real_api.ImportResult(plan(), "applied", 0, rep)
+    assert c.import_counts() == (2, 1, 1)
+    assert c.import_summary()["failures"] == [("d", "내용이 원본과 다름")]  # 개발 용어는 쉬운 말로
+    trep = Report(dry_run=False, results=[FileResult("s", "d", "verified"), FileResult("s", "", "cloud_only"),
+                                          FileResult("s", "d", "mismatch", error="SHA-256 불일치"),
+                                          FileResult("s", "d", "missing", error="대상에 파일이 없습니다")])
+    c.state.transfer_report, c.state.transfer_was_dry_run = trep, False
+    assert c.transfer_counts() == (1, 1, 2)
+    fails = c.transfer_summary()["failures"]
+    assert [f[1] for f in fails] == [T.TR_STATUS_LABELS["mismatch"], T.TR_STATUS_LABELS["missing"]]
+    assert "SHA" not in " ".join(f[2] for f in fails)
+    assert Controller(api_mod=api, runner=Runner(sync=True)).transfer_counts() == (0, 0, 0)
+
+
+def test_task_start_shows_stage_and_expected_time_and_translates_progress(tmp_path):
+    api = FakeApi()
+    c = Controller(api_mod=api, runner=Runner(sync=True), rules_dir=tmp_path)
+    ev = []
+    c.listener = lambda k, p=None: ev.append((k, p))
+    c.start_scan()
+    assert ("busy", T.TASK_SCAN) in ev and ("progress", T.PROGRESS[T.TASK_SCAN]) in ev
+    assert "10~60초" in T.PROGRESS[T.TASK_SCAN]
+    api.run_discover = lambda rules_dir, **kw: (kw["progress"]("robocopy 로 복사하는 중"), discovery())[1]
+    c.start_discover()
+    assert ("progress", "복사 도구 로 복사하는 중") in ev  # api 진행 문구의 개발 용어는 쉬운 말로
+    for task in (T.TASK_SCAN, T.TASK_DISCOVER, T.TASK_CHECKLIST, T.TASK_EXPORT, T.TASK_PREVIEW, T.TASK_APPLY, T.TASK_TRANSFER):
+        assert "걸립니다" in T.PROGRESS[task] or "걸릴 수" in T.PROGRESS[task]  # 예상 시간 안내
+    assert "아무것도 쓰지 않습니다" in T.PROGRESS[T.TASK_TRANSFER_PREVIEW]

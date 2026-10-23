@@ -1,13 +1,15 @@
 """GUI 컨트롤러: api 함수 호출, 스레드 관리, 안전 가드. tkinter 에 의존하지 않는다(가짜 api 로 테스트 가능).
 
 안전 원칙(CLI 와 같은 보수적 기본값):
-- 원본은 읽기 전용, 쓰기 전에는 반드시 미리보기(dry-run)와 확인.
-- 규칙 없는 프로그램은 사용자가 고른 것만 포함(자동 포함 없음). 비밀 정보 가능성 항목은 명시 동의 후에만 선택.
+- 원본은 읽기 전용, 쓰기 전에는 반드시 미리보기와 확인.
+- 규칙 없는 프로그램은 사용자가 고른 것만 포함(자동 포함 없음). 민감한 정보 가능성 항목은 명시 동의 후에만 선택.
 - 가드 위반은 GuardError 로 막는다(뷰가 버튼을 막아 두더라도 컨트롤러가 한 번 더 막는다).
 - 로그에는 설치 프로그램 목록/경로를 남기지 않고 이벤트 종류와 개수만 남긴다.
+화면에 보이는 문구는 texts.py 에 있다.
 """
 from __future__ import annotations
 
+import errno
 import logging
 import os
 from dataclasses import dataclass, field
@@ -15,38 +17,86 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .. import api as real_api
-from ..cancel import Cancelled, CancelToken
+from ..cancel import CancelToken
 from ..checklist import write_output
 from ..discover import fmt_size, items_from_selection
 from ..rules import default_rules_dir
 from ..transfer import TransferError
 from . import state as S
+from . import texts as T
 from .runner import Runner
 
 
 class GuardError(Exception):
-    """안전 가드 위반(예: 미리보기 없이 복원, 동의 없이 비밀 항목 선택). 메시지는 사용자에게 그대로 보여 준다."""
+    """안전 가드 위반(예: 미리보기 없이 복원, 동의 없이 민감 항목 선택). 메시지는 사용자에게 그대로 보여 준다."""
 
 
 @dataclass
 class FriendlyError:
     title: str
-    message: str
+    what: str  # 무엇이 잘못됐는지
+    how: str  # 어떻게 하면 되는지
     detail: str = ""  # traceback(접힌 상세 보기에만)
+
+    @property
+    def message(self) -> str:
+        return f"{self.what}\n{self.how}"
+
+
+_WIN_PATH_MISSING = {2, 3, 15}
+_WIN_PERMISSION = {5}
+_WIN_DISK_FULL = {112, 39}
+_WIN_DISCONNECTED = {21, 53, 55, 59, 64, 67, 121, 1167, 1231}
+_WIN_IN_USE = {32, 33}
+
+
+def _os_error_texts(exc: OSError) -> tuple[str, str]:
+    path = exc.filename if isinstance(getattr(exc, "filename", None), str) else ""
+    suffix = f": {path}" if path else ""
+    win = getattr(exc, "winerror", None)
+    code = exc.errno
+    if win in _WIN_IN_USE:
+        what, how = T.ERR_IN_USE
+    elif isinstance(exc, PermissionError) or win in _WIN_PERMISSION or code in (errno.EACCES, errno.EPERM):
+        what, how = T.ERR_PERMISSION
+    elif win in _WIN_DISK_FULL or code == errno.ENOSPC:
+        what, how = T.ERR_DISK_FULL
+    elif win in _WIN_DISCONNECTED or code in (errno.ENODEV, errno.ENXIO, errno.EIO):
+        what, how = T.ERR_DISCONNECTED
+    elif isinstance(exc, FileNotFoundError) or win in _WIN_PATH_MISSING or code == errno.ENOENT:
+        what, how = T.ERR_PATH_MISSING
+    else:
+        what, how = T.ERR_OS_GENERIC
+    return what.format(path=suffix), how
+
+
+def _api_how(message: str) -> str:
+    if "--allow-secrets" in message or "비밀 정보" in message:
+        return T.ERR_API_SECRET
+    if message.startswith("규칙 오류"):
+        return T.ERR_API_RULES
+    if message.startswith("패키지 검증 실패") or "해시" in message:
+        return T.ERR_API_PACKAGE
+    if message.startswith("선택 파일 오류"):
+        return T.ERR_API_SELECTION
+    return T.ERR_API_HOW
 
 
 def friendly_error(exc: BaseException, tb: str = "") -> FriendlyError:
+    """예외를 '무엇이 잘못됐는지 / 어떻게 하면 되는지' 두 줄로. traceback 은 detail 에만 둔다."""
     if isinstance(exc, real_api.ApiError):
-        return FriendlyError("작업을 할 수 없습니다", "\n".join([*exc.lines, exc.message]))
+        what = T.friendly_detail("\n".join([*exc.lines, exc.message]))
+        return FriendlyError(T.ERR_TITLES["api"], what, _api_how(exc.message), tb)
     if isinstance(exc, TransferError):
-        return FriendlyError("복사를 시작할 수 없습니다", str(exc))
+        what, how = T.ERR_TRANSFER
+        return FriendlyError(T.ERR_TITLES["transfer"], what.format(msg=T.friendly_detail(str(exc))), how, tb)
     if isinstance(exc, OSError):
-        path = exc.filename if isinstance(getattr(exc, "filename", None), str) else ""
-        return FriendlyError("파일을 읽거나 쓸 수 없습니다", "\n".join(real_api.format_write_error(path, exc)), tb)
+        what, how = _os_error_texts(exc)
+        return FriendlyError(T.ERR_TITLES["os"], what, how, tb)
     if isinstance(exc, GuardError):
-        return FriendlyError("안전을 위해 막았습니다", str(exc))
-    return FriendlyError("예상하지 못한 오류가 발생했습니다",
-                         f"{type(exc).__name__}: {exc}\n자세한 내용은 '상세 보기'를 눌러 확인하고 담당자에게 전달하세요.", tb)
+        return FriendlyError(T.ERR_TITLES["guard"], str(exc), "", tb)
+    what, how = T.ERR_UNEXPECTED
+    return FriendlyError(T.ERR_TITLES["unexpected"], what.format(name=type(exc).__name__, msg=exc), how, tb)
 
 
 @dataclass
@@ -84,6 +134,7 @@ class Controller:
         self.listener: Callable[[str, Any], None] | None = None
         self.cancel_token: CancelToken | None = None
         self.can_cancel = False
+        self.checklist_marks: set[tuple[str, str]] = set()  # 체크한 항목(탭, 문구): 화면을 오가도 유지
 
     # ------------------------------------------------------------------ 이벤트/실행
     def emit(self, kind: str, payload: Any = None) -> None:
@@ -104,12 +155,14 @@ class Controller:
     def _run(self, label: str, fn: Callable[[Callable[[str], None], Any], Any], done: Callable[[Any], None],
              cancellable: bool = False) -> None:
         if self.state.busy:
-            raise GuardError("다른 작업이 진행 중입니다. 끝난 뒤에 다시 시도하세요.")
+            raise GuardError(T.G_BUSY)
         token = CancelToken() if cancellable else None
         self.cancel_token, self.can_cancel = token, cancellable
         self.state.busy, self.state.busy_label = True, label
         self.log.info("task start: %s", label)
         self.emit("busy", label)
+        if label in T.PROGRESS:
+            self.emit("progress", T.PROGRESS[label])  # 작업 이름과 예상 시간을 바로 보여 준다
 
         def finish() -> None:
             self.state.busy, self.state.busy_label = False, ""
@@ -133,28 +186,27 @@ class Controller:
             self.emit("cancelled", label)
 
         self.runner.submit(lambda progress: fn(progress, token), on_done=on_done, on_error=on_error,
-                           on_cancel=on_cancel, on_progress=lambda m: self.emit("progress", m))
+                           on_cancel=on_cancel, on_progress=lambda m: self.emit("progress", T.friendly_detail(m)))
 
     def cancel(self) -> bool:
-        """취소 가능한 작업(규칙 없는 프로그램 탐지, 대용량 복사)에만 효과가 있다."""
+        """취소 가능한 작업(규칙에 없는 프로그램 찾기, 대용량 복사)에만 효과가 있다."""
         if self.cancel_token is not None:
             self.cancel_token.cancel()
-            self.emit("progress", "취소하는 중입니다...")
+            self.emit("progress", T.CANCELLING)
             return True
         return False
 
-    # ------------------------------------------------------------------ 구 PC 1) 스캔
+    # ------------------------------------------------------------------ 구 PC 1) 조사
     def start_scan(self) -> None:
         def work(progress, token):
-            progress("설치된 프로그램과 규칙을 대조하는 중입니다(winget 확인으로 1분 정도 걸릴 수 있습니다)...")
             return self.api.run_scan(self.state.rules_dir, self.deps)
 
         def done(res):
             self.state.scan = res
             self.emit("scan_done", res)
-        self._run("스캔", work, done)
+        self._run(T.TASK_SCAN, work, done)
 
-    # ------------------------------------------------------------------ 구 PC 2) 규칙 없는 프로그램
+    # ------------------------------------------------------------------ 구 PC 2) 규칙에 없는 프로그램
     def start_discover(self, min_size_kb: int = 0) -> None:
         def work(progress, token):
             return self.api.run_discover(self.state.rules_dir, min_size_kb=min_size_kb, progress=progress,
@@ -165,7 +217,7 @@ class Controller:
             self.state.selected = set()  # 자동 선택 없음
             self.state.secrets_ack = False
             self.emit("discover_done", res)
-        self._run("규칙 없는 프로그램 탐지", work, done, cancellable=True)
+        self._run(T.TASK_DISCOVER, work, done, cancellable=True)
 
     def candidate_rows(self) -> list[CandRow]:
         d = self.state.discovery
@@ -175,8 +227,8 @@ class Controller:
         for c in d.candidates():
             link = c.link
             rows.append(CandRow(
-                key=c.key, programs=", ".join(link.programs) if link else "(연결된 프로그램 없음)", path=c.path,
-                kind="폴더" if c.is_dir else "파일", size=fmt_size(c), grade=link.grade if link else "없음",
+                key=c.key, programs=", ".join(link.programs) if link else T.NO_PROGRAM, path=c.path,
+                kind=T.KIND_FOLDER if c.is_dir else T.KIND_FILE, size=fmt_size(c), grade=link.grade if link else "없음",
                 reason=link.reason if link else "", weak=bool(link and link.weak), secret=list(c.secret),
                 selectable=(not c.secret) or self.state.secrets_ack))
         return rows
@@ -185,11 +237,11 @@ class Controller:
         for r in self.candidate_rows():
             if r.key == key:
                 return r
-        raise GuardError("목록에 없는 항목입니다.")
+        raise GuardError(T.G_NOT_IN_LIST)
 
     def set_secrets_ack(self, on: bool) -> None:
         self.state.secrets_ack = bool(on)
-        if not on:  # 동의를 거두면 비밀 정보 가능성 항목은 모두 선택 해제
+        if not on:  # 동의를 거두면 민감한 정보 가능성 항목은 모두 선택 해제
             for r in self.candidate_rows():
                 if r.secret:
                     self.state.selected.discard(r.key)
@@ -198,58 +250,107 @@ class Controller:
     def set_selected(self, key: tuple, on: bool) -> None:
         row = self._row(key)
         if on and row.secret and not self.state.secrets_ack:
-            raise GuardError("비밀 정보(키, 비밀번호, 쿠키 등)가 들어 있을 수 있는 항목입니다. "
-                             "'비밀 정보가 포함될 수 있음을 이해했습니다'에 먼저 체크해야 선택할 수 있습니다.")
+            raise GuardError(T.G_SECRET_SELECT)
         (self.state.selected.add if on else self.state.selected.discard)(key)
         self.emit("selection_changed")
 
     def selected_rows(self) -> list[CandRow]:
         return [r for r in self.candidate_rows() if r.key in self.state.selected]
 
-    # ------------------------------------------------------------------ 구 PC 3) 체크리스트
-    def start_checklist(self, show_all: bool = False) -> None:
+    # ------------------------------------------------------------------ 구 PC 3) 해야 할 일 목록
+    def start_checklist(self) -> None:
+        """항상 '모두 보기' 로 만들고, 화면에서 관련 없는 경고를 숨기거나 보인다(조사를 다시 하지 않는다)."""
         def work(progress, token):
-            progress("체크리스트를 만드는 중입니다(winget 확인으로 1분 정도 걸릴 수 있습니다)...")
-            return self.api.run_checklist(self.state.rules_dir, show_all=show_all, fmt="md", deps=self.deps)
+            return self.api.run_checklist(self.state.rules_dir, show_all=True, fmt="md", deps=self.deps)
 
         def done(res):
             self.state.checklist = res
+            self.checklist_marks = set()
             self.emit("checklist_done", res)
-        self._run("체크리스트 작성", work, done)
+        self._run(T.TASK_CHECKLIST, work, done)
 
-    def checklist_tabs(self) -> dict[str, list[str]]:
+    def checklist_hidden_count(self) -> int:
+        r = self.state.checklist
+        if r is None:
+            return 0
+        cl = r.checklist
+        return sum(1 for line in [*cl.login, *cl.data] if line.endswith(T.CL_HIDDEN_MARK))
+
+    def checklist_tabs(self, show_all: bool = False, query: str = "") -> dict[str, list[str]]:
         r = self.state.checklist
         if r is None:
             return {}
         cl = r.checklist
-        guide = ["신 PC 에서 패키지 안의 programs/winget.json 을 꺼내 다음 명령을 직접 실행하세요(자동 실행하지 않습니다):",
-                 "winget import -i winget.json --ignore-unavailable --accept-package-agreements --accept-source-agreements"]
+
+        def visible(lines: list[str]) -> list[str]:
+            out = [l for l in lines if show_all or not l.endswith(T.CL_HIDDEN_MARK)]
+            q = query.strip().lower()
+            return [l for l in out if q in l.lower()] if q else out
+
+        hidden = 0 if show_all else self.checklist_hidden_count()
         summary = [
-            f"1. 새 PC 에서 먼저 설치: 수동 설치 {len(cl.install)}건, winget 개별 설치 {len(cl.winget_cmd)}건 "
-            f"(winget import 로 자동 설치 {len(cl.winget_auto)}건 별도)",
-            f"2. 로그인·인증: {len(cl.login)}건", f"3. 데이터 복사/기타: {len(cl.data)}건",
-            f"참고(설치 불필요 추정): {len(cl.reference)}건"]
-        if cl.omitted:
-            summary.append(f"이 PC 에 없는 프로그램 관련 경고 {len(cl.omitted)}건은 생략되었습니다.")
+            T.CL_SUMMARY_INSTALL.format(a=len(cl.install), b=len(cl.winget_cmd), c=len(cl.winget_auto)),
+            T.CL_SUMMARY_LOGIN.format(n=len(visible(cl.login))), T.CL_SUMMARY_DATA.format(n=len(visible(cl.data))),
+            T.CL_SUMMARY_REF.format(n=len(cl.reference))]
+        if hidden:
+            summary.append(T.CL_SUMMARY_OMITTED.format(n=hidden))
         if cl.discovery is not None:
             n, m = cl.discovery
-            summary.append(f"규칙 없는 설치 프로그램 {n}개" + (f", 설정 폴더 후보 {m}개" if m is not None else "")
-                           + " — '규칙 없는 프로그램 확인' 화면에서 직접 고른 것만 패키지에 포함됩니다.")
-        summary.append("라이선스는 복원되지 않습니다. 모든 항목은 직접 확인하세요.")
-        return {"요약": summary, "1. 먼저 설치": guide + cl.winget_cmd + cl.install,
-                "2. 로그인·인증": list(cl.login), "3. 데이터·기타": list(cl.data), "참고": list(cl.reference)}
+            summary.append(T.CL_SUMMARY_DISC.format(n=n, m=T.CL_SUMMARY_DISC_M.format(m=m) if m is not None else ""))
+        summary.append(T.CL_SUMMARY_LICENSE)
+        tabs = {T.CL_TABS[0]: summary,
+                T.CL_TABS[1]: [*T.CL_GUIDE, *visible(cl.winget_cmd), *visible(cl.install)],
+                T.CL_TABS[2]: visible(cl.login), T.CL_TABS[3]: visible(cl.data), T.CL_TABS[4]: visible(cl.reference)}
+        return tabs
 
-    def checklist_text(self, fmt: str = "md") -> str:
-        r = self.state.checklist
-        if r is None:
-            raise GuardError("먼저 체크리스트를 만드세요.")
-        from ..checklist import render
-        return render(r.checklist, fmt)
+    CHECKLIST_PLAIN = {T.CL_TABS[0]: "all", T.CL_TABS[4]: "all", T.CL_TABS[1]: len(T.CL_GUIDE)}  # 체크박스 없는 줄 수
+
+    def checklist_items(self, tab: str, show_all: bool = False, query: str = "") -> list[tuple[str, bool, bool]]:
+        """(문구, 체크박스가 있는 항목인지, 체크됨) 목록."""
+        lines = self.checklist_tabs(show_all, query).get(tab, [])
+        plain = self.CHECKLIST_PLAIN.get(tab, 0)
+        out = []
+        for i, line in enumerate(lines):
+            has_box = not (plain == "all" or (isinstance(plain, int) and i < plain))
+            out.append((line, has_box, has_box and (tab, line) in self.checklist_marks))
+        return out
+
+    def toggle_check(self, tab: str, text: str) -> bool:
+        key = (tab, text)
+        if key in self.checklist_marks:
+            self.checklist_marks.discard(key)
+        else:
+            self.checklist_marks.add(key)
+        self.emit("checklist_marks")
+        return key in self.checklist_marks
+
+    def checklist_progress(self, show_all: bool = False) -> tuple[int, int]:
+        total = done = 0
+        for tab in T.CL_TABS:
+            for _text, has_box, checked in self.checklist_items(tab, show_all):
+                total += has_box
+                done += checked
+        return done, total
+
+    def checklist_text(self, fmt: str = "md", show_all: bool = False) -> str:
+        """저장용 텍스트. 체크한 항목은 [x] 로 남는다."""
+        if self.state.checklist is None:
+            raise GuardError(T.G_NEED_CHECKLIST_FIRST)
+        md = fmt == "md"
+        lines = ["# PC 이전 체크리스트" if md else "PC 이전 체크리스트", ""]
+        for tab in T.CL_TABS:
+            lines.append(f"## {tab}" if md else f"=== {tab} ===")
+            items = self.checklist_items(tab, show_all)
+            for text, has_box, checked in items or [(T.CL_EMPTY, False, False)]:
+                lines.append(f"- [{'x' if checked else ' '}] {text}" if has_box else text)
+            lines.append("")
+        lines.append(T.CL_SUMMARY_LICENSE)
+        return "\n".join(lines) + "\n"
 
     def save_text(self, path: str, text: str) -> str:
         """텍스트 저장(기존 파일은 .bak 보존). 호출자는 저장 위치 확인 대화상자를 먼저 보여 줘야 한다."""
         if not path:
-            raise GuardError("저장할 위치를 선택하세요.")
+            raise GuardError(T.G_NEED_SAVE_PATH)
         try:
             write_output(Path(path), text)
         except OSError as e:
@@ -257,28 +358,33 @@ class Controller:
         self.log.info("saved text file")
         return path
 
-    # ------------------------------------------------------------------ 구 PC 4) 내보내기
+    # ------------------------------------------------------------------ 구 PC 4) 설정 패키지 만들기
+    def export_reason(self, output: str) -> str:
+        """패키지 만들기 버튼이 막혀 있는 이유(없으면 빈 문자열)."""
+        if self.state.busy:
+            return T.WHY_BUSY
+        return "" if output.strip() else T.WHY_NEED_OUTPUT
+
     def start_export(self, output: str, write_confirmed: bool = False) -> None:
         if not write_confirmed:
-            raise GuardError("패키지를 저장할 위치를 확인하는 단계가 필요합니다.")
+            raise GuardError(T.G_NEED_EXPORT_CONFIRM)
         if not output:
-            raise GuardError("패키지를 저장할 위치를 선택하세요.")
+            raise GuardError(T.G_NEED_SAVE_PATH)
         sel = self.selected_rows()
         has_secret = any(r.secret for r in sel)
         if has_secret and not self.state.secrets_ack:
-            raise GuardError("비밀 정보 가능성이 있는 항목이 선택되어 있지만 동의가 없습니다.")
+            raise GuardError(T.G_SECRET_NO_ACK)
         items = self.make_items({"format": 1, "candidates": [
             {"include": True, "root": k[0], "rel": k[1]} for k in sorted(self.state.selected)]}) if sel else []
 
         def work(progress, token):
-            progress("설정 패키지를 만드는 중입니다(원본은 읽기만 합니다)...")
             return self.api.run_export(self.state.rules_dir, output, extra_items=items or None,
                                        allow_secrets=has_secret, deps=self.deps)
 
         def done(res):
             self.state.export_result, self.state.export_output = res, output
             self.emit("export_done", res)
-        self._run("설정 패키지 내보내기", work, done)
+        self._run(T.TASK_EXPORT, work, done)
 
     # ------------------------------------------------------------------ 신 PC
     def set_package(self, path: str) -> None:
@@ -293,27 +399,29 @@ class Controller:
 
     def start_preview(self) -> None:
         if not self.state.package:
-            raise GuardError("복원할 패키지(.zip)를 먼저 선택하세요.")
+            raise GuardError(T.G_NEED_PACKAGE)
         package = self.state.package
 
         def work(progress, token):
-            progress("패키지를 검증하고 복원 미리보기를 만드는 중입니다(아무것도 쓰지 않습니다)...")
             return self.api.run_import(package, self.state.rules_dir, dry_run=True, deps=self.deps)
 
         def done(res):
             self.state.preview, self.state.preview_package = res, package
             self._reset_confirms()
             self.emit("preview_done", res)
-        self._run("검증과 미리보기", work, done)
+        self._run(T.TASK_PREVIEW, work, done)
 
     def preview_rows(self) -> list[dict]:
         p = self.state.preview
         if p is None:
             return []
-        label = {"would_copy": "새로 만듦", "would_overwrite": "덮어씀(.bak 백업)", "skipped_identical": "동일(건너뜀)"}
-        return [{"status": label.get(it["status"], it["status"]), "target": it["target"],
+        return [{"status": T.PREV_STATUS.get(it["status"], it["status"]), "target": it["target"],
                  "backup": it.get("backup", ""), "extra": bool(it.get("extra")), "size": it.get("size", 0)}
                 for it in p.plan.items]
+
+    def preview_problems(self) -> list[str]:
+        p = self.state.preview
+        return [T.friendly_detail(x) for x in p.plan.problems] if p else []
 
     def set_preview_checked(self, on: bool) -> None:
         self.state.preview_checked = bool(on)
@@ -333,16 +441,21 @@ class Controller:
     def can_apply(self) -> tuple[bool, str]:
         s, p = self.state, self.state.preview
         if p is None or s.preview_package != s.package:
-            return False, "먼저 미리보기를 만드세요(패키지를 바꾸면 미리보기를 다시 만들어야 합니다)."
+            return False, T.G_NEED_PREVIEW
         if p.mode == "blocked" or p.plan.problems:
-            return False, "패키지 검증에 실패했습니다. 문제를 해결하기 전에는 복원할 수 없습니다."
+            return False, T.G_PACKAGE_BLOCKED
         if not s.preview_checked:
-            return False, "'미리보기를 확인했습니다'에 체크하세요."
+            return False, T.G_NEED_CHECK_PREVIEW
         if p.n_extra and not s.extra_consent:
-            return False, "규칙 없이 선택 포함된 항목이 있습니다. 별도 동의가 필요합니다."
+            return False, T.G_NEED_EXTRA_CONSENT
         if not s.final_confirmed:
-            return False, "확인 대화상자에서 '예'를 눌러야 합니다."
+            return False, T.G_NEED_FINAL_YES
         return True, ""
+
+    def apply_reason(self) -> str:
+        """복원 실행 버튼(확인 창 전)이 막혀 있는 이유. 마지막 '확인 창' 단계는 이유로 치지 않는다."""
+        ok, why = self.can_apply()
+        return "" if ok or why == T.G_NEED_FINAL_YES else why
 
     def start_apply(self) -> None:
         ok, why = self.can_apply()
@@ -351,7 +464,6 @@ class Controller:
         package, allow_extra = self.state.package, self.state.extra_consent
 
         def work(progress, token):
-            progress("복원하는 중입니다(덮어쓸 파일은 .bak 으로 백업됩니다)...")
             return self.api.run_import(package, self.state.rules_dir, yes=True, allow_extra=allow_extra,
                                        deps=self.deps)
 
@@ -359,7 +471,7 @@ class Controller:
             self.state.import_result = res
             self._reset_confirms()  # 확정은 한 번만 유효
             self.emit("import_done", res)
-        self._run("복원", work, done)
+        self._run(T.TASK_APPLY, work, done)
 
     def import_summary(self) -> dict:
         r = self.state.import_result
@@ -367,32 +479,46 @@ class Controller:
             return {}
         rep = r.report
         counts = rep.to_dict()["summary"]
-        return {"counts": counts, "failures": [(f.dst, f.error) for f in rep.failures],
+        return {"counts": counts, "failures": [(f.dst, T.friendly_detail(f.error)) for f in rep.failures],
                 "backups": [x.backup for x in rep.results if x.backup],
                 "warnings": [(w.get("name", ""), i) for w in r.plan.warnings for i in w.get("items", [])]}
+
+    def import_counts(self) -> tuple[int, int, int]:
+        """(성공, 건너뜀, 실패)"""
+        c = self.import_summary().get("counts", {})
+        return c.get("copied", 0), c.get("skipped_identical", 0), c.get("failed", 0)
 
     # ------------------------------------------------------------------ 대용량 복사
     def check_transfer_paths(self, src: str, dst: str) -> PathCheck:
         lines: list[tuple[bool, str]] = []
         if not src:
-            lines.append((False, "원본 폴더를 선택하세요."))
+            lines.append((False, T.G_NEED_SOURCE))
         elif not os.path.isdir(src):
-            lines.append((False, f"원본 폴더를 찾을 수 없습니다: {src}"))
+            lines.append((False, T.G_SOURCE_MISSING.format(path=src)))
         else:
-            lines.append((True, "원본 폴더가 있습니다. 원본은 읽기만 하며 수정하거나 삭제하지 않습니다."))
+            lines.append((True, T.G_SOURCE_OK))
         if not dst:
-            lines.append((False, "대상 폴더를 선택하세요."))
+            lines.append((False, T.G_NEED_DEST))
         elif src and os.path.isdir(src):
             rs, rd = os.path.realpath(src), os.path.realpath(dst)
             try:
                 inside = os.path.commonpath([rs, rd]) == rs
             except ValueError:  # 다른 드라이브
                 inside = False
-            if inside:
-                lines.append((False, "대상 폴더가 원본 폴더와 같거나 원본 폴더 안에 있습니다. 다른 위치를 고르세요."))
-            else:
-                lines.append((True, "대상 폴더가 원본 폴더 밖에 있습니다."))
+            lines.append((False, T.G_DEST_INSIDE) if inside else (True, T.G_DEST_OK))
         return PathCheck(all(ok for ok, _ in lines) and bool(src) and bool(dst), lines)
+
+    def transfer_reasons(self) -> tuple[str, str]:
+        """(미리보기 버튼이 막힌 이유, 복사 시작 버튼이 막힌 이유). 빈 문자열이면 눌러도 됨."""
+        s = self.state
+        if s.busy:
+            return T.WHY_BUSY, T.WHY_BUSY
+        check = self.check_transfer_paths(s.transfer_src, s.transfer_dst)
+        if not check.ok:
+            return T.WHY_PATH_PROBLEM, T.WHY_PATH_PROBLEM
+        if s.transfer_preview_key != (s.transfer_src, s.transfer_dst):
+            return "", T.WHY_PREVIEW_FIRST
+        return "", ""
 
     def start_transfer(self, dry_run: bool = True, strict: bool = False, include_cloud: bool = False,
                        report_path: str = "", write_confirmed: bool = False) -> None:
@@ -403,9 +529,9 @@ class Controller:
         key = (s.transfer_src, s.transfer_dst)
         if not dry_run:
             if not write_confirmed:
-                raise GuardError("대상 폴더에 파일을 쓰기 전에 확인이 필요합니다.")
+                raise GuardError(T.G_TRANSFER_CONFIRM)
             if s.transfer_preview_key != key:
-                raise GuardError("먼저 '미리보기(쓰기 없음)'를 실행해 무엇이 복사되는지 확인하세요.")
+                raise GuardError(T.G_TRANSFER_NEED_PREVIEW)
 
         def work(progress, token):
             return self.api.run_transfer(s.transfer_src, s.transfer_dst, dry_run=dry_run, include_cloud=include_cloud,
@@ -422,7 +548,7 @@ class Controller:
                     rep.write(Path(report_path))
                 except OSError as e:
                     self.emit("error", friendly_error(e))
-        self._run("복사 미리보기(쓰기 없음)" if dry_run else "대용량 복사", work, done, cancellable=True)
+        self._run(T.TASK_TRANSFER_PREVIEW if dry_run else T.TASK_TRANSFER, work, done, cancellable=True)
 
     def transfer_summary(self) -> dict:
         rep = self.state.transfer_report
@@ -433,14 +559,22 @@ class Controller:
                 "verified": counts.get("verified", 0), "mismatch": counts.get("mismatch", 0),
                 "missing": counts.get("missing", 0), "cloud_only": counts.get("cloud_only", 0),
                 "failed": counts.get("failed", 0),
-                "failures": [(f.src, f.status, f.error) for f in rep.failures],
+                "failures": [(f.src, T.TR_STATUS_LABELS.get(f.status, f.status), T.friendly_detail(f.error))
+                             for f in rep.failures],
                 "cloud_files": [r.src for r in rep.results if r.status == "cloud_only"],
                 "repaired": [x["file"] for x in rep.meta.get("repaired", [])]}
+
+    def transfer_counts(self) -> tuple[int, int, int]:
+        """(성공, 건너뜀, 실패). 건너뜀은 클라우드 전용 파일."""
+        sm = self.transfer_summary()
+        if not sm:
+            return 0, 0, 0
+        return sm["verified"], sm["cloud_only"], sm["mismatch"] + sm["missing"] + sm["failed"]
 
     def save_transfer_report(self, path: str) -> None:
         rep = self.state.transfer_report
         if rep is None:
-            raise GuardError("저장할 결과가 없습니다.")
+            raise GuardError(T.G_NOTHING_TO_SAVE)
         try:
             rep.write(Path(path))
         except OSError as e:

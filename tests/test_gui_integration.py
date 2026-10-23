@@ -8,6 +8,7 @@ import pytest
 from pcmigrate import api
 from pcmigrate.detect import Program
 from pcmigrate.gui import state as S
+from pcmigrate.gui import texts as T
 from pcmigrate.gui.controller import Controller, GuardError
 from pcmigrate.gui.runner import Runner
 
@@ -68,7 +69,7 @@ def test_old_pc_to_new_pc_full_flow(tmp_path, monkeypatch):
     c2.set_package(str(out))
     c2.start_preview()
     rows = c2.preview_rows()
-    assert [r["status"] for r in rows] == ["덮어씀(.bak 백업)"] and rows[0]["extra"] is True
+    assert [r["status"] for r in rows] == [T.PREV_STATUS["would_overwrite"]] and rows[0]["extra"] is True
     assert (new.appdata / "Foo Bar" / "data.db").read_bytes() == b"OLD-CONTENT"  # 미리보기는 쓰지 않음
     with pytest.raises(GuardError):
         c2.start_apply()

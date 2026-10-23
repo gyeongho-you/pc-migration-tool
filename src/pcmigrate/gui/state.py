@@ -4,6 +4,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from . import texts as T
+
 # 화면 이름
 START = "start"
 OLD_SCAN, OLD_DISCOVER, OLD_CHECKLIST, OLD_EXPORT = "old_scan", "old_discover", "old_checklist", "old_export"
@@ -13,12 +15,7 @@ TRANSFER = "transfer"
 OLD_FLOW = (OLD_SCAN, OLD_DISCOVER, OLD_CHECKLIST, OLD_EXPORT)
 NEW_FLOW = (NEW_PACKAGE, NEW_PREVIEW, NEW_CONFIRM, NEW_RESULT)
 
-TITLES = {
-    START: "시작", OLD_SCAN: "1. 스캔", OLD_DISCOVER: "2. 규칙 없는 프로그램 확인",
-    OLD_CHECKLIST: "3. 체크리스트", OLD_EXPORT: "4. 설정 패키지 내보내기",
-    NEW_PACKAGE: "1. 패키지 선택", NEW_PREVIEW: "2. 검증과 미리보기", NEW_CONFIRM: "3. 복원 확정",
-    NEW_RESULT: "4. 결과", TRANSFER: "대용량 데이터 복사",
-}
+TITLES = T.TITLES  # 화면 제목은 texts.py 에서 관리
 
 
 @dataclass
