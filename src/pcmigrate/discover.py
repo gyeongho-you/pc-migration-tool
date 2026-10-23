@@ -237,8 +237,7 @@ def link_candidate(name: str, path: str, programs: list[Program], is_home: bool)
 
 
 def program_has_rule(p: Program, rules: list[Rule]) -> bool:
-    low = p.name.lower()
-    return any(pat.lower() in low for r in rules for pat in r.display_name_patterns)
+    return any(r.matches_name(p.name) for r in rules)
 
 
 # --------------------------------------------------------------------------- 크기/비밀 스캔

@@ -151,8 +151,7 @@ def explain_matches(matched: list[Rule], programs: list[Program]) -> list[RuleMa
     for r in matched:
         names = []
         for p in programs:
-            low = p.name.lower()
-            if any(pat.lower() in low for pat in r.display_name_patterns) and p.name not in names:
+            if r.matches_name(p.name) and p.name not in names:
                 names.append(p.name)
         if names:
             ev = "설치 프로그램 이름 일치: " + ", ".join(names[:3]) + (" 외" if len(names) > 3 else "")

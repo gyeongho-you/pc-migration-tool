@@ -158,10 +158,8 @@ def rule_matches(rule: Rule, programs: Iterable[Program],
                  path_exists: Callable[[str], bool] = os.path.exists,
                  expand: Callable[[str], str] = expand_env,
                  key_exists: Callable[[str], bool] = registry_key_exists) -> bool:
-    names = [p.name.lower() for p in programs]
-    for pat in rule.display_name_patterns:
-        if any(pat.lower() in n for n in names):
-            return True
+    if any(rule.matches_name(p.name) for p in programs):
+        return True
     if any(path_exists(expand(p)) for p in rule.install_paths):
         return True
     return any(key_exists(k) for k in rule.registry_keys)

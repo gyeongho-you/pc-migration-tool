@@ -31,8 +31,8 @@ COMMON_ITEMS: tuple[CommonItem, ...] = (
         "autodesk", "Autodesk 계정/버전",
         "Autodesk 계열 — Autodesk 계정으로 재로그인하고 라이선스를 다시 활성화하세요(라이선스는 복원되지 않음). "
         "구 PC와 같은 버전을 설치해야 설정이 호환됩니다.",
-        "login", patterns=("autodesk", "autocad", "revit", "navisworks"),
-        rule_ids=("revit", "autocad", "navisworks"),
+        "login", patterns=("autodesk", "autocad", "revit", "navisworks", "civil 3d"),
+        rule_ids=("revit", "autocad", "navisworks", "civil3d"),
         install_hint="Autodesk 계정 로그인과 구 PC와 같은 버전 필요",
         covers=("autodesk 계정",)),
     CommonItem(
@@ -41,9 +41,10 @@ COMMON_ITEMS: tuple[CommonItem, ...] = (
         "data", patterns=("revit",), rule_ids=("revit",), covers=("revit 로컬 캐시",)),
     CommonItem(
         "dongle", "동글(하드웨어 락)",
-        "동글(하드웨어 락) 프로그램 — 동글을 신 PC의 USB에 연결하고 제조사 드라이버를 설치한 뒤 인식되는지 확인하세요.",
-        "login", patterns=("sentinel", "hasp", "safenet", "codemeter", "wibu", "rockey", "aladdin"),
-        rule_ids=("archicad",)),
+        "동글(하드웨어 락) 프로그램 — 동글을 신 PC의 USB에 연결하고 제조사 드라이버(Sentinel/HASP/CodeMeter 등)를 설치한 뒤 "
+        "인식되는지 확인하세요.",
+        "login", patterns=("sentinel", "hasp", "safenet", "codemeter", "wibu", "rockey", "aladdin", "midas"),
+        rule_ids=("archicad", "midas")),
     CommonItem(
         "reactivate", "Rhino/V-Ray/Enscape/Lumion/ArchiCAD 재활성화",
         "Rhino / V-Ray / Enscape / Lumion / ArchiCAD — 재설치 후 각 프로그램에서 라이선스를 다시 활성화하세요"
@@ -70,7 +71,8 @@ COMMON_ITEMS: tuple[CommonItem, ...] = (
         "onedrive", "OneDrive 온디맨드",
         "OneDrive 파일 온디맨드 — 클라우드 전용 파일은 복사에 실패하거나 대량 다운로드가 발생합니다. "
         "필요한 폴더를 '항상 이 장치에 유지'로 설정해 다운로드를 끝낸 뒤 복사하세요"
-        "(transfer 는 기본으로 건너뛰고 cloud_only 로 기록합니다).",
+        "(transfer 는 기본으로 건너뛰고 cloud_only 로 기록합니다). 문서/바탕 화면 폴더가 OneDrive 로 리디렉션된 PC 는 "
+        "실제 폴더 위치가 다르므로(예: OneDrive\\Documents) 설정·템플릿 파일 위치를 먼저 확인하세요.",
         "data", always=True),
     CommonItem(
         "office", "Microsoft Office 인증",
@@ -79,6 +81,21 @@ COMMON_ITEMS: tuple[CommonItem, ...] = (
         "login", patterns=("microsoft office", "microsoft 365", "office 16", "office standard",
                            "office professional"),
         install_hint="설치 미디어와 제품 키(또는 계정) 필요, 라이선스는 복원 안 됨"),
+    CommonItem(
+        "office_templates", "Office 템플릿/빠른 실행 도구 모음",
+        "MS Office 템플릿·빠른 실행 도구 모음 — Word 를 완전히 닫은 뒤 %appdata%\\Microsoft\\Templates 의 Normal.dotm 을 복사하고, "
+        "빠른 실행 도구 모음(QAT)은 %LOCALAPPDATA%\\Microsoft\\Office 아래의 *.qat 파일을 복사하세요(Office 버전에 따라 위치가 다를 수 있습니다).",
+        "data", patterns=("microsoft office", "microsoft 365", "office 16", "office standard", "office professional")),
+    CommonItem(
+        "cad_fonts_plotters", "CAD 글꼴/플로터(PC3)",
+        "CAD 글꼴·플로터(PC3) — SHX 글꼴은 지원 폴더에 있으면 함께 옮겨지지만 TrueType(TTF) 글꼴은 신 PC 에 따로 설치해야 합니다. "
+        "플로터(PC3)와 플롯 스타일(.ctb)은 신 PC 의 프린터 구성이 같지 않으면 다시 확인하세요.",
+        "data", patterns=("autocad", "civil 3d"), rule_ids=("autocad", "civil3d")),
+    CommonItem(
+        "hwp", "한글(HWP) 서식/매크로",
+        "한글(HWP) — 서식(.hwt)·매크로·사용자 사전이 저장된 위치는 확인하지 못했습니다. 구 PC 의 한글에서 환경 설정과 "
+        "서식 파일 위치를 직접 확인해 옮기세요.",
+        "data", patterns=("한컴", "hancom", "hwp")),
     CommonItem(
         "adobe", "Adobe CC 로그인",
         "Adobe Creative Cloud — Creative Cloud 앱을 설치하고 Adobe 계정으로 로그인하세요. "

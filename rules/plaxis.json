@@ -1,0 +1,21 @@
+{
+  "id": "plaxis",
+  "name": "PLAXIS",
+  "version": "1",
+  "detect": {
+    "display_name_patterns": [
+      "PLAXIS"
+    ],
+    "install_paths": [],
+    "registry_keys": []
+  },
+  "paths": [],
+  "manual_warnings": [
+    "PLAXIS 는 Bentley 계정(SES)으로 로그인해 활성화합니다. 신 PC 에서 같은 계정으로 로그인하세요(키 이전은 필요하지 않다는 요약 근거).",
+    "신 PC 의 PLAXIS 버전이 구 PC 와 다르면 프로젝트 파일 호환성을 확인하세요."
+  ],
+  "notes": "근거 등급: 요약(PLAXIS 의 Bentley SES 로그인). 근거: 요약, 공식 원문 재확인 필요. 출처: PLAXIS 전용 원문 없음(리서치 요약). 참고 원문(Bentley SES 일반 안내): https://www.bentley.com/en/support/subscription-entitlement-service/. 확인 필요: 설정 저장 경로(paths 를 비움), PLAXIS 별 SES 적용 여부.",
+  "exclude": [
+    "*.lic"
+  ]
+}

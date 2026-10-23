@@ -8,7 +8,8 @@ r"""프로그램별 백업/복원 규칙(JSON) 스키마와 로더.
       "detect": {
         "display_name_patterns": ["Autodesk Revit"],  # Uninstall DisplayName 부분일치(대소문자 무시)
         "install_paths": ["%ProgramFiles%\\Autodesk"],  # 존재하면 감지
-        "registry_keys": []                           # 참고용(현재 감지는 DisplayName/경로만 사용)
+        "registry_keys": [],                          # 키가 존재하면 감지
+        "exclude_display_name_patterns": []           # 선택. 이 이름도 포함한 프로그램은 이 규칙으로 감지하지 않음
       },
       "paths": [
         {"path": "%APPDATA%\\Autodesk\\Revit", "dest": "revit/appdata",
@@ -58,6 +59,14 @@ class Rule:
     notes: str = ""
     version: str = "1"  # 규칙 파일 버전(패키지 manifest 에 기록)
     exclude: tuple[str, ...] = ()  # 백업에서 제외할 파일명 glob(예: "*.lic")
+    exclude_display_name_patterns: tuple[str, ...] = ()  # 이 이름이 함께 들어 있으면 이 규칙으로 감지하지 않음
+
+    def matches_name(self, name: str) -> bool:
+        """설치 프로그램 표시 이름이 이 규칙의 이름 패턴에 맞고 제외 패턴에는 걸리지 않는지(대소문자 무시)."""
+        low = name.lower()
+        if any(x.lower() in low for x in self.exclude_display_name_patterns):
+            return False
+        return any(pat.lower() in low for pat in self.display_name_patterns)
 
 
 def _str_list(obj: dict, key: str, where: str) -> tuple[str, ...]:
@@ -88,6 +97,7 @@ def parse_rule(data: object, source: str = "<rule>") -> Rule:
     patterns = _str_list(detect, "display_name_patterns", source)
     install_paths = _str_list(detect, "install_paths", source)
     reg_keys = _str_list(detect, "registry_keys", source)
+    exclude_patterns = _str_list(detect, "exclude_display_name_patterns", source)
     if not (patterns or install_paths or reg_keys):
         raise RuleError(f"{source}: detect 에 감지 조건이 하나 이상 필요합니다")
 
@@ -117,7 +127,8 @@ def parse_rule(data: object, source: str = "<rule>") -> Rule:
         raise RuleError(f"{source}: 'version' 은 비어 있지 않은 문자열이어야 합니다")
     exclude = _str_list(data, "exclude", source)
     return Rule(data["id"], data["name"], patterns, install_paths, reg_keys,
-                tuple(paths), warnings, notes, version, exclude)
+                tuple(paths), warnings, notes, version, exclude,
+                exclude_display_name_patterns=exclude_patterns)
 
 
 def load_rule_file(path: Path) -> Rule:

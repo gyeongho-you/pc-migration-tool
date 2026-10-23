@@ -1,0 +1,21 @@
+{
+  "id": "geostudio",
+  "name": "GeoStudio",
+  "version": "1",
+  "detect": {
+    "display_name_patterns": [
+      "GeoStudio"
+    ],
+    "install_paths": [],
+    "registry_keys": []
+  },
+  "paths": [],
+  "manual_warnings": [
+    "GeoStudio 는 Seequent ID 로 로그인해 라이선스를 다시 활성화하세요(라이선스는 복원되지 않습니다).",
+    "프로젝트 파일은 설정 패키지가 아니라 '대용량 복사'로 옮기세요."
+  ],
+  "notes": "근거 등급: 요약(Seequent ID 로그인). 근거: 요약, 공식 원문 재확인 필요. 출처 URL: 없음(리서치 요약, 공식 원문 재확인 필요). 확인 필요: 설정 저장 경로(paths 를 비움), 오프라인 라이선스 방식 여부.",
+  "exclude": [
+    "*.lic"
+  ]
+}

@@ -6,8 +6,9 @@
       "AutoCAD"
     ],
     "install_paths": [],
-    "registry_keys": [
-      "HKLM\\SOFTWARE\\Autodesk\\AutoCAD"
+    "registry_keys": [],
+    "exclude_display_name_patterns": [
+      "Civil 3D"
     ]
   },
   "paths": [
@@ -15,16 +16,25 @@
       "path": "%APPDATA%\\Autodesk\\AutoCAD *\\R*\\*\\Support",
       "dest": "autocad/support",
       "kind": "dir",
-      "description": "버전별 사용자 지원 파일(acad.pgp, 사용자 지정 .cuix, 플롯 스타일, 프로필 등)"
+      "description": "버전별 사용자 지원 파일(acad.pgp, 사용자 지정 .cuix, 글꼴(.shx), 프로필 등, 요약)"
+    },
+    {
+      "path": "%APPDATA%\\Autodesk\\AutoCAD *\\R*\\*\\Plotters",
+      "dest": "autocad/plotters",
+      "kind": "dir",
+      "description": "플로터 구성(.pc3)과 Plot Styles(.ctb/.stb) 하위 폴더 포함(요약)"
     }
   ],
   "manual_warnings": [
     "Autodesk 계정 재로그인 및 라이선스 재활성화가 필요합니다(라이선스는 복원하지 않음).",
     "신 PC의 AutoCAD 버전이 구 PC와 다르면 프로필/지원 파일이 호환되지 않을 수 있습니다. 버전을 맞추세요.",
-    "동글(하드웨어 락) 사용 환경이면 자동 복원이 불가합니다. 수동으로 확인하세요."
+    "동글(하드웨어 락) 사용 환경이면 자동 복원이 불가합니다. 수동으로 확인하세요.",
+    "공식 이전 수단: 구 PC 의 OPTIONS > Profiles 에서 프로필을 내보내기(.arg)하고, 신 PC 에서 같은 화면의 가져오기(Import)로 적용하세요.",
+    "CAD 글꼴: SHX 글꼴은 지원 폴더(Support) 복사에 포함되지만, TrueType(TTF) 글꼴은 신 PC 에 따로 설치해야 합니다. 빠지면 도면 문자가 다른 글꼴로 보입니다.",
+    "플롯 스타일(.ctb/.stb)은 Plotters\\Plot Styles 폴더와 함께 옮겨지지만, 플로터(PC3)는 신 PC 의 프린터 구성이 같지 않으면 다시 검증하고 필요하면 새로 만드세요."
   ],
-  "notes": "확인 필요: 로밍 Support 폴더 구조(AutoCAD 20xx\\R*\\언어\\Support)는 glob 으로 지정했으며 실제 PC에서 검증되지 않음. 레지스트리 키 HKLM\\SOFTWARE\\Autodesk\\AutoCAD 존재 여부도 확인 필요. 템플릿(.dwt) 위치(%LOCALAPPDATA%\\Autodesk\\AutoCAD 20xx\\R*\\언어\\Template)와 사용자 지정 공유 경로는 확정하지 못해 제외함.",
-  "version": "2",
+  "notes": "근거 등급(경로별): ①Roaming\\Autodesk\\AutoCAD <버전>\\<RXX.X>\\<언어>\\Support = 요약(근거: 요약, 공식 원문 재확인 필요; 이전 단계에서도 실제 PC 미검증), ②...\\Plotters(Plot Styles 포함) = 요약(근거: 요약, 공식 원문 재확인 필요). acad.cuix: 원문 등급 정보는 'UserDataCache' 위치이나 전체 경로가 제공되지 않아 paths 에 넣지 않았다(확인 필요). 사용자 acad.cuix 는 위 Support 폴더에 있을 수 있다(요약). 출처: 없음(리서치 요약, 공식 원문 재확인 필요). 확인 필요: 템플릿(.dwt) 위치(%LOCALAPPDATA%\\Autodesk\\AutoCAD 20xx\\R*\\언어\\Template)와 사용자 지정 공유 경로는 확정하지 못해 제외함. Civil 3D 는 별도 규칙(civil3d)이 처리하며, 이 규칙은 'Civil 3D' 가 들어간 프로그램에는 적용되지 않는다(exclude_display_name_patterns). 이중 감지를 막기 위해 레지스트리 키 감지는 제거했다.",
+  "version": "3",
   "exclude": [
     "*.lic"
   ]

@@ -270,10 +270,10 @@ def test_registry_key_detection():
 
     def key_exists(k):
         seen.append(k)
-        return k == "HKLM\\SOFTWARE\\Autodesk\\AutoCAD"
+        return k == "HKLM\\SOFTWARE\\Autodesk\\Revit"
     matched = match_rules(rules, [], path_exists=lambda p: False, key_exists=key_exists)
-    assert [r.id for r in matched] == ["autocad"]
-    assert "HKLM\\SOFTWARE\\Autodesk\\AutoCAD" in seen
+    assert [r.id for r in matched] == ["revit"]  # AutoCAD 규칙은 Civil 3D 와의 이중 감지를 피하려고 레지스트리 키 감지를 쓰지 않는다
+    assert "HKLM\\SOFTWARE\\Autodesk\\Revit" in seen and "HKLM\\SOFTWARE\\Autodesk\\AutoCAD" not in seen
 
 
 def test_autocad_rule_uses_glob_and_keeps_notes():

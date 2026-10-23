@@ -1,0 +1,52 @@
+{
+  "id": "civil3d",
+  "name": "Autodesk AutoCAD Civil 3D",
+  "version": "1",
+  "detect": {
+    "display_name_patterns": [
+      "AutoCAD Civil 3D",
+      "Civil 3D"
+    ],
+    "install_paths": [],
+    "registry_keys": []
+  },
+  "paths": [
+    {
+      "path": "%PROGRAMDATA%\\Autodesk\\C3D *\\enu\\Data\\Toolbox",
+      "dest": "civil3d/programdata/toolbox",
+      "kind": "dir",
+      "description": "Civil 3D Toolbox(보고서/도구 정의, 원문). 언어 폴더 enu"
+    },
+    {
+      "path": "%PROGRAMDATA%\\Autodesk\\C3D *\\enu\\Survey",
+      "dest": "civil3d/programdata/survey",
+      "kind": "dir",
+      "description": "Civil 3D 측량(Survey) 설정/데이터 폴더(원문). 언어 폴더 enu"
+    },
+    {
+      "path": "%APPDATA%\\Autodesk\\C3D *\\enu\\Support",
+      "dest": "civil3d/support",
+      "kind": "dir",
+      "description": "사용자 지원 폴더: Profiles, c3d.cuix, ToolPalette 가 들어 있음(요약)"
+    }
+  ],
+  "manual_warnings": [
+    "Autodesk 계정 재로그인이 필요합니다(라이선스는 복원하지 않음).",
+    "신 PC 의 Civil 3D 릴리스가 구 PC 와 다르면 설정/프로파일이 호환되지 않을 수 있습니다. 같은 릴리스를 설치하세요.",
+    "공식 이전 수단: 'Export Settings / Migrate Custom Settings' 를 사용하세요(같은 릴리스끼리, 근거: 요약, 공식 원문 재확인 필요).",
+    "Pipe Catalog 는 전체를 복사하지 마세요. 사용자가 추가한 부분만 새 카탈로그에 넣은 뒤 PIPECATALOGREGEN 명령을 실행하세요.",
+    "도구 팔레트(.ATC 파일과 PNG 이미지)는 공유 폴더로 복사한 뒤, 신 PC 에서 도구 팔레트 경로를 다시 지정하세요.",
+    "측량 데이터베이스는 2019 이하 버전에서는 Database Migration Utility 로 옮겨야 하며, 이전된 데이터베이스는 2019 이하 버전과 호환되지 않습니다.",
+    "CUI 자동 마이그레이션은 불안정할 수 있다는 업체 경고가 있습니다(근거: 요약). 마이그레이션 후 메뉴·리본·단축키가 제대로 옮겨졌는지 확인하세요.",
+    "Subassembly 라이브러리 참조(도구 팔레트의 서브어셈블리 경로)를 신 PC 의 경로로 갱신하세요.",
+    "데이터 단축(Data Shortcuts)이나 Vault 연동을 쓰면 프로젝트 폴더와 서버 경로를 신 PC 에서 다시 연결하세요. 구 PC 의 연결 정보를 그대로 복사하지 마세요.",
+    "템플릿(.dwt)은 사용자 지정 경로를 쓰므로 자동으로 모으지 않습니다. 구 PC 에서 OPTIONS > Files 의 Template Settings 경로를 확인해 그 폴더를 직접 복사하세요.",
+    "RepGenSettings.xml 은 복사할 필요가 없습니다(자동으로 제외됩니다).",
+    "ProgramData 폴더(Toolbox, Survey) 복원은 관리자 권한이 필요할 수 있습니다."
+  ],
+  "notes": "근거 등급(경로별): ①%PROGRAMDATA%\\Autodesk\\C3D <버전>\\enu\\Data\\Toolbox = 원문, ②%PROGRAMDATA%\\Autodesk\\C3D <버전>\\enu\\Survey = 원문, ③%APPDATA%\\Autodesk\\C3D <버전>\\enu\\Support(Profiles, c3d.cuix, ToolPalette 포함) = 요약: 근거: 요약, 공식 원문 재확인 필요. ③은 Profiles 하위 경로만 구체적으로 제공되어, c3d.cuix 와 ToolPalette 의 정확한 위치(Support 바로 아래인지)는 확인되지 않아 상위 Support 폴더로 지정했다. 경고 (c)(d)(f) 중 CUI 자동 마이그레이션 불안정은 요약 등급. 출처: 없음(리서치 요약, 공식 원문 재확인 필요). 확인 필요: 한국어 설치의 언어 폴더(enu 외 가능성), 템플릿(.dwt) 경로(paths 에 넣지 않음), Pipe Catalog 위치. 감지: 'AutoCAD Civil 3D'/'Civil 3D' 패턴. AutoCAD 규칙은 'Civil 3D' 를 제외 패턴으로 가져 이중 감지되지 않는다.",
+  "exclude": [
+    "*.lic",
+    "RepGenSettings.xml"
+  ]
+}
