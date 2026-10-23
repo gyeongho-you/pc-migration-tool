@@ -4,6 +4,21 @@
 원본은 읽기만 하고, 복사 후 SHA-256으로 검증하며, 덮어쓸 파일은 `.bak`으로 백업합니다.
 설계 방침과 요구사항은 [CLAUDE.md](CLAUDE.md)를 보세요.
 
+## 내려받기 (Python 없이 쓰려면)
+
+Python 이 없는 PC 에서는 [릴리스 페이지](https://github.com/gyeongho-you/pc-migration-tool/releases)에서 받으세요.
+
+| 파일 | 설명 |
+|---|---|
+| `pcmigrate-win.zip` | exe 묶음. 압축을 풀어 **폴더째** 쓰세요(`pcmigrate-gui.exe` 더블클릭). `_internal` 폴더를 지우거나 exe 만 따로 옮기지 마세요 |
+| `field-guide.html` | 현장 안내(준비물, 순서, 명령, 막힐 때, 공식 링크). 인터넷 없이 브라우저로 열립니다 |
+| `field-guide.md` | 같은 내용의 텍스트판(메모장이나 문서 앱으로 열림) |
+| `SHA256SUMS.txt` | 위 파일들의 SHA-256. 받은 파일이 맞는지 `certutil -hashfile 파일 SHA256` 또는 `Get-FileHash 파일` 결과와 비교하세요 |
+
+- 현장 안내 문서는 저장소의 [`docs/`](docs/) 폴더에도 있습니다([field-guide.html](docs/field-guide.html), [field-guide.md](docs/field-guide.md)).
+- exe 는 **코드 서명이 없습니다.** 처음 실행하면 "Windows의 PC 보호" 창이 뜰 수 있으니 SHA-256 을 확인한 뒤 "추가 정보 → 실행" 을 누르세요.
+- 이 도구는 실제 건축/토목 PC 에서 아직 검증되지 않은 부분이 많습니다(아래 "검증하지 못한 것" 참고).
+
 ## 설치
 
 Python 3.10 이상이 필요하고 외부 패키지는 없습니다(대용량 전송은 Windows 내장 `robocopy`).
