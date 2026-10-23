@@ -1,0 +1,116 @@
+{
+  "id": "lumion",
+  "name": "Lumion",
+  "version": "1",
+  "detect": {
+    "display_name_patterns": [
+      "Lumion"
+    ],
+    "registry_keys": [],
+    "install_paths": []
+  },
+  "paths": [
+    {
+      "path": "%USERPROFILE%\\Documents\\Lumion*\\Library",
+      "dest": "lumion/documents/Library",
+      "kind": "dir",
+      "description": "Lumion Library (사용자 Documents). 용량이 클 수 있음"
+    },
+    {
+      "path": "%USERPROFILE%\\Documents\\Lumion*\\Recent",
+      "dest": "lumion/documents/Recent",
+      "kind": "dir",
+      "description": "Lumion Recent (사용자 Documents). 용량이 클 수 있음"
+    },
+    {
+      "path": "%USERPROFILE%\\Documents\\Lumion*\\Materials",
+      "dest": "lumion/documents/Materials",
+      "kind": "dir",
+      "description": "Lumion Materials (사용자 Documents). 용량이 클 수 있음"
+    },
+    {
+      "path": "%USERPROFILE%\\Documents\\Lumion*\\GroupLibrary",
+      "dest": "lumion/documents/GroupLibrary",
+      "kind": "dir",
+      "description": "Lumion GroupLibrary (사용자 Documents). 용량이 클 수 있음"
+    },
+    {
+      "path": "%USERPROFILE%\\Documents\\Lumion*\\settings*.ini",
+      "dest": "lumion/documents/settings",
+      "kind": "file",
+      "description": "Lumion 설정 ini (사용자 Documents)"
+    },
+    {
+      "path": "%OneDrive%\\Documents\\Lumion*\\Library",
+      "dest": "lumion/onedrive/Library",
+      "kind": "dir",
+      "description": "Lumion Library (OneDrive(개인) Documents 리디렉션). 용량이 클 수 있음"
+    },
+    {
+      "path": "%OneDrive%\\Documents\\Lumion*\\Recent",
+      "dest": "lumion/onedrive/Recent",
+      "kind": "dir",
+      "description": "Lumion Recent (OneDrive(개인) Documents 리디렉션). 용량이 클 수 있음"
+    },
+    {
+      "path": "%OneDrive%\\Documents\\Lumion*\\Materials",
+      "dest": "lumion/onedrive/Materials",
+      "kind": "dir",
+      "description": "Lumion Materials (OneDrive(개인) Documents 리디렉션). 용량이 클 수 있음"
+    },
+    {
+      "path": "%OneDrive%\\Documents\\Lumion*\\GroupLibrary",
+      "dest": "lumion/onedrive/GroupLibrary",
+      "kind": "dir",
+      "description": "Lumion GroupLibrary (OneDrive(개인) Documents 리디렉션). 용량이 클 수 있음"
+    },
+    {
+      "path": "%OneDrive%\\Documents\\Lumion*\\settings*.ini",
+      "dest": "lumion/onedrive/settings",
+      "kind": "file",
+      "description": "Lumion 설정 ini (OneDrive(개인) Documents 리디렉션)"
+    },
+    {
+      "path": "%OneDriveCommercial%\\Documents\\Lumion*\\Library",
+      "dest": "lumion/onedrive-business/Library",
+      "kind": "dir",
+      "description": "Lumion Library (OneDrive(회사/학교) Documents 리디렉션). 용량이 클 수 있음"
+    },
+    {
+      "path": "%OneDriveCommercial%\\Documents\\Lumion*\\Recent",
+      "dest": "lumion/onedrive-business/Recent",
+      "kind": "dir",
+      "description": "Lumion Recent (OneDrive(회사/학교) Documents 리디렉션). 용량이 클 수 있음"
+    },
+    {
+      "path": "%OneDriveCommercial%\\Documents\\Lumion*\\Materials",
+      "dest": "lumion/onedrive-business/Materials",
+      "kind": "dir",
+      "description": "Lumion Materials (OneDrive(회사/학교) Documents 리디렉션). 용량이 클 수 있음"
+    },
+    {
+      "path": "%OneDriveCommercial%\\Documents\\Lumion*\\GroupLibrary",
+      "dest": "lumion/onedrive-business/GroupLibrary",
+      "kind": "dir",
+      "description": "Lumion GroupLibrary (OneDrive(회사/학교) Documents 리디렉션). 용량이 클 수 있음"
+    },
+    {
+      "path": "%OneDriveCommercial%\\Documents\\Lumion*\\settings*.ini",
+      "dest": "lumion/onedrive-business/settings",
+      "kind": "file",
+      "description": "Lumion 설정 ini (OneDrive(회사/학교) Documents 리디렉션)"
+    }
+  ],
+  "manual_warnings": [
+    "Lumion 라이선스는 복원되지 않습니다. 신 PC에서 재활성화하세요.",
+    "Lumion 을 완전히 종료한 뒤 복사하세요. 실행 중이면 라이브러리/설정 파일이 잠기거나 일부만 복사될 수 있습니다.",
+    "Library 폴더는 용량이 클 수 있습니다. 설정 패키지(zip)보다 모드 B(transfer)로 옮기는 것을 고려하세요.",
+    "GPU/드라이버 의존: 신 PC에 그래픽 드라이버를 먼저 설치한 뒤 Lumion의 그래픽/GPU 설정을 직접 다시 확인하세요.",
+    "신 PC의 Lumion 버전이 다르면 설정/라이브러리가 호환되지 않을 수 있습니다.",
+    "Documents 가 OneDrive 로 리디렉션된 PC는 클라우드 전용(온디맨드) 파일 때문에 복사가 실패하거나 대량 다운로드가 발생할 수 있습니다."
+  ],
+  "notes": "근거 등급: 폴더 구조(Documents\\Lumion <버전>\\{Library,Recent,Materials,GroupLibrary} + settings<버전>.ini)=포럼/사용자 보고 수준, 공식 문서 미확인. 확인 필요: 실제 폴더명의 괄호 여부(예: 'Lumion 2024' vs 'Lumion (2024)') — 그래서 'Lumion*' glob 으로 지정함. Documents 경로: 코드는 Known Folder(Documents) 해석을 지원하지 않고 환경변수만 확장한다. 그래서 %USERPROFILE%\\Documents, %OneDrive%\\Documents, %OneDriveCommercial%\\Documents 세 후보를 모두 규칙에 두었다. 존재하는 후보만 백업된다. Documents 를 다른 위치(다른 드라이브, 'OneDrive - 회사명' 등)로 리디렉션한 PC는 후보에 없을 수 있으므로 확인 필요. 복원 시 환경변수가 확장되지 않는 후보는 거부된다.",
+  "exclude": [
+    "*.lic"
+  ]
+}

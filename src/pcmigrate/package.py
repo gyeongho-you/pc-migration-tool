@@ -83,6 +83,11 @@ def _within(target: Path, root: Path) -> bool:
         return False
 
 
+def _usable_base(base_path: Path) -> bool:
+    """확장되지 않은 %VAR% 가 남았거나 상대 경로면 쓰지 않는다(현재 작업 폴더로 새는 것을 방지)."""
+    return base_path.is_absolute() and "%" not in str(base_path)
+
+
 def _excluded(name: str, rule: Rule) -> bool:
     return any(fnmatch.fnmatch(name.lower(), pat.lower())
                for pat in GLOBAL_EXCLUDE + rule.exclude)
@@ -111,6 +116,9 @@ def collect_items(rule: Rule, expand: Expand = os.path.expandvars
             continue
         base, pattern = split
         base_path = Path(expand(base))
+        if not _usable_base(base_path):
+            skipped.append({"rule": rule.id, "path": pr.path, "reason": "환경변수 확장 실패 또는 상대 경로"})
+            continue
         has_glob = bool(WILDCARD & set(pr.path))
         matches = sorted(base_path.glob(pattern)) if base_path.is_dir() else []
         if not matches:
@@ -312,6 +320,9 @@ def plan_import(path: Path, rules: list[Rule], expand: Expand = os.path.expandva
             plan.problems.append(f"규칙 {rid} 에 허용되지 않은 복원 위치: {base}")
             continue
         base_path = Path(expand(base))
+        if not _usable_base(base_path):
+            plan.problems.append(f"복원 위치의 환경변수를 확장할 수 없거나 상대 경로임: {base}")
+            continue
         target = base_path.joinpath(*PurePosixPath(f["rel"]).parts)
         if not _within(target, base_path):
             plan.problems.append(f"복원 대상이 허용 루트 밖: {target}")

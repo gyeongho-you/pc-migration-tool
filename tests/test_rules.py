@@ -19,7 +19,7 @@ VALID = {
 
 def test_repo_rules_load():
     rules = load_rules(REPO_RULES)
-    assert {r.id for r in rules} == {"revit", "autocad", "vscode"}
+    assert {"revit", "autocad", "vscode"} <= {r.id for r in rules}
     assert all(r.manual_warnings for r in rules)
 
 

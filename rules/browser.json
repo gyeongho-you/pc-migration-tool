@@ -1,0 +1,23 @@
+{
+  "id": "browser",
+  "name": "웹 브라우저(Chrome/Edge/Firefox)",
+  "version": "1",
+  "detect": {
+    "display_name_patterns": [
+      "Google Chrome",
+      "Microsoft Edge",
+      "Mozilla Firefox"
+    ],
+    "registry_keys": [],
+    "install_paths": []
+  },
+  "paths": [],
+  "manual_warnings": [
+    "브라우저 저장 비밀번호/쿠키: DPAPI 로 암호화되어 복사할 수 없습니다. 브라우저 계정 동기화를 쓰거나 비밀번호를 내보낸 뒤 신 PC에서 다시 로그인하세요.",
+    "북마크/확장 프로그램은 자동 복원하지 않습니다. 브라우저의 계정 동기화 또는 내보내기 기능을 사용하세요."
+  ],
+  "notes": "근거 등급: 미확인. 프로필 경로를 확인하지 못해 paths 를 비움(확인 필요). 이번 단계는 manual_warnings 전용 규칙. Edge 는 Windows 에 기본 설치되므로 이 규칙은 거의 항상 감지된다.",
+  "exclude": [
+    "*.lic"
+  ]
+}
