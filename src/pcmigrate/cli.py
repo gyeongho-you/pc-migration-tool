@@ -11,6 +11,7 @@ from .copier import copy_tree
 from .detect import (match_rules, read_registry_programs, winget_export_raw,
                      parse_winget_export)
 from .package import PackageError, apply_import, export_package, plan_import
+from .transfer import TransferError, transfer
 from .rules import RuleError, default_rules_dir, load_rules
 
 NEEDS_CONFIRM = 2  # import 에 --yes 가 없어 복원하지 않고 종료
@@ -47,6 +48,28 @@ def _cmd_copy(args: argparse.Namespace) -> int:
     print(json.dumps({"dry_run": summary["dry_run"], "summary": summary["summary"]},
                      ensure_ascii=False))
     for r in report.failures:
+        print(f"실패: {r.src} -> {r.error}", file=sys.stderr)
+    return 1 if report.failures else 0
+
+
+def _cmd_transfer(args: argparse.Namespace) -> int:
+    def warn(msg: str) -> None:
+        print(f"[경고] {msg}", file=sys.stderr)
+
+    try:
+        report = transfer(Path(args.src), Path(args.dst), dry_run=args.dry_run,
+                          include_cloud=args.include_cloud,
+                          log_path=Path(args.log) if args.log else None, warn=warn)
+    except (TransferError, OSError) as e:
+        print(f"전송 실패: {e}", file=sys.stderr)
+        return 1
+    if args.report:
+        report.write(Path(args.report))
+    d = report.to_dict()
+    print(json.dumps({"dry_run": d["dry_run"], "summary": d["summary"],
+                      "robocopy_exit": d.get("robocopy_exit"),
+                      "cloud_only_count": d["cloud_only_count"]}, ensure_ascii=False))
+    for r in report.failures[:50]:
         print(f"실패: {r.src} -> {r.error}", file=sys.stderr)
     return 1 if report.failures else 0
 
@@ -142,7 +165,17 @@ def build_parser() -> argparse.ArgumentParser:
     i.add_argument("--report", help="결과 리포트(JSON) 저장 경로")
     i.set_defaults(func=_cmd_import)
 
-    c = sub.add_parser("copy", help="폴더/파일을 해시 검증하며 복사")
+    t = sub.add_parser("transfer", help="모드 B: 대용량 폴더를 robocopy 로 전송 + SHA-256 검증")
+    t.add_argument("src", help="원본 폴더(읽기만 함)")
+    t.add_argument("dst", help="대상(로컬/외장 드라이브/UNC 경로)")
+    t.add_argument("--report", help="결과 리포트(JSON) 저장 경로")
+    t.add_argument("--log", help="robocopy 로그 경로(기본: 대상 폴더 안)")
+    t.add_argument("--dry-run", action="store_true", help="robocopy /L 로 목록만 확인(쓰기 없음)")
+    t.add_argument("--include-cloud", action="store_true",
+                   help="OneDrive 클라우드 전용 파일도 포함(대량 다운로드 발생)")
+    t.set_defaults(func=_cmd_transfer)
+
+    c = sub.add_parser("copy", help="소규모 폴더/파일을 해시 검증하며 복사(대용량은 transfer)")
     c.add_argument("src")
     c.add_argument("dst")
     c.add_argument("--dry-run", action="store_true", help="변경 없이 계획만 출력")

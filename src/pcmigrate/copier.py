@@ -23,6 +23,12 @@ SKIPPED_SAME = "skipped_identical"
 WOULD_COPY = "would_copy"
 WOULD_OVERWRITE = "would_overwrite"
 FAILED = "failed"
+# transfer(모드 B) 검증 결과
+VERIFIED = "verified"
+MISMATCH = "mismatch"
+MISSING = "missing"
+CLOUD_ONLY = "cloud_only"  # OneDrive 온디맨드 파일: 기본 건너뜀(실패 아님)
+FAIL_STATUSES = (FAILED, MISMATCH, MISSING)
 
 
 def sha256_file(path: Path) -> str:
@@ -48,17 +54,18 @@ class FileResult:
 class Report:
     dry_run: bool
     results: list[FileResult] = field(default_factory=list)
+    meta: dict = field(default_factory=dict)  # 리포트 최상위에 병합되는 부가 정보
 
     @property
     def failures(self) -> list[FileResult]:
-        return [r for r in self.results if r.status == FAILED]
+        return [r for r in self.results if r.status in FAIL_STATUSES]
 
     def to_dict(self) -> dict:
         counts: dict[str, int] = {}
         for r in self.results:
             counts[r.status] = counts.get(r.status, 0) + 1
         return {"dry_run": self.dry_run, "summary": counts,
-                "failed_count": len(self.failures),
+                "failed_count": len(self.failures), **self.meta,
                 "results": [asdict(r) for r in self.results]}
 
     def write(self, path: Path) -> None:
@@ -110,6 +117,28 @@ def copy_file(src: Path, dst: Path, dry_run: bool = False) -> FileResult:
             tmp.unlink(missing_ok=True)
         except OSError:
             pass
+    return res
+
+
+def verify_file(src: Path, dst: Path) -> FileResult:
+    """이미 복사된 dst 를 원본과 크기 + SHA-256 으로 비교한다(양쪽 읽기 전용)."""
+    src, dst = Path(src), Path(dst)
+    res = FileResult(str(src), str(dst), FAILED)
+    try:
+        res.size = src.stat().st_size
+        if not dst.is_file():
+            res.status, res.error = MISSING, "대상에 파일이 없습니다"
+            return res
+        if dst.stat().st_size != res.size:
+            res.status, res.error = MISMATCH, f"크기 불일치(대상 {dst.stat().st_size})"
+            return res
+        res.sha256 = sha256_file(src)
+        if sha256_file(dst) != res.sha256:
+            res.status, res.error = MISMATCH, "SHA-256 불일치"
+            return res
+        res.status = VERIFIED
+    except OSError as e:
+        res.status, res.error = FAILED, f"{type(e).__name__}: {e}"
     return res
 
 
