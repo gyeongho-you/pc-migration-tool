@@ -1,6 +1,8 @@
-"""수동 작업 체크리스트: 규칙의 manual_warnings + 공통 '자동 복원 불가' 항목 + winget 수동 설치 목록.
+"""수동 작업 체크리스트: 규칙의 manual_warnings + 공통 '자동 복원 불가' 항목 + winget 설치 분류.
 
+구성: 요약 / 1. 새 PC 에서 먼저 설치 / 2. 로그인·인증 / 3. 데이터 복사·기타 / 참고(설치 불필요 추정).
 이 모듈은 안내문만 만든다. winget import 등은 절대 자동 실행하지 않는다.
+데이터 표(공통 경고, 번들 패턴, 대표 앱)는 checklist_data.py 에 있다.
 """
 from __future__ import annotations
 
@@ -11,24 +13,11 @@ import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .checklist_data import (BUNDLE_PATTERNS, BUNDLE_REGEX, COMMON_ITEMS, KNOWN_APPS,
+                             LOGIN_KEYWORDS, CommonItem)
 from .copier import _backup_path
 from .detect import Program, parse_winget_export
 from .rules import Rule
-
-# CLAUDE.md '자동 복원 불가, 수동 작업 필요' 항목(감지 여부와 무관하게 항상 안내)
-COMMON_WARNINGS: tuple[str, ...] = (
-    "Autodesk 계열: 라이선스는 복원되지 않습니다. 신 PC에서 재로그인하고, 구/신 PC의 버전이 일치하는지 확인하세요. "
-    "Revit 로컬 캐시는 복원하지 않으므로 중앙 모델에서 다시 동기화하세요.",
-    "동글(하드웨어 락) 프로그램: 동글을 신 PC에 연결하고 드라이버 설치와 인식을 확인하세요.",
-    "Rhino/V-Ray/Enscape/Lumion/ArchiCAD: 신 PC에서 재설치 후 라이선스를 재활성화하세요.",
-    "GPU/드라이버 의존 설정: 신 PC에 그래픽 드라이버를 설치한 뒤 각 프로그램의 GPU/렌더링 설정을 직접 다시 확인하세요.",
-    "브라우저 저장 비밀번호/쿠키: DPAPI 로 암호화되어 복사할 수 없습니다. 브라우저 계정 동기화를 쓰거나 "
-    "비밀번호를 내보낸 뒤 신 PC에서 다시 로그인하세요.",
-    "카카오톡 대화, 공인인증서, 금융보안 프로그램: 자동 이전되지 않습니다. 각 서비스의 이전/재설치 절차로 수동 처리하세요.",
-    "OneDrive 파일 온디맨드: 클라우드 전용 파일은 복사에 실패하거나 대량 다운로드가 발생합니다. "
-    "필요한 폴더를 '항상 이 장치에 유지'로 동기화한 뒤 복사하세요.",
-    "Office, Adobe CC: 신 PC에서 재설치하고 계정으로 다시 로그인/라이선스 인증하세요.",
-)
 
 WINGET_IMPORT_GUIDE: tuple[str, ...] = (
     "신 PC에서 패키지(.zip) 안의 programs/winget.json 을 꺼낸 뒤 다음 명령을 직접 실행하세요:",
@@ -37,10 +26,6 @@ WINGET_IMPORT_GUIDE: tuple[str, ...] = (
     "이 도구는 winget import 를 자동 실행하지 않습니다.",
 )
 
-# 설치 목록에서 수동 설치 비교 대상이 아닌 항목(재배포 패키지, 업데이트 등)
-_NOISE = re.compile(r"redistributable|\bupdate for\b|security update|hotfix|\bKB\d{6,}|"
-                    r"microsoft edge webview2|windows (sdk|software development kit)", re.I)
-
 # 매칭 근거 등급. '확실' 만 수동 설치 목록에서 제외하고, 나머지는 등급을 표시해 남긴다(과다 안내가 안전).
 CERTAIN, PROBABLE, NONE = "확실", "추정", "없음"
 
@@ -48,6 +33,7 @@ _COMPANY_WORDS = re.compile(r"\b(inc|incorporated|corp|corporation|ltd|limited|l
                             re.I)
 _VERSION = re.compile(r"\bv?\d+(\.\d+)+\b|\b(x64|x86|64-?bit|32-?bit)\b", re.I)
 _PARENS = re.compile(r"\([^)]*\)")
+_BUNDLE_RE = [(re.compile(p, re.I), why) for p, why in BUNDLE_REGEX]
 
 
 def _norm(s: str) -> str:
@@ -166,24 +152,87 @@ def match_program(p: Program, ids: list[str], links: dict[str, Link]) -> Match |
     return best
 
 
-def find_manual_installs(registry: list[Program], winget: list[Program],
-                         winget_list_text: str | None = None) -> list[tuple[Program, Match | None]]:
-    """수동 설치 후보를 (프로그램, 매칭 근거)로 반환. '확실' 매칭만 제외한다.
+# --------------------------------------------------------------------------- 설치 목록 분류
 
-    정렬: 근거 없음 -> 추정(약한 순) -> 이름순.
+def bundle_reason(name: str) -> str | None:
+    """제조사 번들/드라이버/시스템 구성요소/런타임이면 사유, 아니면 None(데이터 표 기준, 보수적)."""
+    low = name.lower()
+    for pat, why in BUNDLE_PATTERNS:
+        if pat in low:
+            return why
+    for rx, why in _BUNDLE_RE:
+        if rx.search(name):
+            return why
+    return None
+
+
+def _norm_known(s: str) -> str:
+    """대표 앱 표 비교용 정규화: '+' 는 유지('Notepad++' 와 'Notepad' 를 구분)."""
+    return re.sub(r"[^0-9a-z가-힣+]", "", s.lower())
+
+
+def known_app(name: str):
+    """대표 앱 표(괄호/버전/아키텍처를 뺀 표시 이름의 정규화 일치)에서 찾는다. 없으면 None."""
+    nd = _norm_known(_VERSION.sub(" ", _PARENS.sub(" ", name)))
+    if not nd:
+        return None
+    for app in KNOWN_APPS:
+        if nd in {_norm_known(n) for n in app.names}:
+            return app
+    return None
+
+
+@dataclass
+class Classified:
+    manual: list[tuple[Program, Match | None]] = field(default_factory=list)  # 수동 설치 필요
+    winget_auto: list[tuple[Program, str, str]] = field(default_factory=list)  # (프로그램, id, 근거)
+    winget_cmd: list[tuple[Program, str]] = field(default_factory=list)  # 대표 앱 표 기준, 목록에 없어 개별 설치
+    reference: list[tuple[Program, str]] = field(default_factory=list)  # 설치 불필요 추정
+
+
+def classify_programs(registry: list[Program], winget: list[Program],
+                      winget_list_text: str | None = None) -> Classified:
+    """설치 목록을 수동 설치 / winget 자동 / winget 개별 설치 / 참고로 나눈다.
+
+    순서: 번들(참고) -> 대표 앱 표(확실) -> winget list 연결(확실) -> 나머지는 수동 설치(근거 등급 표시).
     """
     ids = [w.winget_id or w.name for w in winget]
+    id_set = {i.lower() for i in ids}
     links = parse_winget_list(winget_list_text, ids)
-    out: dict[str, tuple[Program, Match | None]] = {}
+    out = Classified()
+    seen: set[str] = set()
+    manual: list[tuple[Program, Match | None]] = []
     for p in registry:
-        if _NOISE.search(p.name) or p.name in out:
+        if p.name in seen:
+            continue
+        seen.add(p.name)
+        why = bundle_reason(p.name)
+        if why:
+            out.reference.append((p, why))
+            continue
+        app = known_app(p.name)
+        if app is not None:
+            if app.preinstalled:
+                out.reference.append((p, "Windows 11 기본 포함(설치 불필요)"))
+            elif app.winget_id.lower() in id_set:
+                out.winget_auto.append((p, app.winget_id, "대표 앱 표 기준"))
+            else:
+                out.winget_cmd.append((p, app.winget_id))
             continue
         m = match_program(p, ids, links)
         if m is not None and m.grade == CERTAIN:
+            out.winget_auto.append((p, m.winget_id, f"winget list: {m.reason}"))
             continue
-        out[p.name] = (p, m)
-    return sorted(out.values(), key=lambda t: (t[1] is not None, t[1].strength if t[1] else 0,
+        manual.append((p, m))
+    out.manual = sorted(manual, key=lambda t: (t[1] is not None, t[1].strength if t[1] else 0,
                                                t[0].name.lower()))
+    return out
+
+
+def find_manual_installs(registry: list[Program], winget: list[Program],
+                         winget_list_text: str | None = None) -> list[tuple[Program, Match | None]]:
+    """수동 설치 후보를 (프로그램, 매칭 근거)로 반환(분류 결과의 manual)."""
+    return classify_programs(registry, winget, winget_list_text).manual
 
 
 def describe_manual(p: Program, m: Match | None) -> str:
@@ -193,77 +242,193 @@ def describe_manual(p: Program, m: Match | None) -> str:
     return f"{head} — 매칭 근거: {m.grade}({m.reason}: {m.winget_id}) → 실제 설치 여부 확인"
 
 
+# --------------------------------------------------------------------------- 체크리스트 구성
+
 @dataclass
 class Checklist:
-    program_items: list[str] = field(default_factory=list)
-    common_items: list[str] = field(default_factory=list)
-    manual_installs: list[str] = field(default_factory=list)
+    winget_auto: list[str] = field(default_factory=list)
+    winget_cmd: list[str] = field(default_factory=list)
+    install: list[str] = field(default_factory=list)
+    login: list[str] = field(default_factory=list)
+    data: list[str] = field(default_factory=list)
+    reference: list[str] = field(default_factory=list)
+    omitted: list[str] = field(default_factory=list)  # 이 PC 에 없는 프로그램 관련이라 생략된 공통 경고 제목
     winget_available: bool = True
     has_winget_list: bool = False
+    show_all: bool = False
 
     @property
     def count(self) -> int:
-        return len(self.program_items) + len(self.common_items) + len(self.manual_installs)
+        """사용자가 직접 해야 하는 일의 수(설치 + 개별 winget + 인증 + 데이터/기타)."""
+        return len(self.install) + len(self.winget_cmd) + len(self.login) + len(self.data)
 
     @property
     def probable_count(self) -> int:
-        return sum(1 for i in self.manual_installs if f"매칭 근거: {PROBABLE}" in i)
+        return sum(1 for i in self.install if f"매칭 근거: {PROBABLE}" in i)
+
+
+def _relevant(item: CommonItem, names: list[str], rule_ids: set[str]) -> bool:
+    if item.always:
+        return True
+    if rule_ids & set(item.rule_ids):
+        return True
+    return any(pat in n for n in names for pat in item.patterns)
+
+
+def _phase_of(text: str) -> str:
+    return "login" if any(k in text for k in LOGIN_KEYWORDS) else "data"
+
+
+def _install_hint(name: str, shown: list[CommonItem]) -> str:
+    low = name.lower()
+    for item in shown:
+        if item.install_hint and any(pat in low for pat in item.patterns):
+            return f"{item.install_hint} → 2단계 '{item.title}' 참고"
+    return ""
 
 
 def build_checklist(rule_warnings: list[tuple[str, list[str]]], registry: list[Program] | None = None,
                     winget: list[Program] | None = None,
-                    winget_list_text: str | None = None) -> Checklist:
-    """rule_warnings: [(프로그램 이름, [경고...])]. 같은 문구는 하나로 합치고 출처를 병기한다."""
-    cl = Checklist()
-    common_norm = {_norm(t) for t in COMMON_WARNINGS}
+                    winget_list_text: str | None = None,
+                    rule_ids: list[str] | tuple[str, ...] = (), show_all: bool = False) -> Checklist:
+    """rule_warnings: [(프로그램 이름, [경고...])]. 같은 문구는 하나로 합치고 출처를 병기한다.
+
+    공통 경고는 설치 목록 이름/감지된 규칙에 관련된 것만(또는 항상 해당하는 것) 보여 주고,
+    나머지는 생략 건수로 요약한다(show_all=True 이면 모두 표시).
+    """
+    cl = Checklist(show_all=show_all)
+    names = [p.name.lower() for p in (registry or [])]
+    rids = set(rule_ids)
+    shown: list[CommonItem] = []
+    for item in COMMON_ITEMS:
+        if _relevant(item, names, rids):
+            shown.append(item)
+        elif show_all:
+            shown.append(item)
+        else:
+            cl.omitted.append(item.title)
+    detected = {it.id for it in COMMON_ITEMS if _relevant(it, names, rids)}
+
+    # 프로그램별 규칙 경고(중복 문구 병합, 공통 항목이 이미 다루는 문구는 생략)
+    covers = [c for it in shown for c in it.covers]
     merged: dict[str, list[str]] = {}
     for name, items in rule_warnings:
         for text in items:
-            if _norm(text) in common_norm:
+            if any(c in text.lower() for c in covers):
                 continue
             merged.setdefault(text, [])
             if name not in merged[text]:
                 merged[text].append(name)
-    for text, names in merged.items():
-        cl.program_items.append(f"{text} ({', '.join(names)})" if names else text)
-    cl.common_items = list(COMMON_WARNINGS)
+    for text, srcs in merged.items():
+        line = f"{text} ({', '.join(srcs)})" if srcs else text
+        (cl.login if _phase_of(text) == "login" else cl.data).append(line)
+
+    for item in shown:
+        line = item.text
+        if item.id not in detected:
+            line += " (이 PC 에서 감지되지 않음)"
+        (cl.login if item.phase == "login" else cl.data).append(line)
+
     cl.winget_available = bool(winget)
-    if registry is not None and winget:
+    if registry is not None:
         cl.has_winget_list = bool(winget_list_text)
-        cl.manual_installs = [describe_manual(p, m)
-                              for p, m in find_manual_installs(registry, winget, winget_list_text)]
+        cls = classify_programs(registry, winget or [], winget_list_text)
+        for p, wid, why in cls.winget_auto:
+            cl.winget_auto.append(f"{p.name} — winget import 로 자동 설치({wid}, {why})")
+        for p, wid in cls.winget_cmd:
+            cl.winget_cmd.append(f"{p.name} — 내보낸 winget 목록에 없음. 신 PC에서 "
+                                 f"`winget install --id {wid} --exact` 로 설치(대표 앱 표 기준)")
+        for p, why in cls.reference:
+            cl.reference.append(f"{p.name} — {why}")
+        installs = []
+        for p, m in cls.manual:
+            text = describe_manual(p, m)
+            hint = _install_hint(p.name, shown)
+            installs.append((0 if hint else 1, text + (f" — {hint}" if hint else "")))
+        # 설치 미디어/키가 필요한(공통 항목과 연결된) 항목을 먼저
+        cl.install = [t for _, t in sorted(installs, key=lambda x: x[0])]
     return cl
+
+
+# --------------------------------------------------------------------------- 출력
+
+def _summary_lines(cl: Checklist) -> list[str]:
+    inst = len(cl.install) + len(cl.winget_cmd)
+    return [
+        f"- 1. 새 PC 에서 먼저 설치: 수동 설치 {len(cl.install)}건, winget 개별 설치 {len(cl.winget_cmd)}건 "
+        f"(winget import 로 자동 설치 {len(cl.winget_auto)}건 별도)" if inst or cl.winget_auto
+        else "- 1. 새 PC 에서 먼저 설치: 0건",
+        f"- 2. 로그인·인증: {len(cl.login)}건",
+        f"- 3. 데이터 복사/기타: {len(cl.data)}건",
+        f"- 참고(설치 불필요 추정): {len(cl.reference)}건",
+    ]
 
 
 def render(cl: Checklist, fmt: str = "text") -> str:
     md = fmt == "md"
-    h = (lambda t: f"## {t}") if md else (lambda t: f"=== {t} ===")
-    lines = ["# PC 이전 수동 작업 체크리스트" if md else "PC 이전 수동 작업 체크리스트", ""]
+    h1 = (lambda t: f"## {t}") if md else (lambda t: f"=== {t} ===")
+    lines = ["# PC 이전 체크리스트" if md else "PC 이전 체크리스트", ""]
+    lines.append(h1("요약"))
+    lines += _summary_lines(cl)
+    if cl.omitted:
+        lines.append(f"- 이 PC 에 없는 프로그램 관련 경고 {len(cl.omitted)}건 생략(--all 로 모두 표시)")
+    lines.append("")
 
-    def section(title: str, items: list[str], empty: str, note: str = "") -> None:
-        lines.append(h(title))
-        if items:
-            lines.extend(f"- [ ] {i}" for i in items)
-        else:
-            lines.append(empty)
-        if note:
-            lines.append(note)
-        lines.append("")
+    def checks(items: list[str]) -> None:
+        lines.extend(f"- [ ] {i}" for i in items)
 
-    section("프로그램별 수동 작업", cl.program_items, "(감지된 프로그램의 추가 경고 없음)")
-    section("공통 수동 작업(자동 복원 불가)", cl.common_items, "")
-    if cl.winget_available:
+    lines.append(h1("1. 새 PC 에서 먼저 설치"))
+    lines += [("    " + g) if g.startswith("winget ") else g for g in WINGET_IMPORT_GUIDE]
+    if cl.winget_auto:
+        lines.append(f"→ winget import 로 자동 설치되는 앱 {len(cl.winget_auto)}건"
+                     + ("" if cl.show_all else " (목록은 --all)"))
+        if cl.show_all:
+            lines.extend(f"  · {i}" for i in cl.winget_auto)
+    if cl.winget_cmd:
+        lines.append("개별 winget 설치:")
+        checks(cl.winget_cmd)
+    lines.append("수동 설치(winget 에서 '확실'하게 확인되지 않은 프로그램):")
+    if cl.install:
+        checks(cl.install)
         note = "※ 매칭 근거 '추정' 항목은 이미 winget 으로 설치될 수도 있습니다. 직접 판단하세요."
         if not cl.has_winget_list:
             note += " (winget list 결과가 없어 '확실' 판정을 하지 못했습니다.)"
-        section("수동 설치 필요(winget 에서 '확실'하게 매칭되지 않은 프로그램)", cl.manual_installs,
-                "(없음)", note)
+        lines.append(note)
     else:
-        lines += [h("수동 설치 필요"),
-                  "winget 목록이 없어 비교하지 못했습니다. 설치된 프로그램 목록을 직접 확인하세요.", ""]
-    lines.append(h("신 PC 에서 winget 으로 설치"))
-    lines += [("    " + g) if g.startswith("winget ") else g for g in WINGET_IMPORT_GUIDE]
+        lines.append("(없음)")
+    if not cl.winget_available:
+        lines.append("※ winget 목록이 없어 winget 매칭은 대표 앱 표 기준으로만 했습니다. 설치된 프로그램을 직접 확인하세요.")
     lines.append("")
+
+    lines.append(h1("2. 로그인·인증"))
+    if cl.login:
+        checks(cl.login)
+    else:
+        lines.append("(없음)")
+    lines.append("")
+
+    lines.append(h1("3. 데이터 복사/기타"))
+    if cl.data:
+        checks(cl.data)
+    else:
+        lines.append("(없음)")
+    lines.append("")
+
+    if cl.reference:
+        if md:
+            lines += [f"<details><summary>참고 — 설치 불필요 추정 {len(cl.reference)}건 (펼치기)</summary>", ""]
+            lines += [f"- {i}" for i in cl.reference]
+            lines += ["", "</details>"]
+        else:
+            lines.append(f"참고 — 설치 불필요 추정 {len(cl.reference)}건"
+                         + ("" if cl.show_all else " (제조사 번들/드라이버/런타임 등, 목록은 --all)"))
+            if cl.show_all:
+                lines += [f"  · {i}" for i in cl.reference]
+        lines.append("")
+    if cl.omitted and cl.show_all is False:
+        lines.append(f"이 PC 에 없는 프로그램 관련 경고 {len(cl.omitted)}건 생략됨: " + ", ".join(cl.omitted)
+                     + " (--all 로 모두 표시)")
+        lines.append("")
     lines.append("※ 라이선스는 복원하지 않습니다. 모든 항목은 직접 확인하세요.")
     return "\n".join(lines) + "\n"
 

@@ -4,7 +4,8 @@ from pathlib import Path
 import pytest
 
 from pcmigrate import cli, transfer as tr
-from pcmigrate.checklist import (CERTAIN, COMMON_WARNINGS, PROBABLE, match_program, parse_winget_list, build_checklist, find_manual_installs,
+from pcmigrate.checklist_data import COMMON_ITEMS
+from pcmigrate.checklist import (CERTAIN, PROBABLE, match_program, parse_winget_list, build_checklist, find_manual_installs,
                                  render, winget_matches)
 from pcmigrate.copier import MISMATCH, VERIFIED
 from pcmigrate.detect import Program
@@ -92,47 +93,44 @@ def test_winget_matches(name, wid, ok):
 
 
 def test_find_manual_installs_filters_matches_and_noise():
-    registry = [Program("Google Chrome", "1"), Program("Rhino 8", "8.0"),
+    registry = [Program("Google Chrome", "1"), Program("Rhino 8", "8.0"), Program("Acme Widget", "1", "Acme Inc"),
                 Program("Microsoft Visual C++ 2015-2022 Redistributable (x64)"),
                 Program("Security Update for Windows (KB5000000)"), Program("Rhino 8", "8.0")]
-    winget = [Program("Google.Chrome", source="winget", winget_id="Google.Chrome")]
-    # winget list 없음: 확실 판정 불가 -> Chrome 은 '추정'으로 남고, 근거 없는 Rhino 가 먼저 나온다
+    winget = wg("Google.Chrome", "Acme.Widget")
+    # Chrome 은 대표 앱 표, 재배포/업데이트는 참고로 빠지고, winget list 없이 Acme 는 '추정'으로 남는다
     res = find_manual_installs(registry, winget)
-    assert [(p.name, m.grade if m else None) for p, m in res] == [("Rhino 8", None), ("Google Chrome", PROBABLE)]
+    assert [(p.name, m.grade if m else None) for p, m in res] == [("Rhino 8", None), ("Acme Widget", PROBABLE)]
 
 
 # --------------------------------------------------------------------- B. 체크리스트
 
 def test_checklist_dedups_and_merges_sources():
-    pairs = [("Revit", ["라이선스 재로그인", "캐시 재동기화"]), ("AutoCAD", ["라이선스 재로그인"]),
-             ("X", [COMMON_WARNINGS[1]])]  # 공통 항목과 같은 문구는 중복 제거
-    cl = build_checklist(pairs, [Program("Rhino 8")], [Program("a.b", source="winget", winget_id="a.b")])
-    assert cl.program_items == ["라이선스 재로그인 (Revit, AutoCAD)", "캐시 재동기화 (Revit)"]
-    assert len(cl.common_items) == len(set(cl.common_items)) == len(COMMON_WARNINGS)
-    assert cl.manual_installs == ["Rhino 8 — 매칭 근거: 없음"]
-    assert cl.count == 2 + len(COMMON_WARNINGS) + 1
+    pairs = [("Revit", ["라이선스 재로그인", "캐시 재동기화"]), ("AutoCAD", ["라이선스 재로그인"])]
+    cl = build_checklist(pairs, [Program("Rhino 8")], wg("a.b"))
+    assert "라이선스 재로그인 (Revit, AutoCAD)" in cl.login
+    assert "캐시 재동기화 (Revit)" in cl.data
+    assert cl.install == ["Rhino 8 — 매칭 근거: 없음"]
 
 
 def test_common_warnings_cover_claude_md_items():
-    text = " ".join(COMMON_WARNINGS)
+    text = " ".join(i.text for i in COMMON_ITEMS)
     for kw in ["Autodesk", "Revit 로컬 캐시", "동글", "Rhino", "V-Ray", "Enscape", "Lumion", "ArchiCAD",
-               "GPU", "DPAPI", "카카오톡", "공인인증서", "금융보안", "OneDrive", "Office", "Adobe CC"]:
+               "GPU", "DPAPI", "카카오톡", "공인인증서", "금융보안", "OneDrive", "Office", "Adobe"]:
         assert kw in text
 
 
 @pytest.mark.parametrize("fmt", ["text", "md"])
 def test_render_has_checkboxes_sections_and_winget_guide(fmt):
-    cl = build_checklist([("Revit", ["w1"])], [Program("Rhino 8")],
-                         [Program("a.b", source="winget", winget_id="a.b")])
+    cl = build_checklist([("Revit", ["w1"])], [Program("Rhino 8")], wg("a.b"))
     out = render(cl, fmt)
     assert "- [ ] w1 (Revit)" in out and "- [ ] Rhino 8 — 매칭 근거: 없음" in out
-    assert "수동 설치 필요" in out and "--ignore-unavailable" in out
+    assert "1. 새 PC 에서 먼저 설치" in out and "--ignore-unavailable" in out
     assert "자동 실행하지 않습니다" in out
 
 
-def test_render_without_winget_list_says_not_compared():
+def test_render_without_winget_list_says_so():
     out = render(build_checklist([], [Program("Rhino 8")], None))
-    assert "비교하지 못했습니다" in out and "Rhino 8" not in out
+    assert "winget 목록이 없어" in out and "Rhino 8" in out  # 비교는 못 해도 설치 항목은 남긴다
 
 
 def patch_detection(monkeypatch, registry, winget_text, list_text=None):
@@ -173,7 +171,7 @@ def test_cli_checklist_stdout(tmp_path, monkeypatch, rules_dir, capsys):
     patch_detection(monkeypatch, [Program("Demo App")], None)
     assert cli.main(["checklist", "--rules", str(rules_dir)]) == 0
     out = capsys.readouterr().out
-    assert "[ ] 데모 재로그인" in out and "비교하지 못했습니다" in out
+    assert "[ ] 데모 재로그인" in out and "winget 목록이 없어" in out
 
 
 def test_scan_prints_hint(monkeypatch, rules_dir, capsys):
@@ -238,7 +236,7 @@ def wg(*ids):
 
 
 def section_of(text):
-    return text.split("수동 설치 필요")[1].split("신 PC 에서")[0]
+    return text.split("수동 설치(")[1].split("2. 로그인")[0]
 
 
 def test_parse_winget_list_links_names_without_column_widths():
@@ -282,16 +280,14 @@ def test_version_mismatch_is_not_certain():
 
 
 def test_publisher_product_probable_and_fallback_without_list():
-    registry = [Program("Google Chrome", "1", "Google LLC"), Program("7-Zip 23.01 (x64)", "23.01", "Igor Pavlov"),
-                Program("Microsoft Visual Studio Code", "1", "Microsoft Corporation"),
-                Program("Microsoft Visual Studio Community 2022", "1", "Microsoft")]
-    ids = ["Google.Chrome", "7zip.7zip", "Microsoft.VisualStudioCode"]
+    registry = [Program("Acme Widget", "1", "Acme Inc"), Program("Foo Bar Pro 2", "2", "Foo"),
+                Program("Zed Studio", "1", "Zed Corp"), Program("Acme Widget Server", "1", "Acme Inc")]
+    ids = ["Acme.Widget", "Foo.BarPro2", "Zed.Studio"]
     res = {p.name: m for p, m in find_manual_installs(registry, wg(*ids), None)}  # winget list 없음
     assert all(m is None or m.grade != CERTAIN for m in res.values())  # 확실 판정 불가
-    assert res["Google Chrome"].grade == PROBABLE and res["Google Chrome"].strength == 2
-    assert res["Microsoft Visual Studio Code"].strength == 2
-    assert res["7-Zip 23.01 (x64)"].strength == 2
-    assert res["Microsoft Visual Studio Community 2022"] is None  # 엉뚱한 VS 제품은 매칭 안 됨
+    assert res["Acme Widget"].grade == PROBABLE and res["Acme Widget"].strength == 2
+    assert res["Zed Studio"].strength == 2
+    assert res["Acme Widget Server"].strength == 1  # 약한 조각 포함
 
 
 def test_company_suffixes_ignored_in_publisher_compare():
@@ -302,13 +298,12 @@ def test_company_suffixes_ignored_in_publisher_compare():
 
 
 def test_render_shows_grades_and_hint_when_list_missing():
-    reg = [Program("Google Chrome", "1", "Google LLC"), Program("Rhino 8")]
-    out = render(build_checklist([], reg, wg("Google.Chrome"), None))
+    reg = [Program("Acme Widget", "1", "Acme Inc"), Program("Rhino 8")]
+    out = render(build_checklist([], reg, wg("Acme.Widget"), None))
     assert "매칭 근거: 추정" in out and "매칭 근거: 없음" in out
     assert "'확실' 판정을 하지 못했습니다" in out
-    out2 = render(build_checklist([], reg, wg("Google.Chrome"),
-                                  "Google Chrome  Google.Chrome  1  winget\n"))
-    assert "Google Chrome" not in section_of(out2)
+    out2 = render(build_checklist([], reg, wg("Acme.Widget"), "Acme Widget  Acme.Widget  1  winget\n"))
+    assert "Acme Widget" not in section_of(out2)
     assert "판정을 하지 못했습니다" not in out2
 
 

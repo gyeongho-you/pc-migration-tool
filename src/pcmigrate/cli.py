@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -17,6 +18,38 @@ from .transfer import TransferError, transfer
 from .rules import RuleError, default_rules_dir, load_rules
 
 NEEDS_CONFIRM = 2  # import 에 --yes 가 없어 복원하지 않고 종료
+
+# 셸이 확장하지 못한 환경변수(cmd 의 %VAR%, PowerShell 의 $env:VAR)가 그대로 들어온 경로
+_UNEXPANDED = re.compile(r"%[A-Za-z_][A-Za-z0-9_]*%|\$env:", re.I)
+_SHELL_HINT = ("힌트: cmd 에서는 %TEMP%, PowerShell 에서는 $env:TEMP 를 쓰세요"
+               "(PowerShell 에서 %TEMP% 는, cmd 에서 $env:TEMP 는 확장되지 않습니다. Git Bash 는 $TEMP).")
+
+
+def _cause(exc: OSError) -> str:
+    return getattr(exc, "strerror", None) or str(exc)
+
+
+def _write_failed(path: str, exc: OSError) -> int:
+    """파일 쓰기 실패를 traceback 대신 한 줄로 알린다."""
+    path = exc.filename if isinstance(getattr(exc, "filename", None), str) else path
+    print(f"출력 경로를 만들 수 없습니다: {path} ({_cause(exc)})", file=sys.stderr)
+    if _UNEXPANDED.search(path):
+        print(_SHELL_HINT, file=sys.stderr)
+    elif isinstance(exc, FileNotFoundError) or getattr(exc, "winerror", None) in (3, 15):
+        print("힌트: 드라이브 문자와 폴더 이름이 맞는지 확인하세요(존재하지 않는 드라이브/폴더일 수 있습니다).",
+              file=sys.stderr)
+    return 1
+
+
+def _unexpanded(**paths: str | None) -> bool:
+    """환경변수가 확장되지 않은 경로 인자가 있으면 알리고 True(그대로 쓰면 '%TEMP%' 폴더가 생길 수 있음)."""
+    for label, value in paths.items():
+        if value and _UNEXPANDED.search(value):
+            print(f"출력 경로를 만들 수 없습니다: {value} (환경변수가 확장되지 않았습니다: --{label})",
+                  file=sys.stderr)
+            print(_SHELL_HINT, file=sys.stderr)
+            return True
+    return False
 
 
 def programs_registry(programs):
@@ -52,14 +85,20 @@ def _cmd_scan(args: argparse.Namespace) -> int:
     }
     print(json.dumps(out, ensure_ascii=False, indent=2))
     _print_checklist_hint(build_checklist(rule_warning_pairs(matched), programs_registry(programs),
-                                          winget_programs(programs), winget_list_raw()))
+                                          winget_programs(programs), winget_list_raw(),
+                                          rule_ids=[r.id for r in matched]))
     return 0
 
 
 def _cmd_copy(args: argparse.Namespace) -> int:
+    if _unexpanded(src=args.src, dst=args.dst, report=args.report):
+        return 1
     report = copy_tree(Path(args.src), Path(args.dst), dry_run=args.dry_run)
     if args.report:
-        report.write(Path(args.report))
+        try:
+            report.write(Path(args.report))
+        except OSError as e:
+            return _write_failed(args.report, e)
     summary = report.to_dict()
     print(json.dumps({"dry_run": summary["dry_run"], "summary": summary["summary"]},
                      ensure_ascii=False))
@@ -72,16 +111,23 @@ def _cmd_transfer(args: argparse.Namespace) -> int:
     def warn(msg: str) -> None:
         print(f"[경고] {msg}", file=sys.stderr)
 
+    if _unexpanded(src=args.src, dst=args.dst, report=args.report, log=args.log):
+        return 1
     try:
         report = transfer(Path(args.src), Path(args.dst), dry_run=args.dry_run,
                           include_cloud=args.include_cloud,
                           log_path=Path(args.log) if args.log else None, warn=warn,
                           strict=args.strict)
-    except (TransferError, OSError) as e:
+    except TransferError as e:
         print(f"전송 실패: {e}", file=sys.stderr)
         return 1
+    except OSError as e:
+        return _write_failed(args.dst, e)
     if args.report:
-        report.write(Path(args.report))
+        try:
+            report.write(Path(args.report))
+        except OSError as e:
+            return _write_failed(args.report, e)
     d = report.to_dict()
     print(json.dumps({"dry_run": d["dry_run"], "summary": d["summary"],
                       "robocopy_exit": d.get("robocopy_exit"),
@@ -92,6 +138,9 @@ def _cmd_transfer(args: argparse.Namespace) -> int:
 
 
 def _cmd_checklist(args: argparse.Namespace) -> int:
+    if _unexpanded(output=args.output, package=args.package):
+        return 1
+    rule_ids: list[str] = []
     if args.package:
         manifest, problems = verify_package(Path(args.package))
         if manifest is None or problems:
@@ -99,6 +148,7 @@ def _cmd_checklist(args: argparse.Namespace) -> int:
             return 1
         registry, winget, list_text = load_package_programs(Path(args.package))
         pairs = manifest_warning_pairs(manifest)
+        rule_ids = [r["id"] for r in manifest.get("rules", [])]
     else:
         try:
             rules = load_rules(Path(args.rules))
@@ -109,10 +159,16 @@ def _cmd_checklist(args: argparse.Namespace) -> int:
         winget = parse_winget_export(winget_text) if winget_text else []
         list_text = winget_list_raw() if winget_text else None
         registry = read_registry_programs()
-        pairs = rule_warning_pairs(match_rules(rules, registry + winget))
-    text = render(build_checklist(pairs, registry, winget, list_text), args.format)
+        matched = match_rules(rules, registry + winget)
+        pairs = rule_warning_pairs(matched)
+        rule_ids = [r.id for r in matched]
+    text = render(build_checklist(pairs, registry, winget, list_text, rule_ids=rule_ids,
+                                  show_all=args.all), args.format)
     if args.output:
-        write_output(Path(args.output), text)
+        try:
+            write_output(Path(args.output), text)
+        except OSError as e:
+            return _write_failed(args.output, e)
         print(f"체크리스트를 저장했습니다: {args.output}", file=sys.stderr)
     else:
         sys.stdout.reconfigure(encoding="utf-8") if hasattr(sys.stdout, "reconfigure") else None
@@ -121,6 +177,8 @@ def _cmd_checklist(args: argparse.Namespace) -> int:
 
 
 def _cmd_export(args: argparse.Namespace) -> int:
+    if _unexpanded(output=args.output):
+        return 1
     try:
         rules = load_rules(Path(args.rules))
     except RuleError as e:
@@ -137,16 +195,18 @@ def _cmd_export(args: argparse.Namespace) -> int:
     try:
         manifest = export_package(matched, Path(args.output), registry, winget_text,
                                   winget_list_text=list_text)
-    except (PackageError, OSError) as e:
+    except PackageError as e:
         print(f"내보내기 실패: {e}", file=sys.stderr)
         return 1
+    except OSError as e:
+        return _write_failed(args.output, e)
     print(json.dumps({"output": args.output, "rules": [r["id"] for r in manifest["rules"]],
                       "files": len(manifest["files"]), "skipped": len(manifest["skipped"]),
                       "failed": len(manifest["failed"])}, ensure_ascii=False))
     _print_warnings(manifest.get("manual_warnings", []))
     _print_checklist_hint(build_checklist(manifest_warning_pairs(manifest), registry,
                                           parse_winget_export(winget_text) if winget_text else [],
-                                          list_text))
+                                          list_text, rule_ids=[r["id"] for r in manifest["rules"]]))
     return 1 if manifest["failed"] else 0
 
 
@@ -159,6 +219,8 @@ def _print_warnings(warnings: list[dict]) -> None:
 
 
 def _cmd_import(args: argparse.Namespace) -> int:
+    if _unexpanded(package=args.package, report=args.report):
+        return 1
     try:
         rules = load_rules(Path(args.rules))
     except RuleError as e:
@@ -186,7 +248,10 @@ def _cmd_import(args: argparse.Namespace) -> int:
     print("실제 복원을 시작합니다. 덮어쓸 파일은 .bak 으로 백업됩니다.", file=sys.stderr)
     report = apply_import(Path(args.package), plan)
     if args.report:
-        report.write(Path(args.report))
+        try:
+            report.write(Path(args.report))
+        except OSError as e:
+            return _write_failed(args.report, e)
     print(json.dumps({"dry_run": False, "summary": report.to_dict()["summary"]}, ensure_ascii=False))
     for r in report.failures:
         print(f"실패: {r.dst} -> {r.error}", file=sys.stderr)
@@ -207,6 +272,8 @@ def build_parser() -> argparse.ArgumentParser:
     k.add_argument("--format", choices=("text", "md"), default="text")
     k.add_argument("--output", help="파일로 저장(기존 파일은 .bak 보존)")
     k.add_argument("--rules", default=str(default_rules_dir()), help="규칙 JSON 폴더")
+    k.add_argument("--all", action="store_true",
+                   help="이 PC 에 없는 프로그램 관련 경고와 참고(설치 불필요 추정) 목록도 모두 표시")
     k.add_argument("--package", help="export 한 .zip 의 manifest/프로그램 목록 기준으로 작성(신 PC 용)")
     k.set_defaults(func=_cmd_checklist)
 
