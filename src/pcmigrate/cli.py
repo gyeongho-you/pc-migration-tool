@@ -12,7 +12,8 @@ from pathlib import Path
 from . import __version__, envpaths, errorlog, failure, fs, summary
 from .api import (NEEDS_CONFIRM, ApiError, Deps, check_outputs_outside, check_path_forms, check_unexpanded, clean_path_arg,
                   clean_state_files, format_write_error, load_rules_checked, report_inside, run_checklist, run_copy,
-                  run_discover, run_export, run_export_retry, run_import, run_install_check, run_join, run_manifest, run_scan, run_transfer,
+                  run_discover, run_export, run_export_retry, run_find_program, run_import, run_install_check, run_join, run_manifest,
+                  run_scan, run_transfer,
                   run_verify, run_winget_extract, same_file, selection_json)
 from .checklist import write_output
 from .detect import read_registry_programs, winget_export_raw, winget_list_raw
@@ -21,6 +22,7 @@ from .manifest import ManifestError, build_manifest, verify_against_manifest
 from .progress import ProgressInfo, format_info
 from .scan import skipped_links_view
 from .discover import render as render_discovery
+from .find_program import render as render_find
 from .discover import summarize
 from .package import export_package, plan_import, retry_failed_export
 from .rules import default_rules_dir
@@ -488,11 +490,17 @@ def _cmd_discover(args: argparse.Namespace) -> int:
             or _output_is_dir(output=args.output, **{"output-selection": args.output_selection})):
         return 1
     try:
-        d = run_discover(args.rules, min_size_kb=args.min_size_kb, show_all=args.all,
-                         progress=lambda m: print(m, file=sys.stderr), deps=_deps())
+        if args.program:  # 프로그램 하나의 설정 위치만 국소적으로 찾는다(전체 탐지보다 빠름)
+            found = run_find_program(args.rules, args.program, deps=_deps(), total_limit=args.find_time_limit,
+                                     progress=lambda m: print(m, file=sys.stderr))
+            d = found.as_discovery()
+            text = render_find(found, args.format)
+        else:
+            d = run_discover(args.rules, min_size_kb=args.min_size_kb, show_all=args.all,
+                             progress=lambda m: print(m, file=sys.stderr), deps=_deps())
+            text = render_discovery(d, args.format, args.all)
     except ApiError as e:
         return _fail(e)
-    text = render_discovery(d, args.format, args.all)
     if args.output:
         try:
             write_output(Path(args.output), text)
@@ -507,6 +515,8 @@ def _cmd_discover(args: argparse.Namespace) -> int:
         except OSError as e:
             return _write_failed(args.output_selection, e)
         _err(f"선택 파일 템플릿을 저장했습니다(모두 include:false): {args.output_selection}")
+    if args.program:
+        return 0
     print(f"규칙 없는 설치 프로그램 {d.program_count}개, 설정 폴더 후보 {d.candidate_count}개"
           f"(비밀 정보 가능성 {d.secret_count}개).", file=sys.stderr)
     return 0
@@ -559,7 +569,8 @@ def _cmd_export(args: argparse.Namespace) -> int:
     try:
         r = run_export(args.rules, args.output, extra=args.extra, allow_secrets=args.allow_secrets,
                        deps=_deps(), progress_info=_cli_info_progress(), resume=args.resume and not args.restart,
-                       compress=args.compress, notice=lambda m: _err(f"[이어받기] {m}"), stage_dir=args.stage_dir)
+                       compress=args.compress, notice=lambda m: _err(f"[이어받기] {m}"), stage_dir=args.stage_dir,
+                       include_caches=args.include_caches)
     except ApiError as e:
         return _fail(e)
     except OSError as e:
@@ -741,6 +752,9 @@ def build_parser() -> argparse.ArgumentParser:
     dv.add_argument("--min-size-kb", type=int, default=0, help="이 크기(KB)보다 작은 후보는 숨김(비밀 정보 가능성 제외)")
     dv.add_argument("--all", action="store_true", help="제조사 번들, 규칙이 있는 프로그램 쪽 폴더, 연결 못 한 폴더도 표시")
     dv.add_argument("--output-selection", type=_path_arg, help="export --extra 용 선택 파일 템플릿 생성(모두 include:false)")
+    dv.add_argument("--program", metavar="이름", help="이 프로그램(설치된 프로그램 이름)의 설정 위치만 국소적으로 찾는다. "
+                    "이름·게시자·설치 경로에서 뽑은 토큰으로 AppData/Documents/ProgramData/홈 점 폴더를 찾고 설치 폴더의 설정 형식 파일은 참고로 보여 준다")
+    dv.add_argument("--find-time-limit", type=float, default=30.0, help="--program 의 크기 계산 시간 상한(초, 기본 30)")
     dv.add_argument("--rules", type=_path_arg, default=str(default_rules_dir()), help="규칙 JSON 폴더")
     dv.set_defaults(func=_cmd_discover)
 
@@ -749,6 +763,9 @@ def build_parser() -> argparse.ArgumentParser:
     e.add_argument("--extra", type=_path_arg, help="discover --output-selection 으로 만들고 사용자가 고른 선택 파일(규칙 없는 폴더 포함)")
     e.add_argument("--allow-secrets", action="store_true",
                    help="선택 항목에 비밀 정보 가능성이 있어도 포함(내용을 확인한 경우에만)")
+    e.add_argument("--include-caches", action="store_true",
+                   help="직접 고른 폴더 안의 재생성되는 임시 저장물(Cache, GPUCache, Code Cache, node_modules, logs 등 정확히 일치하는 이름)도 포함. "
+                        "기본은 제외하고 이름/파일 수/용량만 기록(규칙 경로 안은 규칙이 정함)")
     e.add_argument("--rules", type=_path_arg, default=str(default_rules_dir()), help="규칙 JSON 폴더")
     e.add_argument("--resume", action=argparse.BooleanOptionalAction, default=True,
                    help="이전에 중단된 같은 내보내기(<출력>.part)가 있으면 저장점부터 이어서 합니다(기본 켬). "

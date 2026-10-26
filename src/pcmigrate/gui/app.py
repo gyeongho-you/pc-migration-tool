@@ -246,6 +246,9 @@ class App(tk.Tk):
             v = cls(self, self.c)
             v.grid(row=0, column=0, sticky="nsew")
             self.views[cls.name] = v
+        for name, v in self.views.items():  # 보이는 화면 하나만 배치 대상으로 둔다(숨은 화면까지 매번 다시 배치하지 않게)
+            if name != S.START:
+                v.grid_remove()
         self.c.listener = self.on_event
         self.bind_all("<Return>", self._on_return)
         self.bind_all("<Escape>", self._on_escape)
@@ -374,49 +377,67 @@ class App(tk.Tk):
 
     # ------------------------------------------------------------------ 화면/도움말/키
     def show(self, screen: str) -> None:
+        """화면 전환. 모든 화면을 '아래에 가려진 채' 먼저 다 채우고(내용, 상단 단계 표시, 현황 카드, 하단 막대) 마지막에 한 번에 올린다.
+        화면이 부분부분 바뀌는 깜빡임(랙처럼 보임)을 막기 위해 보이는 일은 tkraise 하나뿐이다."""
         view = self.views[screen]
+        previous = self.views.get(self.current) if self.current != screen else None
         self.current = screen
-        if getattr(view, "fill_hidden", False):
-            view.on_show()  # 아직 아래에 가려진 채로 내용을 먼저 채운 뒤 올린다(깜빡임 방지)
-            view.update_idletasks()
-            view.tkraise()
-            self.crumb.configure(text=T.TITLES.get(screen, screen))
-            self.update_overall()
-        else:
-            view.tkraise()
-            self.crumb.configure(text=T.CRUMB_HOME if screen == S.START else T.TITLES.get(screen, screen))
-            self.update_overall()
-            view.on_show()
+        view.grid()  # grid_remove 로 숨겨 둔 화면을 다시 배치 대상으로(원래 옵션을 기억한다)
+        self.crumb.configure(text=T.CRUMB_HOME if screen == S.START else T.TITLES.get(screen, screen))
+        self.update_overall()
+        view.on_show()
         view.refresh_card()
         self._sync_footer()
+        view.update_idletasks()  # 가려진 채로 배치까지 끝낸다
+        view.tkraise()
+        if previous is not None and previous is not view:
+            previous.grid_remove()
 
     def update_overall(self) -> None:
-        """맨 위의 '전체 단계 n/N' 과 단계 이름 표시(흐름 안의 화면에서만)."""
+        """맨 위의 '전체 단계 n/N' 과 단계 이름 표시(흐름 안의 화면에서만). 단계 칩은 만들어 둔 것을 재사용하고 바뀐 것만 고친다."""
         mode, stage = self.c.flow()
         step = S.overall_step(self.current, mode, stage)
         if step is None:
-            self.overall.pack_forget()
+            if self.overall.winfo_manager():
+                self.overall.pack_forget()
             return
         n, total, flow, title = step
         names = S.overall_names(self.current, mode)
-        self.overall.pack(fill="x", after=self.header_sep)
-        self.overall_label.configure(text=T.OVERALL_FMT.format(n=n, total=total))
-        self.overall_flow.configure(text=flow)
+        if not self.overall.winfo_manager():
+            self.overall.pack(fill="x", after=self.header_sep)
+        self._set_text(self.overall_label, T.OVERALL_FMT.format(n=n, total=total))
+        self._set_text(self.overall_flow, flow)
         while len(self.overall_chips) < total:
             chip = tk.Label(self.overall, text="", padx=8, pady=1)
-            chip.pack(side="left", padx=(8, 0), before=self.overall_flow)
             self.overall_chips.append(chip)
+            chip._look = None  # type: ignore[attr-defined]
         for i, chip in enumerate(self.overall_chips):
             if i >= total:
-                chip.pack_forget()
+                if chip.winfo_manager():
+                    chip.pack_forget()
                 continue
-            chip.pack(side="left", padx=(8, 0), before=self.overall_flow)
             state = "done" if i + 1 < n else "current" if i + 1 == n else "todo"
             name = names[i] if i < len(names) else ""
-            chip.configure(text=(T.ICON_OK + " " if state == "done" else "") + f"{i + 1} {name}".strip(),
-                           bg=INFO_FG if state == "current" else CHIP_DONE_BG if state == "done" else CHIP_TODO_BG,
-                           fg="white" if state == "current" else OK_FG if state == "done" else MUTED_FG,
-                           font=C.BOLD_FONT if state == "current" else C.BODY_FONT)
+            look = ((T.ICON_OK + " " if state == "done" else "") + f"{i + 1} {name}".strip(), state)
+            if getattr(chip, "_look", None) != look:  # 바뀐 칩만 다시 그린다
+                chip._look = look  # type: ignore[attr-defined]
+                chip.configure(text=look[0],
+                               bg=INFO_FG if state == "current" else CHIP_DONE_BG if state == "done" else CHIP_TODO_BG,
+                               fg="white" if state == "current" else OK_FG if state == "done" else MUTED_FG,
+                               font=C.BOLD_FONT if state == "current" else C.BODY_FONT)
+        # 칩 순서를 지키려고, 보이는 칩이 달라졌을 때만 다시 쌓는다
+        want = [ch for i, ch in enumerate(self.overall_chips) if i < total]
+        if [ch for ch in self.overall_chips if ch.winfo_manager()] != want:
+            for ch in self.overall_chips:
+                if ch.winfo_manager():
+                    ch.pack_forget()
+            for ch in want:
+                ch.pack(side="left", padx=(8, 0), before=self.overall_flow)
+
+    @staticmethod
+    def _set_text(label: tk.Label, text: str) -> None:
+        if str(label.cget("text")) != text:
+            label.configure(text=text)
 
     def show_error(self, err: FriendlyError) -> ErrorDialog:
         """오류 대화상자(문제 보고서 저장/로그 폴더 열기/오류 내용 복사 버튼 포함)."""

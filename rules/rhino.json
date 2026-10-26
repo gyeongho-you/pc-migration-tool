@@ -1,7 +1,7 @@
 {
   "id": "rhino",
   "name": "Rhinoceros / Grasshopper",
-  "version": "4",
+  "version": "5",
   "detect": {
     "display_name_patterns": [
       "Rhinoceros",
@@ -30,19 +30,19 @@
       "path": "%APPDATA%\\McNeel\\Rhinoceros\\*\\settings",
       "dest": "rhino/settings",
       "kind": "dir",
-      "description": "버전별 사용자 설정 폴더(Rhino 8 의 settings-Scheme__Default.xml 포함, 원문)"
+      "description": "Rhino 버전별 사용자 설정 폴더(Rhino 8 설정 파일 포함)"
     },
     {
       "path": "%APPDATA%\\McNeel\\Rhinoceros\\8.0\\Localization",
       "dest": "rhino/localization",
       "kind": "dir",
-      "description": "Rhino 8 Localization 폴더(원문 등급, 위치 재확인 필요)"
+      "description": "Rhino 8 언어(Localization) 폴더(위치는 설치마다 다를 수 있어 확인 필요)"
     },
     {
       "path": "%APPDATA%\\McNeel\\Rhinoceros\\8.0\\Plug-ins\\*\\settings",
       "dest": "rhino/plugin-settings",
       "kind": "dir",
-      "description": "Rhino 8 플러그인별 설정(<이름 (GUID)>\\settings, 요약)"
+      "description": "Rhino 8 플러그인별 설정(플러그인 이름 폴더 아래 settings)"
     }
   ],
   "manual_warnings": [

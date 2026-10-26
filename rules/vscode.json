@@ -19,19 +19,19 @@
       "path": "%APPDATA%\\Code\\User\\settings.json",
       "dest": "vscode/User/settings.json",
       "kind": "file",
-      "description": "사용자 설정"
+      "description": "VS Code 사용자 설정(settings.json)"
     },
     {
       "path": "%APPDATA%\\Code\\User\\keybindings.json",
       "dest": "vscode/User/keybindings.json",
       "kind": "file",
-      "description": "사용자 단축키"
+      "description": "VS Code 사용자 단축키(keybindings.json)"
     },
     {
       "path": "%APPDATA%\\Code\\User\\snippets",
       "dest": "vscode/User/snippets",
       "kind": "dir",
-      "description": "사용자 스니펫"
+      "description": "VS Code 사용자 코드 조각(snippets 폴더)"
     }
   ],
   "manual_warnings": [
@@ -39,7 +39,7 @@
     "Settings Sync(GitHub/Microsoft 계정)를 쓰고 있다면 신 PC에서 로그인으로 복원하는 편이 안전합니다."
   ],
   "notes": "확인 필요: Insiders/포터블 설치본의 경로는 다름. workspaceStorage/globalStorage 는 용량이 크고 확장 의존적이라 제외함. discover 는 이 규칙이 다루는 %APPDATA%\\Code 와 %USERPROFILE%\\.vscode 를 '규칙 없는 프로그램'으로 중복 표시하지 않는다(규칙이 있는 프로그램 쪽 폴더로 숨김, --all 로 확인).",
-  "version": "4",
+  "version": "5",
   "exclude": [
     "*.lic"
   ]

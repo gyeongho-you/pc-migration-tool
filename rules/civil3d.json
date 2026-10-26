@@ -1,7 +1,7 @@
 {
   "id": "civil3d",
   "name": "Autodesk AutoCAD Civil 3D",
-  "version": "1",
+  "version": "2",
   "detect": {
     "display_name_patterns": [
       "AutoCAD Civil 3D",
@@ -15,19 +15,19 @@
       "path": "%PROGRAMDATA%\\Autodesk\\C3D *\\enu\\Data\\Toolbox",
       "dest": "civil3d/programdata/toolbox",
       "kind": "dir",
-      "description": "Civil 3D Toolbox(보고서/도구 정의, 원문). 언어 폴더 enu"
+      "description": "Civil 3D 도구 상자(Toolbox): 보고서와 도구 정의(영문 언어 폴더)"
     },
     {
       "path": "%PROGRAMDATA%\\Autodesk\\C3D *\\enu\\Survey",
       "dest": "civil3d/programdata/survey",
       "kind": "dir",
-      "description": "Civil 3D 측량(Survey) 설정/데이터 폴더(원문). 언어 폴더 enu"
+      "description": "Civil 3D 측량(Survey) 설정과 데이터 폴더(영문 언어 폴더)"
     },
     {
       "path": "%APPDATA%\\Autodesk\\C3D *\\enu\\Support",
       "dest": "civil3d/support",
       "kind": "dir",
-      "description": "사용자 지원 폴더: Profiles, c3d.cuix, ToolPalette 가 들어 있음(요약)"
+      "description": "Civil 3D 사용자 지원 파일: 작업 프로필, 사용자 메뉴/리본(c3d.cuix), 도구 팔레트(영문 언어 폴더)"
     }
   ],
   "manual_warnings": [

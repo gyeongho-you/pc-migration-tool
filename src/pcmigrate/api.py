@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Callable
 
 from .cancel import Cancelled, CancelToken  # noqa: F401  (GUI 가 api 에서 가져다 쓴다)
+from . import coverage
 from .checklist import (Checklist, build_checklist, bundle_reason, load_package_programs,
                         manifest_warning_pairs, render as render_checklist, rule_warning_pairs)
 from .copier import Report, copy_tree
@@ -30,6 +31,7 @@ from .discover import (Discovery, ExtraItem, SelectionError, build_selection, di
                        load_selection,
                        program_has_rule, secret_names, summarize)
 import inspect
+from .find_program import ProgramFind, find_program
 from .install_check import InstallCheck, NewState, check_install, read_new_state
 from .package import (COMPRESS_MODES, ImportPlan, PackageError, apply_import, export_package, extract_winget,
                       is_unfinished_part, plan_import, retry_failed_export, verify_package)
@@ -455,6 +457,34 @@ def run_discover(rules_dir: str | Path, *, min_size_kb: int = 0, show_all: bool 
                     cancel=cancel, **kw)
 
 
+def find_program_in(rules_dir: str | Path, name: str, deps: Deps | None = None):
+    """등록된 설치 프로그램 중 name 과 같은(대소문자 무시) 것 하나. 정확히 일치가 없으면 이름에 name 이 들어 있는 것이 하나일 때만 허용한다."""
+    deps = deps or Deps()
+    reg = programs_registry(deps.registry())
+    low = name.strip().lower()
+    exact = [p for p in reg if p.name.lower() == low]
+    hits = exact or [p for p in reg if low and low in p.name.lower()]
+    names = sorted({p.name for p in hits})
+    if not hits:
+        raise ApiError(f"설치된 프로그램에서 '{name}' 을(를) 찾지 못했습니다.",
+                       lines=["힌트: pcmigrate discover 로 규칙 없는 프로그램 목록을 보고 이름을 그대로 쓰세요."])
+    if len(names) > 1:
+        raise ApiError(f"'{name}' 과(와) 일치하는 프로그램이 {len(names)}개입니다. 더 정확한 이름을 쓰세요.",
+                       lines=[f"  - {n}" for n in names[:10]])
+    return hits[0]
+
+
+def run_find_program(rules_dir: str | Path, name: str, *, deps: Deps | None = None, total_limit: float = 30.0,
+                     progress: Callable[[str], None] | None = None, cancel: Callable[[], bool] | None = None,
+                     progress_info: Callable[[ProgressInfo], None] | None = None) -> ProgramFind:
+    """'이 프로그램 설정 찾기': 프로그램 하나의 설정 위치만 국소적으로 찾는다(읽기 전용, 자동 선택 없음). name 은 설치 프로그램 이름."""
+    deps = deps or Deps()
+    rules = load_rules_checked(rules_dir)
+    program = find_program_in(rules_dir, name, deps)
+    kw = {"progress_info": progress_info} if progress_info else {}
+    return find_program(program, rules, total_limit=total_limit, progress=progress, cancel=cancel, **kw)
+
+
 def selection_json(d: Discovery, show_all: bool = False) -> str:
     return json.dumps(build_selection(d, show_all), ensure_ascii=False, indent=2) + "\n"
 
@@ -521,11 +551,15 @@ class ExportResult:
 
     def summary_dict(self, output: str) -> dict:
         m = self.manifest
+        n_cache, f_cache, b_cache = coverage.cache_totals(m)
         d = {"output": output, "rules": [r["id"] for r in m["rules"]], "files": len(m["files"]),
              "skipped": len(m["skipped"]), "failed": len(m["failed"]), "unreadable": len(self.unreadable),
              "denied": len(self.denied)}
         if self.resume.get("resumed"):
             d["resumed_files"] = self.resume["kept_files"]
+        if n_cache:
+            d["cache_dirs_skipped"], d["cache_files_skipped"], d["cache_bytes_skipped"] = n_cache, f_cache, b_cache
+        d["coverage"] = [{k: r[k] for k in ("program", "what", "status", "files")} for r in coverage.rows(m)]
         return d
 
     def unreadable_lines(self, limit: int = 5) -> list[str]:
@@ -538,12 +572,13 @@ def run_export(rules_dir: str | Path, output: str | Path, *, extra: str | Path |
                progress_info: Callable[[ProgressInfo], None] | None = None,
                resume: bool = True, compress: str = "auto",
                notice: Callable[[str], None] | None = None,
-               stage_dir: str | Path | None = None) -> ExportResult:
+               stage_dir: str | Path | None = None, include_caches: bool = False) -> ExportResult:
     """설정 패키지 내보내기. OSError(출력 경로 문제)는 전파, 나머지 실패는 ApiError.
 
     resume=True 면 같은 출력 경로의 이전 저장점(.part)을 이어받고, False 면 이전 임시물을 지우고 처음부터 만든다.
     compress 는 auto/always/never. notice 는 '이어서 하는 중' 같은 안내 문장을 받는다.
     stage_dir 는 64MB 넘는 파일을 담기 전에 임시로 읽어 두는 폴더의 위치(기본: 출력 폴더). 원본 폴더 안은 거부한다.
+    include_caches=False(기본)면 직접 고른 폴더 안의 재생성되는 임시 저장물(Cache, node_modules 등)은 담지 않는다(skipped 에 기록).
     """
     deps = deps or Deps()
     if compress not in COMPRESS_MODES:
@@ -563,8 +598,9 @@ def run_export(rules_dir: str | Path, output: str | Path, *, extra: str | Path |
     try:
         kw = {"progress_info": progress_info} if progress_info else {}
         # 기본값이 아닌 선택만 넘기고, 받지 못하는(예전/가짜) export 구현에는 넘기지 않는다
-        want = {"resume": resume, "compress": compress, "notice": notice, "stage_dir": str(stage_dir) if stage_dir else None}
-        defaults = {"resume": True, "compress": "auto", "notice": None, "stage_dir": None}
+        want = {"resume": resume, "compress": compress, "notice": notice, "stage_dir": str(stage_dir) if stage_dir else None,
+                "include_caches": include_caches}
+        defaults = {"resume": True, "compress": "auto", "notice": None, "stage_dir": None, "include_caches": False}
         try:
             params = inspect.signature(deps.export).parameters
             varkw = any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
@@ -691,6 +727,7 @@ class ImportResult:
         """미리보기 JSON. 쓰기가 없었으면 dry_run 은 true(실제 상태)로 표시한다."""
         d = {"dry_run": not self.written, "mode": self.mode, "written": self.written,
              "summary": self.summary(), "problems": self.plan.problems, "items": self.plan.items}
+        d["coverage"] = [{k: r[k] for k in ("program", "what", "status", "files")} for r in coverage.rows(self.plan.manifest)]
         if self.git_config_warning:
             d["git_config_warning"] = self.git_config_warning
         return d

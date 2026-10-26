@@ -1,7 +1,7 @@
 {
   "id": "enscape",
   "name": "Enscape",
-  "version": "1",
+  "version": "2",
   "detect": {
     "display_name_patterns": [
       "Enscape"
@@ -14,19 +14,19 @@
       "path": "%USERPROFILE%\\Documents\\Enscape\\Settings",
       "dest": "enscape/documents/settings",
       "kind": "dir",
-      "description": "Enscape 설정/프리셋(.json) (사용자 Documents)"
+      "description": "Enscape 설정과 프리셋(.json) - 내 문서 폴더"
     },
     {
       "path": "%OneDrive%\\Documents\\Enscape\\Settings",
       "dest": "enscape/onedrive/settings",
       "kind": "dir",
-      "description": "Enscape 설정/프리셋(.json) (OneDrive(개인) Documents 리디렉션)"
+      "description": "Enscape 설정과 프리셋(.json) - OneDrive(개인)로 옮겨진 문서 폴더"
     },
     {
       "path": "%OneDriveCommercial%\\Documents\\Enscape\\Settings",
       "dest": "enscape/onedrive-business/settings",
       "kind": "dir",
-      "description": "Enscape 설정/프리셋(.json) (OneDrive(회사/학교) Documents 리디렉션)"
+      "description": "Enscape 설정과 프리셋(.json) - OneDrive(회사/학교)로 옮겨진 문서 폴더"
     }
   ],
   "manual_warnings": [

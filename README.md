@@ -542,6 +542,12 @@ python -m pcmigrate discover --output-selection <폴더>\selection.json
 `--output-selection`으로 만든 선택 파일(모두 `include: false`)에서 필요한 항목만 `true`로 바꾸고
 `export --extra <선택파일>`로 지정합니다. 비밀 정보 가능성이 있는 항목은 `--allow-secrets`를 한 번 더 붙여야 하고,
 신 PC에서 복원할 때도 `import --yes --allow-extra`가 필요합니다(`--dry-run`으로 먼저 확인).
+**프로그램 하나만 자세히:** `discover --program "이름"`(GUI 2단계의 "이 프로그램 설정 찾기")은 그 프로그램의 이름/게시자/설치 경로에서 뽑은 단어로 AppData, Documents, ProgramData, 홈의 점 폴더를 이름으로 찾고(시간 상한 `--find-time-limit`, GUI에서는 취소 가능), 각 후보에 크기, 파일 수, 근거(일치한 단어), 신뢰 등급을 붙입니다. 전체 탐색과 달리 캐시/로그/임시 폴더도 찾아 `임시 저장물일 수 있음`/`로그` 배지로 구분하고(자동 선택 없음, 직접 고르면 그대로 담김), 라이선스 폴더는 발견만 표시하며 선택할 수 없습니다(이 도구는 라이선스를 옮기지 않습니다). 설치 폴더의 설정 형식 파일은 참고용 목록으로만 보여 줍니다.
+
+**캐시 자동 제외:** 직접 고른 폴더 안의 다시 만들어지는 폴더(이름이 정확히 `Cache`, `Code Cache`, `GPUCache`, `GrShaderCache`, `ShaderCache`, `DawnCache`, `Crashpad`, `Crash Reports`, `logs`, `node_modules`, `Service Worker/CacheStorage`)는 기본으로 빼고 이름/파일 수/용량을 기록합니다. `export --include-caches`(GUI 고급 옵션 "캐시 폴더도 포함")로 포함합니다. 규칙 경로 안은 규칙의 exclude 가 정합니다.
+
+**설정 확인표:** 내보내기 직후(CLI 요약, GUI 결과)와 `import` 미리보기에 프로그램 / 옮기는 설정 / 상태(담김, 일부만 담김, 이 PC에 없음, 읽지 못함, 직접 해야 함, 제외됨) / 담긴 파일 수가 나옵니다. 이 PC에 없는 설정 위치는 "해당 없음 N곳" 한 줄로 접힙니다(manifest 의 `coverage` 항목, 이전 패키지도 읽힙니다).
+
 포함된 항목에도 export의 기존 안전장치(원본 읽기 전용, 해시 manifest, `*.lic` 제외, 허용 루트 검증, zip 슬립 방어)가 적용됩니다.
 
 `scan`, `checklist`, `export` 마지막에 "규칙 없는 설치 프로그램 N개, 설정 폴더 후보 M개"가 출력됩니다.
