@@ -405,6 +405,15 @@ class App(tk.Tk):
         self.destroy()
 
 
+def _notify_fatal(text: str) -> None:
+    """창 모드 exe 는 표준 오류가 없어 시작 실패가 아무 표시 없이 끝난다. Windows 메시지 상자로 알린다(실패해도 조용히 무시)."""
+    try:
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(None, text, "PC 이전 도우미", 0x10)  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001 - 알림 실패가 종료 코드를 바꾸면 안 된다
+        pass
+
+
 def main(argv: list[str] | None = None) -> int:
     enable_high_dpi()
     try:
@@ -414,13 +423,20 @@ def main(argv: list[str] | None = None) -> int:
     try:
         app = App()
     except tk.TclError as e:
+        path = errorlog.record(e, "GUI 시작(화면)")
+        msg = f"화면을 열 수 없습니다(디스플레이가 없는 환경일 수 있습니다): {e}"
         if sys.stderr is not None:  # 창 모드 exe 에서는 표준 오류가 없다
-            print(f"화면을 열 수 없습니다(디스플레이가 없는 환경일 수 있습니다): {e}", file=sys.stderr)
+            print(msg, file=sys.stderr)
+        else:
+            _notify_fatal("\n".join([msg, f"오류 종류: {type(e).__name__}"] + ([f"기록: {path}"] if path else [])))
         return 1
     except Exception as e:  # noqa: BLE001 - 창을 만들기 전의 예상 밖 오류도 로그에 남긴다
         path = errorlog.record(e, "GUI 시작")
+        where = f"자세한 내용은 {path} 에 기록했습니다." if path else "오류 로그도 남기지 못했습니다(로그 폴더에 쓸 수 없음)."
         if sys.stderr is not None:
-            print(f"예상하지 못한 오류가 났습니다. 자세한 내용은 {path} 에 기록했습니다.", file=sys.stderr)
+            print(f"예상하지 못한 오류가 났습니다. {where}", file=sys.stderr)
+        else:
+            _notify_fatal("\n".join(["예상하지 못한 오류가 나서 시작하지 못했습니다.", f"오류 종류: {type(e).__name__}: {e}", where]))
         return 1
     app.mainloop()
     return 0

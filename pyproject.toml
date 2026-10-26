@@ -15,8 +15,14 @@ dev = ["pytest"]
 [project.scripts]
 pcmigrate = "pcmigrate.cli:main"
 
-[tool.setuptools.packages.find]
-where = ["src"]
+# 저장소 루트의 rules/*.json 을 패키지 데이터(pcmigrate/rules_data/)로 함께 설치한다(pip 일반 설치에서도 규칙이 들어 있도록).
+# 소스 트리/편집 설치에서는 rules.default_rules_dir() 가 저장소의 rules/ 를 그대로 쓴다. exe 는 build_exe.py 의 --add-data 로 번들한다.
+[tool.setuptools]
+package-dir = {"" = "src", "pcmigrate.rules_data" = "rules"}
+packages = ["pcmigrate", "pcmigrate.gui", "pcmigrate.gui.views", "pcmigrate.rules_data"]
+
+[tool.setuptools.package-data]
+"pcmigrate.rules_data" = ["*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

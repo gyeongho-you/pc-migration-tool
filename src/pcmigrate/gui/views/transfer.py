@@ -465,6 +465,8 @@ class TransferView(BaseView):
             text = T.TR_VERIFY_RESULT.format(ok=sm["verified"], mismatch=sm["mismatch"], missing=sm["missing"], failed=sm["failed"],
                                              added=sm["added"])
             ok_msg = T.TR_VERIFY_OK + ("\n" + T.TR_VERIFY_EXTRA_NOTE if sm["added"] else "")
+            if sm["manifest_errors"]:
+                ok_msg = T.TR_MANIFEST_ERRORS.format(n=sm["manifest_errors"])
             self.result.show(ok, 0, failed, ok_msg if not failed else text, T.TR_FAIL_HINT if sm["manifest_complete"] else T.TR_VERIFY_INCOMPLETE)
             self.preview_box.configure(text=text, bg=INFO_BG, fg="black")
             self._show_extras()
@@ -481,7 +483,9 @@ class TransferView(BaseView):
             if io:
                 text += "\n" + T.TR_IO_LINE.format(src_files=io.get("source_files_read", 0), src_bytes=fmt_bytes(io.get("source_read_bytes", 0)),
                                                    dst_files=io.get("dest_files_read", 0), dst_bytes=fmt_bytes(io.get("dest_read_bytes", 0)))
-            self.result.show(ok, skipped, failed, text, T.TR_FAIL_HINT)
+            pending = bool(sm["pending"]) and not failed
+            self.result.show(ok, skipped, failed, text + ("\n" + T.TR_DEFERRED_NOTE if pending else ""), T.TR_FAIL_HINT,
+                             pending=pending)
             self.preview_box.configure(text=text, bg=INFO_BG, fg="black")
             self._show_extras()
         for path, status, err in sm["failures"][:500]:
@@ -506,6 +510,7 @@ class TransferView(BaseView):
             lines.append(T.TR_SPACE_UNKNOWN)
         if meta.get("fat32_blocked"):
             lines.append(T.TR_FAT32_BLOCK.format(big=meta.get("fat32_big_files", 0)))
+        lines.extend(self.c.preview_link_lines())
         if lines:
             self.notes_box.configure(text="\n".join(lines))
             self.notes_box.pack(anchor="w", fill="x", pady=2, after=self.preview_box)

@@ -161,8 +161,12 @@ def load_rules(rules_dir: Path) -> list[Rule]:
 
 
 def default_rules_dir() -> Path:
-    """저장소의 rules/ (소스 트리 실행 기준). PyInstaller exe 에서는 번들된 rules/ (--add-data "rules;rules")."""
+    """저장소의 rules/ (소스 트리 실행 기준). PyInstaller exe 에서는 번들된 rules/ (--add-data "rules;rules"),
+    pip 일반 설치에서는 패키지 안의 rules_data/ (pyproject 의 package-dir 로 저장소 rules/ 를 담는다)."""
     bundled = getattr(sys, "_MEIPASS", None)
     if getattr(sys, "frozen", False) and bundled:
         return Path(bundled) / "rules"
-    return Path(__file__).resolve().parents[2] / "rules"
+    repo = Path(__file__).resolve().parents[2] / "rules"
+    if repo.is_dir() and any(repo.glob("*.json")):
+        return repo  # 소스 트리/편집 설치(pip install -e)
+    return Path(__file__).resolve().parent / "rules_data"  # pip 일반 설치: pyproject 의 package-data 로 들어온 규칙

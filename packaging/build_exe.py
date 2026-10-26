@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -47,6 +48,48 @@ coll = COLLECT(exe_gui, a_gui.binaries, a_gui.datas, exe_cli, a_cli.binaries, a_
 '''
 
 
+WORK_MARKER = ".pcmigrate-build-work"  # 이 도구가 만든 --work 폴더라는 표식. 표식이 있는 폴더만 다시 쓰고 정리한다.
+
+
+class WorkDirError(Exception):
+    """--work 로 지정한 폴더를 안전하게 쓸 수 없음(지우면 안 되는 폴더일 수 있음)."""
+
+
+def _is_same_or_inside(child: Path, parent: Path) -> bool:
+    c, p = os.path.normcase(str(child)), os.path.normcase(str(parent))
+    return c == p or c.startswith(p.rstrip(os.sep + "/") + os.sep)
+
+
+def prepare_work(work: Path, out: Path | None = None) -> Path:
+    """--work 폴더를 검사하고 표식을 만든다. 비어 있지 않은데 표식이 없거나, 지우면 큰일 나는 위치면 WorkDirError.
+
+    이전에는 빌드 뒤에 --work 를 무조건 통째로 지웠기 때문에 `--work` 에 문서 폴더 같은 기존 폴더를 잘못 지정하면 치명적이었다.
+    """
+    work = Path(work).resolve()
+    if work == Path(work.anchor) or work == Path.home().resolve() or work == Path(tempfile.gettempdir()).resolve():
+        raise WorkDirError(f"--work 로 쓸 수 없는 위치입니다(드라이브 루트/사용자 폴더/임시 폴더 자체): {work}")
+    for guarded, what in ((ROOT, "저장소"), (Path.home().resolve(), "사용자 폴더"), (Path(out).resolve() if out else None, "결과 폴더")):
+        if guarded is not None and _is_same_or_inside(guarded, work):
+            raise WorkDirError(f"--work 가 {what}({guarded})를 포함하거나 같습니다. 빌드 뒤 정리에서 지워질 수 있어 거부합니다: {work}")
+    marker = work / WORK_MARKER
+    if work.exists():
+        if not work.is_dir():
+            raise WorkDirError(f"--work 가 폴더가 아닙니다: {work}")
+        if not marker.exists() and any(work.iterdir()):
+            raise WorkDirError(f"--work 폴더가 비어 있지 않고 이 도구가 만든 표식({WORK_MARKER})이 없어 쓰지 않습니다: {work}\n"
+                               "비어 있는 새 폴더 이름(또는 기본값)을 지정하세요. 아무것도 지우지 않았습니다.")
+    work.mkdir(parents=True, exist_ok=True)
+    marker.write_text("pcmigrate build work folder. 빌드가 끝나면 이 폴더를 지워도 됩니다.\n", encoding="utf-8")
+    return work
+
+
+def cleanup_work(work: Path) -> None:
+    """표식이 있는 폴더만 지운다(표식이 없으면 아무것도 하지 않는다)."""
+    work = Path(work).resolve()
+    if (work / WORK_MARKER).is_file():
+        shutil.rmtree(work, ignore_errors=True)
+
+
 def run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
     print("$", " ".join(str(c) for c in cmd), flush=True)
     return subprocess.run(cmd, check=True, **kw)
@@ -69,12 +112,11 @@ def venv_python(venv: Path) -> Path:
 
 
 def build(args: argparse.Namespace) -> list[Path]:
-    work = Path(args.work).resolve()
+    work = Path(args.work).resolve()  # main() 이 prepare_work 로 이미 검사했다
     out = Path(args.out).resolve()
     if ROOT in out.parents and out.name not in ("dist",) and not (out == ROOT / "dist" or ROOT / "dist" in out.parents):
         print(f"경고: 결과 위치 {out} 가 저장소 안입니다. 커밋되지 않게 dist/ 밖이면 .gitignore 를 확인하세요.", file=sys.stderr)
     venv = work / "venv"
-    work.mkdir(parents=True, exist_ok=True)
     if not venv_python(venv).exists():
         run([sys.executable, "-m", "venv", str(venv)])
     py = str(venv_python(venv))
@@ -110,6 +152,22 @@ def build(args: argparse.Namespace) -> list[Path]:
     return outputs
 
 
+def smoke_test(cli_exe: Path, run=subprocess.run) -> tuple[bool, str]:
+    """만든 콘솔 exe 를 실제로 실행해 본다: --version 과 check-rules(번들된 rules/*.json 이 읽히는지). (성공 여부, 메시지)."""
+    r = run([str(cli_exe), "--version"], capture_output=True, text=True, timeout=120)
+    if r.returncode:
+        return False, f"{cli_exe.name} --version 실패(rc={r.returncode})"
+    msg = f"{cli_exe.name} --version -> {r.stdout.strip()}"
+    r = run([str(cli_exe), "check-rules"], capture_output=True, text=True, timeout=120)
+    try:
+        n = int(json.loads(r.stdout.strip().splitlines()[-1])["rules"])
+    except (ValueError, KeyError, IndexError, TypeError):
+        n = 0
+    if r.returncode or n < 1:
+        return False, msg + f"\n규칙 파일이 exe 에 들어 있지 않거나 읽을 수 없습니다(check-rules rc={r.returncode}, 규칙 {n}개)"
+    return True, msg + f", 번들 규칙 {n}개 확인"
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="PyInstaller 로 pcmigrate exe 만들기")
     ap.add_argument("--mode", choices=("onedir", "onefile"), default="onedir",
@@ -119,11 +177,16 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--pyinstaller-version", default=PYINSTALLER_VERSION)
     ap.add_argument("--keep-work", action="store_true", help="빌드 후 가상환경/중간 산출물을 지우지 않음")
     ap.add_argument("--zip", action="store_true", help="onedir 결과를 pcmigrate-win.zip 으로도 묶음")
-    ap.add_argument("--no-smoke", action="store_true", help="빌드 후 pcmigrate.exe --version 확인을 건너뜀")
+    ap.add_argument("--no-smoke", action="store_true", help="빌드 후 pcmigrate.exe 실행 확인(--version, check-rules)을 건너뜀")
     args = ap.parse_args(argv)
     if os.name != "nt":
         print("이 스크립트는 Windows exe 용입니다(다른 OS 에서는 해당 OS 용 실행 파일이 만들어집니다).", file=sys.stderr)
-    work = Path(args.work)
+    try:
+        work = prepare_work(Path(args.work), Path(args.out))
+    except WorkDirError as e:
+        print(f"[거부] {e}", file=sys.stderr)
+        return 2
+    args.work = str(work)
     try:
         exes = build(args)
         print("\n=== 결과 ===")
@@ -138,9 +201,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  폴더 {folder.name}: {folder_size(folder) / 1024 / 1024:.1f}MB (exe 두 개와 _internal 을 포함한 이 폴더를 통째로 배포)")
         if not args.no_smoke:
             cli = [e for e in exes if e.name.startswith("pcmigrate.")][0]
-            r = subprocess.run([str(cli), "--version"], capture_output=True, text=True, timeout=120)
-            print(f"smoke: {cli.name} --version -> rc={r.returncode} {r.stdout.strip()}")
-            if r.returncode:
+            ok, msg = smoke_test(cli)
+            print(f"smoke: {msg}")
+            if not ok:
                 return 1
         if args.zip and args.mode == "onedir":
             zpath = Path(args.out) / "pcmigrate-win.zip"
@@ -153,7 +216,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     finally:
         if not args.keep_work:
-            shutil.rmtree(work, ignore_errors=True)
+            cleanup_work(work)
 
 
 if __name__ == "__main__":

@@ -228,13 +228,19 @@ class ResultSummary(ttk.Frame):
             w.configure(text="")
         self.box.configure(text="", bg=self.winfo_toplevel().cget("background"))
 
-    def show(self, ok: int, skipped: int, failed: int, ok_message: str, fail_message: str) -> None:
-        self.ok_label.configure(text=f"{T.ICON_OK} {T.RESULT_OK} {ok}")
+    def show(self, ok: int, skipped: int, failed: int, ok_message: str, fail_message: str, pending: bool = False) -> None:
+        """pending: 복사는 끝났지만 검사를 미룬 상태 — '성공'이라고 하지 않고 '복사 완료(검증 전)'로 표시한다."""
+        if pending:
+            self.ok_label.configure(text=f"{T.ICON_WARN} {T.TR_PENDING_LABEL} {ok}", foreground=WARN_FG)
+        else:
+            self.ok_label.configure(text=f"{T.ICON_OK} {T.RESULT_OK} {ok}", foreground=OK_FG)
         self.skip_label.configure(text=f"{T.RESULT_SKIPPED} {skipped}")
         self.fail_label.configure(text=f"{T.ICON_FAIL if failed else ''} {T.RESULT_FAILED} {failed}".strip(),
                                   foreground=SECRET_FG if failed else MUTED_FG)
         if failed:
             self.box.configure(text=fail_message, bg=SECRET_BG, fg=SECRET_FG)
+        elif pending:
+            self.box.configure(text=ok_message, bg=INFO_BG, fg=WARN_FG)
         else:
             self.box.configure(text=ok_message, bg=OK_BG, fg=OK_FG)
 

@@ -217,7 +217,9 @@ def test_state_not_trusted_when_destination_changed(tmp_path):
     transfer(src, dst, runner=FakeRobocopy())
     (dst / "a.dwg").write_bytes(b"truncated")  # 대상 손상(크기 다름)
     rep = transfer(src, dst, runner=FakeRobocopy(skip=["a.dwg"]))
-    assert {Path(r.src).name: r.status for r in rep.results}["a.dwg"] == MISMATCH
+    # 16c: 크기가 다른 기존 파일은 복사 전에 .bak 으로 보존된다. 복사 도구가 건드리지 않았다면(여기서는 skip) 대상에 없는 것으로 판정된다
+    assert {Path(r.src).name: r.status for r in rep.results}["a.dwg"] == MISSING
+    assert (dst / "a.dwg.bak").read_bytes() == b"truncated"
 
 
 # --------------------------------------------------------------------- OneDrive 클라우드 전용

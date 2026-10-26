@@ -243,7 +243,10 @@ PREV_SUMMARY = "새로 만들 파일 {new}개, 덮어쓸 파일 {over}개(백업
 PREV_PROBLEMS = f"{ICON_FAIL} 패키지에 문제가 있어 복원할 수 없습니다:\n{{items}}\n→ 구 PC 에서 패키지를 다시 만들어 복사해 보세요."
 PREV_OK = f"{ICON_OK} 패키지 검사 통과(모든 파일 내용이 정확함)"
 PREV_COLS = ("처리", "복원 위치", "백업 파일(.bak) 위치", "구분")
-PREV_STATUS = {"would_copy": "새로 만듦", "would_overwrite": "덮어씀(백업함)", "skipped_identical": "같음(건너뜀)"}
+PREV_STATUS = {"would_copy": "새로 만듦", "would_overwrite": "덮어씀(백업함)", "skipped_identical": "같음(건너뜀)",
+               "rejected": "복원 안 함(링크)"}
+PREV_REJECTED_NOTE = (f"{ICON_WARN} 복원 위치가 바로가기(정션/링크)를 거치는 파일 {{n}}개는 복원되지 않습니다. "
+                      "링크를 없애거나 실제 폴더로 바꾼 뒤 다시 시도하세요(링크 너머에는 쓰지 않습니다).")
 PREV_KIND_RULE, PREV_KIND_EXTRA = "규칙", "직접 고른 항목"
 PREV_WARN_TITLE = "새 PC 에서 직접 해야 할 일(자동 복원 불가)"
 
@@ -264,6 +267,7 @@ RES_HEADING = TITLES[NEW_RESULT]
 RES_NOT_YET = "아직 복원하지 않았습니다."
 RES_COLS = ("구분", "위치", "내용")
 RES_KIND_FAIL, RES_KIND_BAK, RES_KIND_COPY = "실패", "백업", "복사"
+RES_KIND_REJECTED = "복원 안 함"
 RES_BAK_DETAIL = "덮어쓰기 전 파일을 보관함(.bak)"
 BTN_OPEN_RESTORED = "복원된 폴더 열기"
 RES_ALL_OK = f"{ICON_OK} 모든 파일을 복원하고 확인했습니다."
@@ -275,7 +279,7 @@ RES_IMPORT_FAIL = (f"{ICON_FAIL} 실패한 파일이 있습니다. 아래 '실�
 TR_HEADING = TITLES[TRANSFER]
 TR_SUB = ("원본 폴더의 모든 파일을 대상 폴더로 복사하고, 복사된 파일이 정확한지 하나씩 검사합니다(해시). "
           + READ_ONLY_NOTE + " 단, '클라우드 전용 파일 포함'을 켜면 파일을 내려받으므로 이 PC 의 저장 상태가 바뀝니다. "
-          "대상에 같은 이름의 파일이 이미 있으면 백업 없이 덮어쓸 수 있으니 비어 있는 폴더를 고르세요. 중간에 멈추면 같은 설정으로 다시 실행해 이어서 할 수 있습니다.")
+          "대상에 같은 이름의 다른 파일이 이미 있으면 덮어쓰기 전에 같은 폴더에 백업 파일(.bak)로 보관합니다(비어 있는 새 폴더를 고르면 가장 깔끔합니다). 중간에 멈추면 같은 설정으로 다시 실행해 이어서 할 수 있습니다.")
 TR_SRC, TR_DST, TR_REPORT = "원본 폴더:", "대상 폴더:", "결과 파일 저장(선택):"
 TR_DST_HINT = "외장 드라이브(E:\\)나 공유 폴더 경로(\\\\컴퓨터이름\\폴더)를 직접 입력해도 됩니다."
 TR_REPORT_HINT = "복사 결과를 파일(.json)로 남깁니다."
@@ -295,11 +299,11 @@ BTN_TR_CLOUD = "클라우드 전용 파일 보기"
 TR_CLOUD_WIN = "클라우드 전용 파일(건너뜀)"
 TR_CONFIRM_TITLE = "복사 확인"
 TR_CONFIRM = ("다음 위치에 복사합니다(원본은 읽기만 합니다):\n\n원본: {src}\n대상: {dst}\n\n"
-              "대상 폴더에 복사한 파일과 작업 기록 파일 2개(이름이 .pcmigrate- 로 시작)가 만들어집니다."
+              "대상 폴더에 복사한 파일과 작업 기록 파일(이름이 .pcmigrate- 로 시작)이 만들어집니다. 같은 이름의 다른 파일이 이미 있으면 .bak 으로 보관한 뒤 복사합니다."
               "{cloud}\n\n시작하시겠습니까? (진행 중 '취소'로 멈추고 나중에 이어서 할 수 있습니다)")
 TR_CONFIRM_CLOUD = "\n⚠ OneDrive 클라우드 전용 파일을 포함하므로 대량으로 내려받을 수 있습니다."
 TR_COLS = ("구분", "파일", "내용")
-TR_PREVIEW_RESULT = ("미리보기 결과(실제로 바꾸지 않음): 새로 복사 {new}개, 덮어씀 {over}개, 이미 같음 {same}개, "
+TR_PREVIEW_RESULT = ("미리보기 결과(실제로 바꾸지 않음): 새로 복사 {new}개, 덮어씀 {over}개(기존 파일은 .bak 으로 보관), 이미 같음 {same}개, "
                      "클라우드 전용(건너뜀) {cloud}개. 이상이 없으면 '② 복사 시작'을 눌러 주세요.")
 TR_RESULT = "복사 결과: 정확히 복사됨 {ok}개, 내용 다름 {mismatch}개, 빠짐 {missing}개, 실패 {failed}개, 클라우드 전용(건너뜀) {cloud}개"
 TR_RESULT_REPAIRED = ", 다시 복사해 바로잡음 {n}개"
@@ -439,11 +443,20 @@ LOC_WARNING = (f"{ICON_WARN} 복사한 위치가 원래 경로와 다릅니다. 
 XREF_NOTE = (f"{ICON_WARN} 외부 참조(xref)·이미지·데이터 단축은 절대 경로(예: D:\\프로젝트\\...)로 저장된 것이 많습니다. "
              "새 PC 의 드라이브 문자와 폴더 구조를 구 PC 와 같게 맞추면 가장 안전합니다. 열었을 때 참조가 비어 있으면 경로를 다시 지정하세요.")
 TR_KEEP_AWAKE_FAILED = f"{ICON_WARN} 절전 방지를 켜지 못했습니다. 전원 설정에서 잠자기를 꺼 두세요."
-TR_DEFERRED_NOTE = f"{ICON_WARN} 복사본 검사는 아직 하지 않았습니다. 새 PC 에서 '2단계'로 목록 파일과 비교해야 정확한지 알 수 있습니다."
+TR_PRESERVED_NOTE = (f"{ICON_OK} 대상에 있던 같은 이름의 다른 파일 {{n}}개는 덮어쓰기 전에 같은 폴더에 백업 파일(.bak)로 보관했습니다. "
+                     "필요 없으면 확인 후 직접 지우세요.")
+TR_DEFERRED_NOTE = (f"{ICON_WARN} 복사는 끝났지만 복사본 검사는 아직 하지 않았습니다(검증 전). "
+                    "새 PC 에서 '2단계'(verify)로 목록 파일과 비교해야 정확한지 알 수 있습니다.")
+TR_MANIFEST_ERRORS = (f"{ICON_FAIL} 구 PC 에서 읽지 못해 목록에서 빠진 파일이 {{n}}개 있습니다. 이 파일들은 검사되지 않았으므로 "
+                      "'모두 정확함'이 아닙니다. 구 PC 에서 해당 파일을 닫은 뒤 목록을 다시 만드세요.")
+TR_SKIPPED_LINKS = (f"{ICON_WARN} 바로가기/정션(링크) {{n}}개는 따라가지 않고 건너뛰었습니다. 링크 너머의 폴더는 따로 복사해야 합니다."
+                    "{more}\n{paths}")
+TR_SKIPPED_LINKS_MORE = " (아래는 앞 {shown}개만 표시, 전체 목록은 저장한 리포트의 skipped_link_paths 에 있습니다)"
 TR_NEXT_STEP_EXT1 = "다음: 외장 드라이브를 안전하게 제거해 새 PC 로 가져가 2단계를 진행하세요. 검사가 끝나기 전에는 원본을 지우지 마세요."
 TR_NEXT_STEP_NET1 = "다음: 새 PC 에서 이 도구를 실행해 '랜선(네트워크)' → '2단계'로 복사본을 검사하세요. 검사가 끝나기 전에는 원본을 지우지 마세요."
 TR_DONE_REMINDER = "원본은 검사 결과에서 실패가 0 인 것을 확인한 뒤에만 정리하세요. 그 전에는 지우거나 포맷하지 마세요."
-TR_RESULT_PENDING = "복사 결과: 복사 완료 {pending}개(복사본 검사는 새 PC 에서), 실패 {failed}개, 클라우드 전용(건너뜀) {cloud}개"
+TR_RESULT_PENDING = "복사 완료 {pending}개, 새 PC 에서 verify(검사) 필요(아직 검증 전), 실패 {failed}개, 클라우드 전용(건너뜀) {cloud}개"
+TR_PENDING_LABEL = "복사 완료(검증 전)"
 TR_IO_LINE = "읽기 횟수: 원본 {src_files:,}개 {src_bytes}, 복사본 {dst_files:,}개 {dst_bytes}"
 TR_HELP_BTN, TR_COMPARE_BTN = "네트워크 준비 도움말", "두 방식 비교"
 TR_HELP_NETWORK_TITLE, TR_COMPARE_TITLE = "랜선(네트워크)로 옮길 준비", "외장 드라이브와 랜선 비교"

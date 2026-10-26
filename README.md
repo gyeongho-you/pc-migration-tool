@@ -1,8 +1,8 @@
 # pc-migration-tool (PC 이전 도우미)
 
 구 Windows PC의 업무용(건축 CAD/BIM) 환경을 새 PC로 안전하게 옮기는 Python CLI입니다.
-원본은 읽기만 하고, 복사 후 SHA-256으로 검증합니다. 설정 패키지를 복원할 때 덮어쓸 파일은 `.bak`으로 백업합니다
-(대용량 `transfer` 는 예외입니다: 아래 "덮어쓰기와 .bak" 참고). 규칙 폴더(`rules/`)가 없거나 비어 있으면 조용히 넘어가지 않고 오류로 멈춥니다.
+원본은 읽기만 하고, 복사 후 SHA-256으로 검증합니다. 설정 패키지 복원과 대용량 `transfer` 모두 덮어쓸 파일은 `.bak`으로 먼저 보존합니다
+(자세한 방식은 아래 "덮어쓰기와 .bak" 참고). 규칙 폴더(`rules/`)가 없거나 비어 있으면 조용히 넘어가지 않고 오류로 멈춥니다.
 설계 방침과 요구사항은 [CLAUDE.md](CLAUDE.md)를 보세요.
 
 ## 내려받기 (Python 없이 쓰려면)
@@ -25,7 +25,9 @@ Python 이 없는 PC 에서는 [릴리스 페이지](https://github.com/gyeongho
 Python 3.10 이상이 필요하고 외부 패키지는 없습니다(대용량 전송은 Windows 내장 `robocopy`).
 
 ```
-pip install -e .            # 개발용 설치
+pip install -e .            # 개발용 설치(저장소의 rules/ 를 그대로 씀)
+pip install .               # 일반 설치(규칙 JSON 이 패키지 안 pcmigrate/rules_data/ 로 함께 설치됨)
+python -m pcmigrate check-rules   # 규칙 폴더가 읽히는지만 확인(설치 목록은 읽지 않음)
 ```
 
 설치하지 않고 쓰려면 저장소 루트에서 `PYTHONPATH=src`(PowerShell: `$env:PYTHONPATH="src"`)를 지정합니다.
@@ -215,7 +217,8 @@ pyinstaller --noconfirm --noconsole --paths src --add-data "rules;rules" -n pcmi
 pyinstaller --noconfirm --console   --paths src --add-data "rules;rules" -n pcmigrate     packaging\cli_entry.py
 ```
 
-빌드가 끝나면 각 exe 의 크기와 **SHA-256** 을 출력하고 `pcmigrate.exe --version` 으로 간단히 확인합니다.
+빌드가 끝나면 각 exe 의 크기와 **SHA-256** 을 출력하고 `pcmigrate.exe --version` 과 `pcmigrate.exe check-rules`(번들된 규칙이 실제로 읽히는지)로 확인합니다.
+`--work` 로 지정한 폴더는 **비어 있거나 이 스크립트가 만든 표식 파일(`.pcmigrate-build-work`)이 있을 때만** 쓰고 빌드 뒤 정리합니다. 비어 있지 않은데 표식이 없는 폴더나 드라이브 루트/사용자 폴더/저장소를 포함하는 폴더는 아무것도 지우지 않고 종료 코드 2 로 거부합니다.
 출력된 SHA-256 을 받는 사람에게 함께 알려 주세요. exe 와 `dist\`, `build\`, `*.spec` 은 `.gitignore` 대상이라 커밋되지 않습니다.
 
 검증한 범위(Windows 11, 일반 사용자 권한, PATH 에서 Python 제외): `--version`, `scan`, `checklist --output`, `discover`,
@@ -404,12 +407,14 @@ python -m pcmigrate verify --manifest <목록.jsonl> --target <폴더> [--report
                                                                    # 새 PC: 목록과 로컬 폴더 비교(누락/내용 다름/추가 파일), 폴더는 읽기만
 ```
 
+- 검사를 새 PC 로 미룬 복사(랜선/네트워크 + `--manifest-out`)는 CLI JSON 의 `success` 가 `false`, `verification_complete` 가 `false` 이고 "복사 완료, 검증 전: 새 PC 에서 verify 필요" 로 안내합니다(GUI 도 '성공' 대신 '복사 완료(검증 전)'). 건너뛴 정션/링크(앞 200개)는 `[안내]` 로 나열하고 리포트의 `skipped_link_paths` 에 남깁니다. `verify` 결과의 `manifest_errors` 는 구 PC 에서 읽지 못해 목록에서 빠진 파일 수이며 0 이 아니면 `success` 가 `false` 입니다. `import` 에서 복원 위치가 링크를 거쳐 복원하지 않은 파일은 `rejected` 로 세고 실패와 같이 취급합니다(링크 너머에는 쓰지 않음).
 - `verify` 는 대상 폴더를 읽기만 합니다. 결과 파일(`--report`)을 검사할 폴더 안에 저장하려 하면 거부합니다.
 - 복사 도구 실행 중 진행 상황(바이트, 속도, 남은 시간)이 CLI 는 stderr 에 10초마다, GUI 는 아래쪽 진행 막대에 표시됩니다. 속도가 계속 느리면 외장은 "USB 2.0 확인"(40MB/s 미만),
   네트워크는 "링크 속도 100Mbps 확인"(11MB/s 미만) 안내가 서로 다른 문구로 나옵니다.
 - 복사 도구의 종료 코드/오류 줄을 원인별로 나눕니다: 사용 중, 권한, 경로 길이, 공간 부족, 연결 끊김, 네트워크 접속 실패(찾을 수 없음/로그인/충돌/쓰기 권한).
 - 상태 파일(`.pcmigrate-state.json`)은 파일마다 한 줄씩 덧붙이는 **줄 단위 JSON** 이라 파일이 수백만 개여도 이어받기 중 전체를 다시 쓰지 않으며, 전원이 꺼져 마지막 줄이 잘려도 나머지는 쓸 수 있습니다.
-- `.pcmigrate-` 로 시작하는 기록 파일(상태, 로그, 목록)은 다른 폴더로 복사하지 않습니다(외장 2단계에서 외장의 상태 파일이 새 PC 의 상태 파일을 덮어쓰는 일을 막기 위함).
+- 이어받기와 `.bak` 보존: 대상 폴더의 `.pcmigrate-preserve.json` 이 "이 복사가 시작됐는가"를 기억합니다. 중간에 멈춘 복사를 같은 설정으로 다시 실행하면(기록이 `copying`) 대상의 중간 파일은 우리가 쓰던 것이므로 `.bak` 으로 옮기지 않고 이어서 씁니다. 복사가 끝난 뒤(`done`) 원본을 고쳐 다시 실행하면 바뀐 파일의 이전 사본이 `.bak` 으로 남습니다. 대상이 비어 있으면 대상 파일을 검사하지 않으므로 추가 비용이 없고, 대상에 파일이 있으면 파일마다 `stat` 한 번(100만 개에 약 1분 내외, 같은 폴더 안 이름 변경은 파일당 수 ms)이 듭니다.
+- `.pcmigrate-` 로 시작하는 기록 파일(상태, 로그, 목록, 보존 기록)은 다른 폴더로 복사하지 않습니다(외장 2단계에서 외장의 상태 파일이 새 PC 의 상태 파일을 덮어쓰는 일을 막기 위함).
 
 ## 다른 PC(구 PC)에서 실행하기
 
@@ -553,7 +558,7 @@ python -m pcmigrate discover --output-selection <폴더>\selection.json
 |---|---|
 | `import --yes` / GUI 복원 | 덮어쓰기 전에 `<이름>.bak` 으로 백업합니다(이미 있으면 `.bak.1`). 같은 내용이면 건너뜁니다. |
 | `copy` (소규모) | 덮어쓰기 전에 `.bak` 으로 백업합니다. |
-| `transfer` (대용량) | **`.bak` 없이 robocopy 가 덮어쓸 수 있습니다.** 대상은 새 폴더나 비어 있는 폴더를 쓰세요. `--strict` 로 다시 복사할 때 내용이 어긋난 사본만 `.bak` 으로 남깁니다. |
+| `transfer` (대용량) | 복사(robocopy) **시작 전에** 대상에 있는 같은 이름의 **다른** 파일(크기가 다르거나 수정시각이 2초 넘게 다름)을 같은 폴더의 `<이름>.bak`(이미 있으면 `.bak.1`)으로 **이름만 바꿔 보존**한 뒤 복사합니다(데이터를 다시 쓰지 않아 빠르고 공간을 더 쓰지 않습니다). 같은 파일은 건드리지 않습니다. `--dry-run` 이 덮어쓸 파일 수를 경고로 알려 주고, 실제 실행 뒤 리포트의 `preserved_existing_count`/`preserved_existing`(앞 200개)에 기록합니다. 보존에 실패하면(파일 사용 중 등) **복사를 시작하지 않고** 멈춥니다(아무것도 덮어쓰지 않음). `--strict` 로 다시 복사할 때 내용이 어긋난 사본도 `.bak` 으로 남깁니다. |
 | `export/discover/checklist --output` | 같은 이름 파일이 있으면 `.bak` 으로 보존합니다. |
 
 **규칙별 복원 범위** (`rules/*.json` 22개). 복원할 폴더/파일 경로가 있는 규칙과, 감지해서 수동 작업만 안내하는 "경고 전용" 규칙이 있습니다.

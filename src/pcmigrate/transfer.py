@@ -35,6 +35,8 @@ from .progress import OK, ProgressInfo, ProgressTracker, categorize, fmt_bytes, 
 from .scan import ScanInfo, is_cloud_only, scan_source_info  # noqa: F401  (is_cloud_only 는 기존 import 경로 유지)
 
 STATE_NAME = ".pcmigrate-state.json"
+PRESERVE_NAME = ".pcmigrate-preserve.json"  # 덮어쓰기 전 .bak 보존 기록(이어받기 구분용)
+MAX_PRESERVED_LISTED = 200  # 리포트에 이름까지 남기는 보존 파일 수(전체 개수는 따로 센다)
 LOG_NAME = ".pcmigrate-robocopy.log"
 OWN_PATTERN = ".pcmigrate-*"
 STATE_VERSION = 2
@@ -424,6 +426,79 @@ def _add_result(report: Report, res: FileResult, detail_ok: bool) -> None:
         report.results.append(res)
 
 
+# --------------------------------------------------------------------------- 덮어쓰기 전 보존(.bak)
+
+def _differs(target: str, size: int, mtime_ns: int) -> bool:
+    """대상에 같은 이름의 '다른' 파일이 있는가. robocopy 가 같다고 보는 기준(크기 같고 수정시각 2초 이내)과 같다. 폴더는 해당 없음."""
+    try:
+        st = os.stat(long_path(target))
+    except OSError:
+        return False
+    if not os.path.isfile(long_path(target)):
+        return False
+    return not (st.st_size == size and abs(st.st_mtime_ns - mtime_ns) <= MTIME_TOLERANCE_NS)
+
+
+def _bak_name(target: str) -> str:
+    cand, n = target + ".bak", 1
+    while os.path.lexists(long_path(cand)):
+        cand = f"{target}.bak.{n}"
+        n += 1
+    return cand
+
+
+def _read_journal(path: Path, src: Path) -> dict | None:
+    try:
+        with open(long_path(path), "r", encoding="utf-8") as f:
+            j = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(j, dict) or j.get("src") != str(src) or j.get("phase") not in ("copying", "done"):
+        return None
+    return j
+
+
+def _write_journal(path: Path, src: Path, phase: str, count: int, listed: list[dict]) -> None:
+    tmp = path.with_name(path.name + ".part")
+    with open(long_path(tmp), "w", encoding="utf-8", newline="\n") as f:
+        json.dump({"journal_version": 1, "src": str(src), "phase": phase, "preserved_count": count, "preserved": listed},
+                  f, ensure_ascii=False)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(long_path(tmp), long_path(path))
+
+
+def _preserve_existing(entries, src: Path, dst: Path, journal: Path, cancel, say) -> tuple[int, list[dict], bool]:
+    """복사(robocopy) 시작 전에, 대상에 있는 같은 이름의 다른 파일을 같은 폴더의 .bak 으로 이름만 바꿔 보존한다(데이터를 다시 쓰지 않아 빠름).
+
+    이어받기 구분: 이전 실행이 복사를 시작했다가 끝나지 못한 기록(journal phase=copying)이 있으면, 대상의 다른 파일은
+    우리가 쓰다 만 파일이므로 보존하지 않는다(보존하면 이어받기가 깨진다). 이전 실행이 끝났거나(done) 기록이 없으면 새 복사다.
+    보존할 수 없으면(사용 중 등) TransferError 로 복사를 시작하지 않는다. 반환: (보존한 개수, 앞쪽 목록, 이어받기 여부)."""
+    prev = _read_journal(journal, src)
+    if prev is not None and prev["phase"] == "copying":
+        return int(prev.get("preserved_count") or 0), list(prev.get("preserved") or []), True
+    count, listed = 0, []
+    if any(True for _ in _first(dst)):
+        say("대상에 있는 같은 이름의 다른 파일을 .bak 으로 보존하는 중입니다…")
+        for rel, size, mtime in entries:
+            if cancel is not None and cancel():
+                raise Cancelled()
+            target = _join(str(dst), rel)
+            if not _differs(target, size, mtime):
+                continue
+            bak = _bak_name(target)
+            try:
+                os.replace(long_path(target), long_path(bak))
+            except OSError as e:
+                raise TransferError(f"대상에 있는 다른 파일을 .bak 으로 보존하지 못해 복사를 시작하지 않았습니다(덮어쓰지 않음): {target} "
+                                    f"({failure.classify(e, target).label}). 파일을 쓰는 프로그램을 닫고 다시 실행하세요.") from e
+            count += 1
+            if len(listed) < MAX_PRESERVED_LISTED:
+                listed.append({"file": target, "backup": bak})
+    _write_journal(journal, src, "copying", count, listed)
+    return count, listed, False
+
+
 # --------------------------------------------------------------------------- 전송
 
 def transfer(src: Path, dst: Path, *, dry_run: bool = False, include_cloud: bool = False,
@@ -550,7 +625,7 @@ def transfer(src: Path, dst: Path, *, dry_run: bool = False, include_cloud: bool
         if progress_info:
             progress_info(ProgressInfo("compare", 0, 0, 0, len(entries), message="복사될 파일을 비교하는 중입니다…",
                                        skipped=len(skipped_cloud)))
-        return _dry_run(report, entries, skipped_cloud, scan, dst, runner, copy_mode, network)
+        return _dry_run(report, entries, skipped_cloud, scan, dst, runner, copy_mode, network, warn)
 
     # ---- 실제 실행
     _friendly_makedirs(dst)
@@ -587,7 +662,13 @@ def transfer(src: Path, dst: Path, *, dry_run: bool = False, include_cloud: bool
         with KeepAwake(keep_awake, power_set_state, warn) as awake:
             # ---- 1) 복사 단계(robocopy). 검사만/실패한 것만 다시 모드에서는 건너뛴다.
             copy_seconds = 0.0
+            journal = dst / PRESERVE_NAME
+            report.meta.update(preserved_existing_count=0, preserved_existing=[], preserve_resumed=False)
             if mode == "copy":
+                n_pres, listed, resumed_run = _preserve_existing(entries, src, dst, journal, cancel, say)
+                report.meta.update(preserved_existing_count=n_pres, preserved_existing=listed, preserve_resumed=resumed_run)
+                if n_pres:
+                    warn(f"대상에 있던 같은 이름의 다른 파일 {n_pres}개를 .bak 으로 보존했습니다(덮어쓰지 않았습니다).")
                 t0 = clock()
                 tracker = ProgressTracker("copy", total_bytes, len(entries), clock=clock, slow_bps=kind_bps, slow_hint=kind_hint)
 
@@ -627,6 +708,14 @@ def transfer(src: Path, dst: Path, *, dry_run: bool = False, include_cloud: bool
                     report.results.append(FileResult(str(src), str(dst), FAILED, reason=found[0].code if found else "robocopy",
                                                      error=f"복사 도구 종료 코드 {code}: {', '.join(notes)}" + (f" ({why})" if why else "")))
                 copy_seconds = clock() - t0
+                if ok:  # 복사가 끝났다: 다음 실행은 새 복사로 보고 바뀐 파일을 .bak 으로 보존한다
+                    try:
+                        _write_journal(journal, src, "done", report.meta["preserved_existing_count"], report.meta["preserved_existing"])
+                    except OSError:
+                        try:  # 'done' 을 못 적으면 기록을 지운다(남겨 두면 다음 실행이 이어받기로 보고 .bak 보존을 건너뛰게 된다)
+                            os.unlink(long_path(journal))
+                        except OSError:
+                            pass
             # ---- 2) 검사 단계(파일 단위 병렬)
             t1 = clock()
             _verify_phase(report, entries, scan, dst, state, stats, writer, manifest_map, strict=strict, mode=mode,
@@ -684,7 +773,8 @@ def _first(path: Path):
         return
 
 
-def _dry_run(report: Report, entries, skipped_cloud, scan: ScanInfo, dst: Path, runner, copy_mode: str, network: bool) -> Report:
+def _dry_run(report: Report, entries, skipped_cloud, scan: ScanInfo, dst: Path, runner, copy_mode: str, network: bool,
+             warn: Callable[[str], None] = lambda m: None) -> Report:
     """robocopy /L 은 목록 확인용, 리포트는 크기 비교로 만든다. 아무것도 쓰지 않는다."""
     args = base_args(Path(scan.root), dst, None, True, copy_mode)
     xf = sorted({os.path.basename(scan.abs_path(r)) for r, _s, _m in skipped_cloud})
@@ -694,6 +784,7 @@ def _dry_run(report: Report, entries, skipped_cloud, scan: ScanInfo, dst: Path, 
     ok, notes = interpret_exit(code)
     report.meta.update(robocopy_exit=code, robocopy_ok=ok, robocopy_notes=notes)
     detail_ok = len(entries) <= MAX_DETAIL_RESULTS
+    over = 0
     for rel, size, mtime in entries:
         target = _join(str(dst), rel)
         status = WOULD_COPY
@@ -703,10 +794,18 @@ def _dry_run(report: Report, entries, skipped_cloud, scan: ScanInfo, dst: Path, 
         except OSError:
             pass
         res = FileResult(scan.abs_path(rel), target, status, size)
+        if status == WOULD_OVERWRITE:
+            over += 1
+            if over <= MAX_DETAIL_RESULTS:
+                res.backup = _bak_name(target)  # 실제 복사 때 기존 파일이 옮겨질 이름
         if status in (WOULD_COPY, SKIPPED_SAME) and not detail_ok:
             report.counts[status] = report.counts.get(status, 0) + 1
         else:
             report.results.append(res)
+    report.meta["would_overwrite_count"] = over
+    if over:
+        warn(f"대상에 같은 이름의 다른 파일 {over}개가 이미 있습니다. 실제 복사 때는 덮어쓰기 전에 각 파일을 같은 폴더의 .bak 으로 보존합니다"
+             "(이름만 바꾸므로 공간을 더 쓰지 않습니다). 확인하고 진행하세요.")
     return report
 
 

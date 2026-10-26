@@ -27,6 +27,7 @@ from ..manifest import DEFAULT_NAME as MANIFEST_NAME
 from ..manifest import ManifestError
 from ..progress import ProgressInfo, fmt_bytes, format_info
 from ..rules import default_rules_dir
+from ..scan import skipped_links_view
 from ..transfer import DriveDisconnected, TransferError
 from . import state as S
 from . import texts as T
@@ -137,7 +138,7 @@ def _final_status(res: Any) -> tuple[dict | None, dict | None, str]:
             for r in res.results:
                 if r.status == "cloud_only":
                     problems["skipped"].append(r.src)
-                elif r.status in ("failed", "mismatch", "missing"):
+                elif r.status in ("failed", "mismatch", "missing", "rejected"):
                     kind = "unreadable" if r.reason == "in_use" else "failed"
                     counts[kind] += 1
                     problems[kind].append(r.src)
@@ -152,10 +153,12 @@ def _final_status(res: Any) -> tuple[dict | None, dict | None, str]:
             return counts, problems, T.CARD_SUMMARY_FILES.format(n=len(m["files"]))
         if hasattr(getattr(res, "plan", None), "items"):  # 복원 미리보기
             st = [it["status"] for it in res.plan.items]
+            rej = [it.get("target", "") for it in res.plan.items if it["status"] == "rejected"]
             counts = {"ok": sum(s in ("would_copy", "would_overwrite") for s in st),
                       "skipped": sum(s == "skipped_identical" for s in st), "unreadable": 0,
-                      "failed": len(res.plan.problems)}
-            return counts, {"failed": [str(p) for p in res.plan.problems]}, T.CARD_SUMMARY_FILES.format(n=len(st))
+                      "failed": len(res.plan.problems) + len(rej)}
+            return (counts, {"failed": [str(p) for p in res.plan.problems] + rej},
+                    T.CARD_SUMMARY_FILES.format(n=len(st)))
         if hasattr(res, "program_count"):
             return None, None, T.CARD_SUMMARY_PROGRAMS.format(n=res.program_count)
     except Exception:  # noqa: BLE001 - 요약을 못 만들어도 작업 결과 처리에는 영향이 없어야 한다
@@ -570,6 +573,15 @@ class Controller:
                  "backup": it.get("backup", ""), "extra": bool(it.get("extra")), "size": it.get("size", 0)}
                 for it in p.plan.items]
 
+    def preview_rejected_count(self) -> int:
+        p = self.state.preview
+        return sum(1 for it in p.plan.items if it.get("status") == "rejected") if p else 0
+
+    def preview_lines(self) -> list[str]:
+        """미리보기 화면 위쪽 안내(복원되지 않을 항목)."""
+        n = self.preview_rejected_count()
+        return [T.PREV_REJECTED_NOTE.format(n=n)] if n else []
+
     def preview_problems(self) -> list[str]:
         p = self.state.preview
         return [T.friendly_detail(x) for x in p.plan.problems] if p else []
@@ -631,14 +643,15 @@ class Controller:
             return {}
         rep = r.report
         counts = rep.to_dict()["summary"]
-        return {"counts": counts, "failures": [(f.dst, T.friendly_detail(f.error)) for f in rep.failures],
+        return {"counts": counts, "rejected": counts.get("rejected", 0),
+                "failures": [(f.dst, T.friendly_detail(f.error)) for f in rep.failures],
                 "backups": [x.backup for x in rep.results if x.backup],
                 "warnings": [(w.get("name", ""), i) for w in r.plan.warnings for i in w.get("items", [])]}
 
     def import_counts(self) -> tuple[int, int, int]:
         """(성공, 건너뜀, 실패)"""
         c = self.import_summary().get("counts", {})
-        return c.get("copied", 0), c.get("skipped_identical", 0), c.get("failed", 0)
+        return c.get("copied", 0), c.get("skipped_identical", 0), c.get("failed", 0) + c.get("rejected", 0)
 
     # ------------------------------------------------------------------ 대용량 복사: 방식/단계
     def set_transfer_flow(self, mode: str, stage: int = 1) -> None:
@@ -921,6 +934,21 @@ class Controller:
             lines.append(T.TR_LAYOUT_MORE.format(n=more))
         return lines
 
+    def preview_link_lines(self) -> list[str]:
+        """건너뛴 바로가기/정션 안내(미리보기와 결과 화면 공통). 없으면 빈 목록."""
+        rep = self.state.transfer_report
+        n, paths, more = skipped_links_view(getattr(rep, "meta", {}) or {})
+        if not n:
+            return []
+        return [T.TR_SKIPPED_LINKS.format(n=n, more=T.TR_SKIPPED_LINKS_MORE.format(shown=len(paths)) if more else "",
+                                          paths="\n".join("  " + p for p in paths))]
+
+    def verify_notes(self) -> list[str]:
+        """검사(verify) 결과 안내: 목록에서 빠진 파일이 있으면 '모두 정확함'이 아님."""
+        rep = self.state.transfer_report
+        n = int((getattr(rep, "meta", {}) or {}).get("manifest_errors") or 0)
+        return [T.TR_MANIFEST_ERRORS.format(n=n)] if n else []
+
     def flow_notes(self) -> list[str]:
         """결과 화면 아래에 붙는 안내(검사 미룸, 다음 단계, 절전 방지 실패, xref, 원본 보존)."""
         rep, s = self.state.transfer_report, self.state
@@ -932,6 +960,10 @@ class Controller:
             notes.append(T.TR_DEFERRED_NOTE)
         if meta.get("keep_awake") == "failed":
             notes.append(T.TR_KEEP_AWAKE_FAILED)
+        if meta.get("preserved_existing_count"):
+            notes.append(T.TR_PRESERVED_NOTE.format(n=meta["preserved_existing_count"]))
+        notes.extend(self.preview_link_lines())
+        notes.extend(self.verify_notes())
         if s.transfer_mode == T.MODE_EXTERNAL and s.transfer_stage == 1 and not rep.failures:
             notes.append(T.TR_NEXT_STEP_EXT1)
         if s.transfer_mode == T.MODE_NETWORK and s.transfer_stage == 1 and not rep.failures:
@@ -958,7 +990,10 @@ class Controller:
                 "repaired": [x["file"] for x in rep.meta.get("repaired", [])],
                 "pending": counts.get("pending_verify", 0), "added": counts.get("extra", 0),
                 "mode": rep.meta.get("mode", ""), "io": rep.meta.get("io") or {},
-                "manifest_complete": rep.meta.get("manifest_complete", True)}
+                "manifest_complete": rep.meta.get("manifest_complete", True),
+                "manifest_errors": int(rep.meta.get("manifest_errors") or 0),
+                "verification_complete": rep.meta.get("verification_complete"),
+                "success": rep.to_dict().get("success")}
 
     def transfer_counts(self) -> tuple[int, int, int]:
         """(성공, 건너뜀, 실패). 건너뜀은 클라우드 전용 파일."""

@@ -123,7 +123,8 @@ class PreviewView(BaseView):
                 r["status"], T.ellipsize_path(r["target"]), T.ellipsize_path(r["backup"]),
                 T.PREV_KIND_EXTRA if r["extra"] else T.PREV_KIND_RULE))
             self.full[iid] = (r["target"], r["backup"])
-        lines = [f"{w.get('name', '')}: {i}" for w in p.plan.warnings for i in w.get("items", [])] + [T.LICENSE_NOTE]
+        lines = (self.c.preview_lines()
+                 + [f"{w.get('name', '')}: {i}" for w in p.plan.warnings for i in w.get("items", [])] + [T.LICENSE_NOTE])
         set_text(self.warn, lines)
 
 
@@ -254,8 +255,9 @@ class ResultView(BaseView):
             self.full[iid] = path
 
         for res in r.report.results:
-            if res.status == "failed":
-                add(f"{T.ICON_FAIL} {T.RES_KIND_FAIL}", res.dst, T.friendly_detail(res.error), ("fail",))
+            if res.status in ("failed", "rejected"):
+                kind = T.RES_KIND_REJECTED if res.status == "rejected" else T.RES_KIND_FAIL
+                add(f"{T.ICON_FAIL} {kind}", res.dst, T.friendly_detail(res.error), ("fail",))
             elif res.backup:
                 add(T.RES_KIND_BAK, res.backup, T.RES_BAK_DETAIL)
         for res in r.report.results[:200]:

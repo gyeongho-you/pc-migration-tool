@@ -10,13 +10,14 @@ import time
 from pathlib import Path
 
 from . import __version__, envpaths, errorlog
-from .api import (NEEDS_CONFIRM, ApiError, Deps, check_outputs_outside, check_unexpanded, format_write_error,
+from .api import (NEEDS_CONFIRM, ApiError, Deps, check_outputs_outside, check_unexpanded, format_write_error, load_rules_checked,
                   report_inside, run_checklist, run_copy, run_discover, run_export, run_import, run_manifest,
                   run_scan, run_transfer, run_verify, same_file, selection_json)
 from .checklist import write_output
 from .detect import read_registry_programs, winget_export_raw, winget_list_raw
 from .manifest import ManifestError, build_manifest, verify_against_manifest
 from .progress import ProgressInfo, format_info
+from .scan import skipped_links_view
 from .discover import render as render_discovery
 from .discover import summarize
 from .package import export_package, plan_import
@@ -134,6 +135,7 @@ PRECHECK_LINES = (
     "시작 전 확인: ② 노트북은 전원을 연결하세요. 복사 중 PC 가 잠들지 않도록 이 도구가 절전을 막지만 전원이 꺼지면 멈춥니다.",
     "시작 전 확인: ③ 외장 드라이브는 NTFS 로 포맷된 것을 쓰고 USB 3.x 포트에 꽂으세요(FAT32 는 4GB 넘는 파일을 저장할 수 없습니다).",
     "시작 전 확인: ④ 원본 삭제나 PC 포맷은 검사가 끝나 '실패 0' 을 확인하기 전까지 절대 하지 마세요.",
+    "시작 전 확인: ⑤ 대상에 같은 이름의 다른 파일이 이미 있으면 덮어쓰기 전에 .bak 으로 보관합니다(미리보기 --dry-run 에서 개수를 알려 줍니다).",
 )
 
 
@@ -245,7 +247,22 @@ def _cmd_transfer(args: argparse.Namespace) -> int:
     d = report.to_dict()
     print(json.dumps({"dry_run": d["dry_run"], "mode": d.get("mode"), "summary": d["summary"],
                       "robocopy_exit": d.get("robocopy_exit"), "cloud_only_count": d["cloud_only_count"],
-                      "total_files": d.get("total_files"), "total_bytes": d.get("total_bytes")}, ensure_ascii=False))
+                      "total_files": d.get("total_files"), "total_bytes": d.get("total_bytes"),
+                      "verification_complete": d.get("verification_complete"), "success": d.get("success"),
+                      "failed_count": d.get("failed_count"), "skipped_links": d.get("skipped_links", 0)},
+                     ensure_ascii=False))
+    if d.get("preserved_existing_count"):
+        _err(f"[보존] 대상에 있던 같은 이름의 다른 파일 {d['preserved_existing_count']}개를 덮어쓰기 전에 .bak 으로 보관했습니다"
+             "(같은 폴더의 <이름>.bak, 이미 있으면 .bak.1). 필요 없으면 확인 후 직접 지우세요.")
+    n_links, link_paths, link_more = skipped_links_view(d)
+    if n_links:
+        _err(f"[안내] 바로가기/정션(링크) {n_links}개는 따라가지 않고 건너뛰었습니다. 링크 너머의 폴더는 따로 복사해야 합니다."
+             + (f" (앞 {len(link_paths)}개만 표시, 전체는 --report 파일의 skipped_link_paths)" if link_more else ""))
+        for p in link_paths:
+            _err(f"  건너뜀: {p}")
+    if d.get("dest_verification") == "deferred" and not d["dry_run"] and not report.failures:
+        _err("[복사 완료, 검증 전] 복사는 끝났지만 복사본 검사는 아직 하지 않았습니다. 새 PC 에서 verify 로 검사해야 정확한지 알 수 있습니다. "
+             "그 전에는 원본을 지우지 마세요.")
     for item in d.get("repaired", []):
         print(f"[복구] 내용이 어긋난 파일을 원본에서 다시 복사했습니다: {item['file']} (이전 사본: {item['backup']})",
               file=sys.stderr)
@@ -302,10 +319,28 @@ def _cmd_verify(args: argparse.Namespace) -> int:
             return _write_failed(args.report, e)
     d = rep.to_dict()
     print(json.dumps({"summary": d["summary"], "extra_files": d.get("extra_files"),
-                      "manifest_complete": d.get("manifest_complete"), "seconds": d.get("seconds")}, ensure_ascii=False))
+                      "manifest_complete": d.get("manifest_complete"), "manifest_errors": d.get("manifest_errors", 0),
+                      "failed_count": d.get("failed_count"), "success": not rep.failures,
+                      "seconds": d.get("seconds")}, ensure_ascii=False))
+    if d.get("manifest_errors"):
+        _err(f"[주의] 구 PC 에서 읽지 못해 목록에서 빠진 파일 {d['manifest_errors']}개가 있습니다. 이 파일들은 검사되지 않았으므로 "
+             "'모두 정확함'이 아닙니다. 구 PC 에서 해당 파일을 닫은 뒤 목록을 다시 만드세요.")
     for r in rep.failures[:50]:
         print(f"실패: {r.src} -> {r.error}", file=sys.stderr)
     return 1 if rep.failures else 0
+
+
+def _cmd_check_rules(args: argparse.Namespace) -> int:
+    """규칙 폴더가 읽히는지만 확인한다(설치 목록/사용자 폴더는 읽지 않는다). exe 빌드 스모크 시험에서 번들 누락을 잡는 용도."""
+    try:
+        rules = load_rules_checked(args.rules)
+    except ApiError as e:
+        return _fail(e)
+    if not rules:
+        _err(f"규칙 파일이 하나도 없습니다: {args.rules}")
+        return 1
+    print(json.dumps({"rules": len(rules), "dir": str(args.rules)}, ensure_ascii=False))
+    return 0
 
 
 def _cmd_checklist(args: argparse.Namespace) -> int:
@@ -401,6 +436,10 @@ def _cmd_import(args: argparse.Namespace) -> int:
         return 1
     if r.mode in ("dry-run", "needs-confirm"):
         print(json.dumps(r.preview_dict(), ensure_ascii=False, indent=2))
+        n_rej = sum(1 for it in r.plan.items if it.get("status") == "rejected")
+        if n_rej:
+            _err(f"[주의] 복원 위치가 바로가기(정션/링크)를 거쳐 복원되지 않을 파일 {n_rej}개가 있습니다. "
+                 "링크를 없애거나 실제 폴더로 바꾼 뒤 다시 시도하세요(링크 너머에는 쓰지 않습니다).")
         _print_warnings(r.plan.warnings)
         if r.n_extra:
             _err(f"[주의] 규칙 없이 선택 포함된 파일 {r.n_extra}개가 있습니다. "
@@ -421,7 +460,13 @@ def _cmd_import(args: argparse.Namespace) -> int:
             report.write(Path(args.report))
         except OSError as e:
             return _write_failed(args.report, e)
-    print(json.dumps({"dry_run": False, "summary": report.to_dict()["summary"]}, ensure_ascii=False))
+    rd = report.to_dict()
+    print(json.dumps({"dry_run": False, "summary": rd["summary"], "failed_count": rd["failed_count"],
+                      "success": not report.failures}, ensure_ascii=False))
+    n_rej = sum(1 for f in report.failures if f.status == "rejected")
+    if n_rej:
+        _err(f"[주의] 복원 위치가 바로가기(정션/링크)를 거치는 파일 {n_rej}개는 복원하지 않았습니다(링크 너머에는 쓰지 않습니다). "
+             "링크를 없애거나 실제 폴더로 바꾼 뒤 다시 시도하세요.")
     for f in report.failures:
         print(f"실패: {f.dst} -> {f.error}", file=sys.stderr)
     _print_warnings(r.plan.warnings)
@@ -470,6 +515,10 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("scan", help="설치 프로그램 감지 및 적용 규칙 표시")
     s.add_argument("--rules", default=str(default_rules_dir()), help="규칙 JSON 폴더")
     s.set_defaults(func=_cmd_scan)
+
+    cr = sub.add_parser("check-rules", help="규칙 폴더가 올바르게 읽히는지만 확인(읽기 전용)")
+    cr.add_argument("--rules", default=str(default_rules_dir()), help="규칙 JSON 폴더")
+    cr.set_defaults(func=_cmd_check_rules)
 
     k = sub.add_parser("checklist", help="수동 작업/수동 설치 체크리스트 출력")
     k.add_argument("--format", choices=("text", "md"), default="text")

@@ -62,6 +62,14 @@ class ScanInfo:
         return os.path.join(self.root, *rel.split("/"))
 
 
+def skipped_links_view(meta: dict, limit: int = 20) -> tuple[int, list[str], bool]:
+    """리포트 meta 에서 (건너뛴 링크 총 개수, 화면에 보일 앞 limit 개 경로, 더 있는지). 화면/CLI 안내용."""
+    n = int(meta.get("skipped_links") or 0)
+    paths = [str(p) for p in (meta.get("skipped_link_paths") or [])]
+    n = max(n, len(paths))
+    return n, paths[:limit], n > min(limit, len(paths))
+
+
 def _note_link(info: "ScanInfo", rel: str) -> None:
     info.skipped_links += 1
     if len(info.skipped_link_paths) < MAX_LINK_PATHS:
