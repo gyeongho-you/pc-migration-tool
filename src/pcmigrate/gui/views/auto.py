@@ -11,13 +11,14 @@ from tkinter import filedialog, messagebox, ttk
 
 from .. import state as S
 from .. import texts as T
+from .install import InstallPanel
 from .status_card import StatusCard
 from .common import (DANGER_BG, DANGER_FG, INFO_BG, INFO_FG, MUTED_FG, OK_BG, OK_FG, SUB_FONT, WARN_BG, WARN_FG, ActionButton, BaseView,
                      PathField, ScrollBody, TextDialog, autowrap, clean_path, open_location)
 
 _STATE_COLORS = {"todo": MUTED_FG, "doing": INFO_FG, "waiting": WARN_FG, "done": OK_FG, "skipped": MUTED_FG, "warn": WARN_FG,
                  "stopped": DANGER_FG}
-_TASKS = {T.TASK_SCAN, T.TASK_CHECKLIST, T.TASK_EXPORT, T.TASK_PREVIEW, T.TASK_APPLY, T.TASK_TRANSFER, T.TASK_TRANSFER_PREVIEW,
+_TASKS = {T.TASK_SCAN, T.TASK_CHECKLIST, T.TASK_EXPORT, T.TASK_PREVIEW, T.TASK_INSTALL_CHECK, T.TASK_APPLY, T.TASK_TRANSFER, T.TASK_TRANSFER_PREVIEW,
           T.TASK_VERIFY}
 
 
@@ -62,6 +63,7 @@ class AutoView(BaseView):
         self.next_box = tk.Frame(body, bg=INFO_BG, highlightbackground=INFO_FG, highlightthickness=1, padx=12, pady=8)
         self.steps_frame.pack(fill="x", pady=(10, 6))
         self.restore = None
+        self.install_panel = None  # 설치 확인 지점에서만 있다
         self.finish()
 
     # ------------------------------------------------------------------ 표시
@@ -79,6 +81,8 @@ class AutoView(BaseView):
             self.refresh()
         elif kind == "confirm_changed":
             self._update_restore()
+        if kind in ("install_done", "install_marks", "install_folder", "busy") and self.install_panel is not None:
+            self.install_panel.on_event(kind, payload)
 
     def refresh(self) -> None:
         a = self.auto
@@ -165,6 +169,7 @@ class AutoView(BaseView):
     def _draw_gate(self, a) -> None:
         self._clear(self.gate)
         self.restore = None
+        self.install_panel = None
         if a.status != "waiting":
             return
         build = getattr(self, "_gate_" + a.gate, None)
@@ -195,6 +200,21 @@ class AutoView(BaseView):
                          kind="primary")
         b.pack(anchor="w", pady=6)
         self.gate_btn = b
+
+    # ---- 프로그램 설치 확인(설치 명령은 도구가 실행하지 않는다: 복사해서 직접 실행하고 '다시 확인')
+    def _gate_install(self, a) -> None:
+        self._note(self.gate, T.AUTO_INSTALL_HEAD, font=SUB_FONT)
+        self._note(self.gate, T.AUTO_INSTALL_NOTE)
+        row = ttk.Frame(self.gate)  # 진행 단추는 표 위에 둔다(스크롤하지 않아도 보이게)
+        row.pack(anchor="w", pady=(2, 6))
+        b = ActionButton(row, text=T.AUTO_INSTALL_CONTINUE, command=lambda: self.guarded(self.c.auto_install_continue, False), kind="primary")
+        b.pack(side="left")
+        ActionButton(row, text=T.INST_BTN_SKIP, command=lambda: self.guarded(self.c.auto_install_continue, True),
+                     kind="plain").pack(side="left", padx=8)
+        self.gate_btn = b
+        self.install_panel = InstallPanel(self.gate, self, height=4)
+        self.install_panel.pack(fill="x", pady=4)
+        self.install_panel.refresh()
 
     # ---- 복원 확인(기존 확인 화면과 같은 체크 2개 + 최종 확인창)
     def _gate_restore(self, a) -> None:

@@ -26,7 +26,8 @@ WINGET_IMPORT_GUIDE: tuple[str, ...] = (
     "그런 다음 꺼낸 winget.json 으로 다음 명령을 직접 실행하세요:",
     "winget import -i 폴더경로\\winget.json --ignore-unavailable --accept-package-agreements --accept-source-agreements",
     "--ignore-unavailable 은 신 PC 의 winget 에서 찾을 수 없는 패키지를 건너뜁니다. "
-    "이 도구는 winget import 를 자동 실행하지 않습니다.",
+    "이 도구는 winget import 를 자동 실행하지 않습니다. "
+    "실행한 뒤에는 pcmigrate install-check 패키지.zip 으로 설치 결과를 다시 확인할 수 있습니다.",
 )
 
 # 매칭 근거 등급. '확실' 만 수동 설치 목록에서 제외하고, 나머지는 등급을 표시해 남긴다(과다 안내가 안전).
@@ -246,6 +247,15 @@ def describe_manual(p: Program, m: Match | None) -> str:
 
 
 # --------------------------------------------------------------------------- 체크리스트 구성
+
+def install_hint_for(name: str) -> str:
+    """수동 설치 항목 옆에 붙이는 '무엇을/어떻게'(공통 항목의 install_hint). 없으면 빈 문자열(install_check 가 재사용)."""
+    low = name.lower()
+    for item in COMMON_ITEMS:
+        if item.install_hint and any(pat in low for pat in item.patterns):
+            return item.install_hint
+    return ""
+
 
 @dataclass
 class Checklist:

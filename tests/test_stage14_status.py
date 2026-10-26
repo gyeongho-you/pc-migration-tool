@@ -373,7 +373,7 @@ def test_overall_step_for_every_flow_screen():
     for i, screen in enumerate(S.OLD_FLOW, 1):
         assert S.overall_step(screen)[:2] == (i, 4)
     for i, screen in enumerate(S.NEW_FLOW, 1):
-        assert S.overall_step(screen)[:2] == (i, 4)
+        assert S.overall_step(screen)[:2] == (i, 5)  # 파일 선택 / 설치 확인 / 미리보기 / 복원 확인 / 결과
     assert S.overall_step(S.START) is None
     assert S.overall_step(S.TRANSFER, T.MODE_EXTERNAL, 1)[:2] == (1, 2)
     assert S.overall_step(S.TRANSFER, T.MODE_NETWORK, 2)[:2] == (2, 2)
@@ -483,7 +483,7 @@ def test_overall_step_label_changes_with_screen(ctx):
     assert app.overall_label.cget("text") == "전체 단계 2/4" and len(app.overall_chips) >= 4
     c.go(S.NEW_CONFIRM)
     app.update()
-    assert app.overall_label.cget("text") == "전체 단계 3/4"
+    assert app.overall_label.cget("text") == "전체 단계 4/5"
     c.go(S.START)
     app.update()
     assert not app.overall.winfo_ismapped()

@@ -2,6 +2,7 @@
 import errno
 import logging
 import threading
+from pathlib import Path
 import time
 from types import SimpleNamespace
 
@@ -40,11 +41,23 @@ def item(status="would_copy", extra=False, target="C:\\x\\a.txt", backup=""):
     return {"entry": "data/a", "target": target, "status": status, "backup": backup, "size": 1, "sha256": "x", "extra": extra}
 
 
+def install_result(*extra_items, winget_file=True):
+    """가짜 설치 확인 결과(설치 도구로 설치 가능 1개 + 이미 설치됨 1개 + 추가 항목)."""
+    from pcmigrate import install_check as ic
+    items = [ic.Item("Acme CAD", ic.WINGET, "묶음의 winget 목록에 있음", "1.0", winget_id="Acme.CAD", in_import_file=True),
+             ic.Item("Old Tool", ic.INSTALLED, "이름 일치: Old Tool", "2.0", "2.0", "Old Tool", grade="확실"), *extra_items]
+    return ic.InstallCheck(items, has_winget_file=winget_file, winget_ok=True)
+
+
 class FakeApi:
     ApiError = real_api.ApiError
 
     def __init__(self):
         self.calls = []
+        self.install_calls = []
+        self.install_queue = []  # 호출마다 하나씩 꺼내 돌려줄 결과(비면 기본 결과)
+        self.install_default = install_result()
+        self.extract_calls = []
         self.preview = real_api.ImportResult(plan([item()]), "dry-run", 0)
         self.transfer_error = None
         self.transfer_wait = None
@@ -71,6 +84,22 @@ class FakeApi:
     def run_export(self, rules_dir, output, *, extra=None, allow_secrets=False, deps=None, extra_items=None):
         self.calls.append(("export", output, allow_secrets, extra_items))
         return SimpleNamespace(manifest={"rules": [], "files": [], "skipped": [], "failed": [], "manual_warnings": []})
+
+    def run_install_check(self, package, deps=None, progress_info=None, new_state=None):
+        self.install_calls.append(package)
+        return self.install_queue.pop(0) if self.install_queue else self.install_default
+
+    def run_winget_extract(self, package, output):
+        self.extract_calls.append((package, output))
+        folder = Path(output)
+        folder.mkdir(parents=True, exist_ok=True)
+        target = folder / "winget.json"
+        bak = None
+        if target.exists():
+            bak = folder / "winget.json.bak"
+            target.replace(bak)
+        target.write_text("{}", encoding="utf-8")
+        return target, bak
 
     def run_import(self, package, rules_dir, *, dry_run=False, yes=False, allow_extra=False, deps=None):
         self.calls.append(("import", dry_run, yes, allow_extra))

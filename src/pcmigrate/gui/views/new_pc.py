@@ -57,7 +57,7 @@ class PackageView(BaseView):
 
     def on_event(self, kind, payload) -> None:
         if kind == "preview_done" and self.c.state.screen == S.NEW_PACKAGE:
-            self.c.go(S.NEW_PREVIEW)
+            self.c.go(S.NEW_INSTALL)  # 프로그램 설치 확인(건너뛰기 가능) 다음에 미리보기
 
 
 class PreviewView(BaseView):
@@ -65,7 +65,7 @@ class PreviewView(BaseView):
 
     def __init__(self, app, controller) -> None:
         super().__init__(app, controller)
-        self.navbar(back=lambda: self.c.go(S.NEW_PACKAGE), next_=lambda: self.c.go(S.NEW_CONFIRM), next_text=T.BTN_TO_CONFIRM)
+        self.navbar(back=lambda: self.c.go(S.NEW_INSTALL), next_=lambda: self.c.go(S.NEW_CONFIRM), next_text=T.BTN_TO_CONFIRM)
         self.header(T.PREV_HEADING, T.PREV_SUB)
         self.summary = ttk.Label(self, text="", justify="left", font=SUB_FONT)
         self.summary.pack(anchor="w", fill="x")

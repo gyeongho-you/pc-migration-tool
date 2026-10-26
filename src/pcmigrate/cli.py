@@ -12,10 +12,11 @@ from pathlib import Path
 from . import __version__, envpaths, errorlog, failure, fs, summary
 from .api import (NEEDS_CONFIRM, ApiError, Deps, check_outputs_outside, check_path_forms, check_unexpanded, clean_path_arg,
                   clean_state_files, format_write_error, load_rules_checked, report_inside, run_checklist, run_copy,
-                  run_discover, run_export, run_import, run_join, run_manifest, run_scan, run_transfer, run_verify,
-                  run_winget_extract, same_file, selection_json)
+                  run_discover, run_export, run_import, run_install_check, run_join, run_manifest, run_scan, run_transfer,
+                  run_verify, run_winget_extract, same_file, selection_json)
 from .checklist import write_output
 from .detect import read_registry_programs, winget_export_raw, winget_list_raw
+from . import install_check as ic
 from .manifest import ManifestError, build_manifest, verify_against_manifest
 from .progress import ProgressInfo, format_info
 from .scan import skipped_links_view
@@ -428,6 +429,59 @@ def _cmd_checklist(args: argparse.Namespace) -> int:
     return 0
 
 
+def _install_check_text(r: ic.InstallCheck, package: str) -> str:
+    lines = [f"프로그램 설치 확인 (설정 묶음: {package})", "이 명령은 읽기만 합니다. 프로그램을 설치하지 않습니다.", "",
+             f"요약: {r.summary()}", ""]
+    sections = ((ic.AMBIGUOUS, "애매함 — 이름만 비슷해서 같은 프로그램인지 확신할 수 없습니다. 실제 설치 여부를 직접 확인하세요", "?"),
+                (ic.MANUAL, "수동 설치 필요 — winget 으로 확실하게 연결되지 않았습니다", "-"),
+                (ic.WINGET, "winget 으로 설치 가능 — 묶음의 winget 목록에 있습니다(새 PC 의 winget 에 있는지는 import 가 판단)", "+"))
+    for status, title, mark in sections:
+        items = r.by_status(status)
+        if not items:
+            continue
+        lines.append(f"[{title}] {len(items)}개")
+        for i in items:
+            extra = f" [{i.hint}]" if i.hint else ""
+            lines.append(f"  {mark} {i.name} — {i.reason}{extra}")
+        lines.append("")
+    diff = [i for i in r.by_status(ic.INSTALLED) if i.version_diff]
+    if diff:
+        lines.append(f"[설치됨 중 버전 다름] {len(diff)}개")
+        lines += [f"  ! {i.name} — {i.version_text}" for i in diff]
+        lines.append("")
+    lines.append(f"설치됨 {len(r.by_status(ic.INSTALLED))}개, 설치 불필요(런타임/번들/Windows 기본) {len(r.by_status(ic.NOT_NEEDED))}개는 목록을 줄이기 위해 생략했습니다(--json 으로 전체 확인).")
+    lines += r.notes
+    cmds = r.individual_commands
+    if cmds:
+        lines += ["개별 설치 명령(직접 실행하세요):", *[f"    {c}" for c in cmds]]
+    lines += ["", r.next_step(),
+              "winget 목록 꺼내기와 명령: pcmigrate winget-extract 패키지.zip --output 폴더경로 / 수동 작업 전체 목록: pcmigrate checklist --package 패키지.zip"]
+    return "\n".join(lines)
+
+
+def _cmd_install_check(args: argparse.Namespace) -> int:
+    if _unexpanded(package=args.package, winget_list_file=args.winget_list_file):
+        return 1
+    deps = _deps()
+    new_state = None
+    if args.winget_list_file:  # 시험용: 이 PC 의 winget 을 읽지 않고 파일의 winget list 출력을 쓴다
+        try:
+            text = Path(args.winget_list_file).read_text(encoding="utf-8-sig", errors="replace")
+        except OSError as e:
+            _err(f"--winget-list-file 을 읽을 수 없습니다: {e}")
+            return 1
+        new_state = ic.NewState([p for p in deps.registry() if p.source == "registry"], [], text, winget_ok=True)
+    try:
+        r = run_install_check(args.package, deps=deps, new_state=new_state)
+    except ApiError as e:
+        return _fail(e)
+    if args.json:
+        _json_out(r.to_dict(), indent=2)
+    else:
+        print(_install_check_text(r, args.package))
+    return 0  # 할 일이 남아도 0(오류만 1)
+
+
 def _cmd_discover(args: argparse.Namespace) -> int:
     if (_unexpanded(output=args.output, output_selection=args.output_selection)
             or _output_is_dir(output=args.output, **{"output-selection": args.output_selection})):
@@ -585,7 +639,8 @@ def _cmd_winget_extract(args: argparse.Namespace) -> int:
     if bak:
         print(f"- 같은 이름의 기존 파일은 덮어쓰지 않고 {fs.plain_path_text(str(bak))} 로 옮겼습니다.")
     print(f"다음 할 일: 아래 명령을 직접 실행하세요(이 도구는 대신 실행하지 않습니다).")
-    print(f'winget import -i "{fs.plain_path_text(str(target))}" --ignore-unavailable --accept-package-agreements --accept-source-agreements')
+    print(ic.import_command(fs.plain_path_text(str(target))))
+    print("실행한 뒤 설치 결과 확인: pcmigrate install-check 패키지.zip")
     return 0
 
 
@@ -644,6 +699,13 @@ def build_parser() -> argparse.ArgumentParser:
                    help="이 PC 에 없는 프로그램 관련 경고와 참고(설치 불필요 추정) 목록도 모두 표시")
     k.add_argument("--package", help="export 한 .zip 의 manifest/프로그램 목록 기준으로 작성(신 PC 용)")
     k.set_defaults(func=_cmd_checklist)
+
+    ik = sub.add_parser("install-check", help="설정 묶음의 구 PC 프로그램이 이 PC(새 PC)에 설치돼 있는지 비교(읽기 전용, 설치는 하지 않음)")
+    ik.add_argument("package", type=_path_arg, help="export 로 만든 .zip")
+    ik.add_argument("--json", action="store_true", help="JSON 으로 출력")
+    ik.add_argument("--winget-list-file", type=_path_arg,
+                    help="(시험용) 이 PC 의 winget 대신 이 파일의 `winget list` 출력을 사용")
+    ik.set_defaults(func=_cmd_install_check)
 
     dv = sub.add_parser("discover", help="규칙 없는 설치 프로그램과 설정 폴더 후보 탐지(읽기 전용)")
     dv.add_argument("--format", choices=("text", "md", "json"), default="text")

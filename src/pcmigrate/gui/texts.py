@@ -16,6 +16,7 @@ from . import icons as _icons
 # 화면 이름(state.py 의 상수와 같은 값)
 START, OLD_SCAN, OLD_DISCOVER, OLD_CHECKLIST, OLD_EXPORT = "start", "old_scan", "old_discover", "old_checklist", "old_export"
 NEW_PACKAGE, NEW_PREVIEW, NEW_CONFIRM, NEW_RESULT, TRANSFER = "new_package", "new_preview", "new_confirm", "new_result", "transfer"
+NEW_INSTALL = "new_install"
 
 # --------------------------------------------------------------------------- 용어집
 # 화면 문구는 아래 말만 쓴다(전문 용어/영어/내부 이름을 그대로 보이지 않는다). 새 문구도 이 표를 따른다.
@@ -105,13 +106,14 @@ SAFETY_LINES = (
 TITLES = {
     START: "시작", OLD_SCAN: "1단계. 프로그램 조사", OLD_DISCOVER: "2단계. 자동 목록에 없는 프로그램 확인",
     OLD_CHECKLIST: "3단계. 해야 할 일 목록", OLD_EXPORT: "4단계. 설정 묶음 파일 만들기",
-    NEW_PACKAGE: "1단계. 설정 묶음 파일 선택", NEW_PREVIEW: "2단계. 검사와 미리보기", NEW_CONFIRM: "3단계. 복원 확인",
-    NEW_RESULT: "4단계. 결과", TRANSFER: "큰 파일 옮기기(대용량 복사)", "auto_run": "추천대로 한 번에",
+    NEW_PACKAGE: "1단계. 설정 묶음 파일 선택", NEW_INSTALL: "2단계. 프로그램 설치 확인", NEW_PREVIEW: "3단계. 검사와 미리보기",
+    NEW_CONFIRM: "4단계. 복원 확인", NEW_RESULT: "5단계. 결과", TRANSFER: "큰 파일 옮기기(대용량 복사)", "auto_run": "추천대로 한 번에",
 }
 
 # --------------------------------------------------------------------------- 진행 표시(작업 이름, 예상 시간, 메시지)
 TASK_SCAN, TASK_DISCOVER, TASK_CHECKLIST = "프로그램 조사", "자동 목록에 없는 프로그램 찾기", "해야 할 일 목록 만들기"
 TASK_EXPORT, TASK_PREVIEW, TASK_APPLY = "설정 묶음 파일 만들기", "설정 묶음 파일 검사와 미리보기", "복원"
+TASK_INSTALL_CHECK = "프로그램 설치 확인"
 TASK_TRANSFER, TASK_TRANSFER_PREVIEW = "대용량 복사", "복사 미리보기(실제로 바꾸지 않음)"
 TASK_VERIFY, TASK_VERIFY_AGAIN, TASK_RETRY = "복사본 검사", "복사본 다시 검사", "실패한 파일만 다시 복사"
 PROGRESS = {
@@ -120,6 +122,7 @@ PROGRESS = {
     TASK_CHECKLIST: "해야 할 일 목록을 만드는 중… 보통 10~60초 걸립니다.",
     TASK_EXPORT: "설정 묶음 파일을 만드는 중… 파일 수에 따라 수십 초에서 몇 분 걸립니다. 원본은 읽기만 합니다.",
     TASK_PREVIEW: "설정 묶음 파일을 검사하고 미리보기를 만드는 중… 보통 몇 초에서 1분 걸립니다. 아무것도 쓰지 않습니다.",
+    TASK_INSTALL_CHECK: "이 PC에 설치된 프로그램을 읽어 설정 묶음 파일의 목록과 비교하는 중… 보통 10~60초 걸립니다. 아무것도 설치하거나 바꾸지 않습니다.",
     TASK_APPLY: "복원하는 중… 파일 수에 따라 수십 초에서 몇 분 걸립니다. 덮어쓰는 파일은 백업 파일(.bak)로 남깁니다.",
     TASK_TRANSFER: "복사하고 검사하는 중… 용량에 따라 몇 분에서 몇 시간 걸릴 수 있습니다. 취소해도 나중에 이어서 할 수 있습니다.",
     TASK_TRANSFER_PREVIEW: "무엇이 복사될지 확인하는 중… 아무것도 쓰지 않습니다.",
@@ -323,6 +326,50 @@ PREV_REJECTED_NOTE = (f"{ICON_WARN} 복원 위치가 바로가기(정션/링크)
                       "링크를 없애거나 실제 폴더로 바꾼 뒤 다시 시도해 주세요(링크 너머에는 쓰지 않습니다).")
 PREV_KIND_RULE, PREV_KIND_EXTRA = "자동 목록", "직접 고른 항목"
 PREV_WARN_TITLE = "새 PC에서 직접 해야 할 일(자동 복원 불가)"
+
+# 프로그램 설치 확인(묶음의 구 PC 프로그램과 이 PC의 설치 상태 비교). 도구는 설치 명령을 실행하지 않는다.
+INST_HEADING = TITLES[NEW_INSTALL]
+INST_SUB = ("구 PC에 있던 프로그램이 이 PC에 이미 설치됐는지 비교한 결과입니다. 이 도구는 프로그램을 설치하지 않습니다. "
+            "필요하면 아래 명령을 직접 실행한 뒤 '다시 확인'을 눌러 주세요. 건너뛰어도 됩니다.")
+BTN_INST_NEXT = "다음(미리보기)"
+INST_BTN_COPY = "설치 목록 꺼내고 명령 복사"
+INST_BTN_RECHECK = "다시 확인"
+INST_BTN_FOLDER = "폴더 바꾸기"
+INST_BTN_SKIP = "건너뛰기"
+INST_FOLDER_DEFAULT_NAME = "PC이전-프로그램목록"
+INST_FOLDER_LABEL = "설치 목록 파일(winget.json)을 꺼낼 폴더: {folder}"
+INST_FOLDER_PICK = "설치 목록을 꺼낼 폴더 선택"
+INST_SUMMARY = ("전체 {total}개 · 설치됨 {installed}개(버전 다름 {diff}개) · 설치 도구(winget)로 설치 가능 {winget}개 · "
+                "직접 설치 {manual}개 · 애매함 {ambiguous}개 · 설치 불필요 {not_needed}개")
+INST_LEFT = f"{ICON_WARN} 아직 설치하지 않은 것(애매함 포함) {{n}}개가 남아 있습니다. 설치한 뒤 '다시 확인'을 눌러 주세요."
+INST_ALL_DONE = f"{ICON_OK} 설치가 필요한 프로그램이 남아 있지 않습니다."
+INST_COLS = ("표시", "상태", "프로그램", "버전", "근거")
+INST_LABELS = {"installed": f"{ICON_OK} 설치됨", "installed_diff": f"{ICON_WARN} 설치됨(버전 다름)", "winget": "+ 설치 가능(winget)",
+               "manual": f"{ICON_WARN} 직접 설치 필요", "ambiguous": "? 애매함", "not_needed": "- 설치 불필요"}
+INST_KIND_NAMES = {"installed": "설치됨", "winget": "설치 도구(winget)로 설치 가능", "manual": "직접 설치 필요", "ambiguous": "애매함",
+                   "not_needed": "설치 불필요"}
+INST_VERSION_DIFF = "구 {old} → 새 {new}"
+INST_SPACE_HINT = "'표시' 칸 클릭 또는 Space 키로 '설치 끝냄'을 표시해 둘 수 있습니다(기억용이며 판정에는 쓰이지 않습니다)."
+INST_DETAIL = "{name} · {status} · 근거: {reason}{hint}"
+INST_DETAIL_HINT = " · 알아 둘 점: {hint}"
+INST_AMBIGUOUS_NOTE = "'애매함'은 이름만 비슷해서 같은 프로그램인지 확신할 수 없는 것입니다. 실제로 설치돼 있는지 직접 확인해 주세요."
+INST_WINGET_MISSING = f"{ICON_WARN} 이 PC에서 설치 도구(winget)를 읽지 못했습니다. 설치 여부를 프로그램 이름만 보고 판단해서 정확도가 낮습니다."
+INST_NO_WINGET_FILE = "설정 묶음 파일에 설치 도구(winget) 목록이 없거나 비어 있습니다. '직접 설치 필요' 항목을 설치해 주세요."
+INST_NONE = "설치 확인 결과가 아직 없습니다. 잠시 기다리거나 '다시 확인'을 눌러 주세요."
+INST_COPIED = (f"{ICON_OK} 설치 목록을 꺼내고 명령을 복사했습니다. 이 도구는 명령을 대신 실행하지 않습니다.\n"
+               "1) 시작 메뉴에서 '명령 프롬프트' 또는 PowerShell 을 엽니다. 설치에 관리자 권한이 필요하면 '관리자 권한으로 실행'으로 열어 주세요.\n"
+               "2) 마우스 오른쪽 클릭이나 Ctrl+V 로 붙여넣고 Enter 를 누릅니다.\n"
+               "3) 끝나면 이 화면에서 '다시 확인'을 눌러 주세요.")
+INST_COPIED_BAK = "같은 이름의 기존 파일은 덮어쓰지 않고 {bak} 로 옮겼습니다."
+INST_COPIED_CMD = "복사한 명령(복사가 안 되면 아래를 직접 선택해 복사해 주세요):"
+INST_INDIVIDUAL = "묶음의 목록에는 없지만 개별로 설치할 수 있는 프로그램은 다음 명령을 직접 실행해 주세요:"
+INST_COPY_NOTHING = "설치 도구(winget)로 한꺼번에 설치할 프로그램이 없습니다. '직접 설치 필요' 항목을 확인해 주세요."
+INST_RECHECK_NEW = f"{ICON_OK} 지난 확인보다 새로 설치된 프로그램 {{n}}개: {{names}}"
+INST_RECHECK_SAME = "지난 확인과 달라진 것이 없습니다. 설치가 끝난 뒤에 다시 눌러 주세요."
+INST_SKIPPED_NOTE = "프로그램 설치 확인은 건너뛰었습니다. 나중에 필요하면 '이전'으로 돌아와 다시 확인할 수 있습니다."
+G_INSTALL_NEED_PACKAGE = "먼저 설정 묶음 파일을 선택해 주세요."
+G_INSTALL_NO_WINGET = "설정 묶음 파일에 설치 도구(winget) 목록이 없어서 꺼낼 수 없습니다."
+G_INSTALL_NOT_YET = "먼저 설치 확인 결과가 나와야 합니다."
 
 CONF_HEADING = TITLES[NEW_CONFIRM]
 CONF_SUB = "여기서부터는 실제로 파일이 만들어지거나 덮어써집니다. 아래 두 가지를 확인하면 실행할 수 있습니다."
@@ -666,6 +713,7 @@ TASK_STEPS = {
     TASK_CHECKLIST: ("목록 읽기", "정리"),
     TASK_EXPORT: ("파일 찾기", "담기", "검사"),
     TASK_PREVIEW: ("설정 묶음 파일 검사",),
+    TASK_INSTALL_CHECK: ("목록 읽기", "비교"),
     TASK_APPLY: ("준비", "복원"),
     TASK_TRANSFER: ("조사", "복사", "검사"),
     TASK_TRANSFER_PREVIEW: ("조사", "비교"),
@@ -676,7 +724,7 @@ TASK_STEPS = {
 # 마법사 맨 위의 전체 단계 표시
 OVERALL_FMT = "전체 단계 {n}/{total}"
 OVERALL_FLOWS = {"old": "구 PC에서 준비", "new": "새 PC에서 가져오기", "transfer": "큰 파일 옮기기"}
-OVERALL_STEP_NAMES = {"old": ("조사", "목록 밖 프로그램", "할 일", "묶음 만들기"), "new": ("파일 선택", "미리보기", "복원 확인", "결과"),
+OVERALL_STEP_NAMES = {"old": ("조사", "목록 밖 프로그램", "할 일", "묶음 만들기"), "new": ("파일 선택", "설치 확인", "미리보기", "복원 확인", "결과"),
                       "transfer": ("구 PC에서 보내기", "새 PC에서 받아 검사"), "local": ("복사",)}
 OVERALL_TRANSFER_STAGES = {1: "1단계(구 PC에서 보내기)", 2: "2단계(새 PC에서 받아 검사하기)"}
 
@@ -761,6 +809,10 @@ HELP = {
                  "다음 단계\n만든 .zip 을 새 PC로 옮긴 뒤, 새 PC에서 ②(신 PC)를 골라 주세요."),
     NEW_PACKAGE: ("무엇을 하는 화면인가요?\n구 PC에서 만든 설정 묶음 파일(.zip)을 고르는 화면입니다.\n\n"
                   "안전한가요?\n네. 이 단계에서는 아무것도 쓰지 않습니다.\n\n다음 단계\n'검사하고 미리보기'를 눌러 주세요."),
+    NEW_INSTALL: ("무엇을 하는 화면인가요?\n구 PC에 있던 프로그램이 이 PC에 이미 설치됐는지 비교해, 설치된 것과 아직 설치하지 않은 것을 나눠 보여 줍니다. "
+                  "이름이 비슷해 확신할 수 없는 것은 '애매함'으로 따로 표시합니다.\n\n"
+                  "안전한가요?\n네. 이 도구는 프로그램을 설치하지 않습니다. 설치 명령은 복사만 해 드리니 명령 창에서 직접 실행해 주세요.\n\n"
+                  "다음 단계\n설치한 뒤 '다시 확인'을 누르면 다시 판단합니다. 건너뛰어도 되며, '다음(미리보기)'으로 이어갑니다."),
     NEW_PREVIEW: ("무엇을 하는 화면인가요?\n설정 묶음 파일이 정확한지 검사하고, 복원하면 어떤 파일이 새로 만들어지거나 덮어써지는지 미리 보여 줍니다.\n\n"
                   "안전한가요?\n네. 지금은 실제로 바꾸지 않았습니다.\n\n다음 단계\n문제가 없으면 '복원 확인 단계로' 이동합니다."),
     NEW_CONFIRM: ("무엇을 하는 화면인가요?\n실제로 복원하기 전의 마지막 확인 화면입니다.\n\n"
@@ -824,13 +876,14 @@ TIP_AUTO = {
 AUTO_HEADING = "추천대로 한 번에"
 AUTO_SUB = {
     "old": "쓰던 PC에서 조사부터 설정 묶음 파일 만들기까지 이어서 진행합니다. 쓰던 PC의 파일은 읽기만 합니다.",
-    "new": "설정 묶음 파일 찾기부터 복원까지 이어서 진행합니다. 복원 전에는 확인 표시 두 개와 확인 창을 거칩니다.",
+    "new": "설정 묶음 파일 찾기부터 복원까지 이어서 진행합니다. 프로그램 설치 확인에서는 설치를 직접 하거나 건너뛸 수 있고, 복원 전에는 확인 표시 두 개와 확인 창을 거칩니다.",
     "transfer": "방식을 정한 뒤 미리보기부터 이어서 진행합니다. 복사를 시작하기 전에는 반드시 확인을 받습니다.",
 }
 AUTO_STEPS = {
     "old": (("scan", "프로그램 조사"), ("discover", "자동 목록에 없는 프로그램 확인"), ("checklist", "해야 할 일 목록 만들기"),
             ("export", "설정 묶음 파일 만들기")),
-    "new": (("find", "설정 묶음 파일 찾기"), ("preview", "검사와 미리보기"), ("confirm", "복원 확인"), ("apply", "복원")),
+    "new": (("find", "설정 묶음 파일 찾기"), ("preview", "검사와 미리보기"), ("install", "프로그램 설치 확인"), ("confirm", "복원 확인"),
+            ("apply", "복원")),
     "transfer": (("questions", "방식 정하기"), ("folders", "폴더 고르기"), ("preview", "미리보기"), ("copy", "복사"),
                  ("result", "결과 확인")),
     "receive": (("questions", "방식 정하기"), ("folders", "목록·폴더 고르기"), ("check", "복사본 검사"), ("result", "결과 확인")),
@@ -874,6 +927,11 @@ AUTO_REJECTED_HOW = "'미리보기에서 확인'을 눌러 내용을 직접 보�
 AUTO_BTN_MANUAL_PREVIEW = "미리보기에서 확인"
 AUTO_RESTORE_HEAD = "복원하기 전에 확인해 주세요"
 AUTO_RESTORE_SUMMARY = "새로 만들 파일 {new}개 · 덮어쓸 파일 {over}개 · 같아서 건너뛸 파일 {same}개"
+AUTO_INSTALL_HEAD = "이 PC에 프로그램이 설치돼 있는지 확인해 주세요"
+AUTO_INSTALL_NOTE = "이 도구는 설치 명령을 실행하지 않습니다. 필요하면 명령을 복사해 직접 실행한 뒤 '다시 확인'을 눌러 주세요."
+AUTO_INSTALL_CONTINUE = "확인했습니다. 복원 확인으로"
+AUTO_INSTALL_DONE_NOTE = "설치 확인 결과: 남은 것 {n}개"
+AUTO_INSTALL_SKIPPED = "건너뜀: 설치 확인 없이 진행했습니다."
 AUTO_BTN_PREVIEW_LIST = "미리보기 자세히 보기"
 AUTO_PREVIEW_LIST_TITLE = "복원 미리보기"
 AUTO_APPLY_FAILED_HOW = "원인을 해결한 뒤 '직접 진행하기'로 미리보기부터 다시 확인해 주세요."

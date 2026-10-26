@@ -22,6 +22,7 @@ from .views import common as C
 from .views.common import (CHIP_DONE_BG, CHIP_TODO_BG, FONT_DELTA_RANGE, INFO_BG, INFO_FG, MUTED_FG, OK_FG, SUB_FONT, TITLE_FONT, WARN_FG,
                            ActionButton, BaseView, TextDialog, add_tooltip, autowrap, install_wheel, open_location, setup_fonts)
 from .views.auto import AutoView
+from .views.install import InstallView
 from .views.new_pc import ConfirmView, PackageView, PreviewView, ResultView
 from .views.old_pc import ChecklistView, DiscoverView, ExportView, ScanView
 from .views.start import StartView
@@ -213,7 +214,7 @@ class ErrorDialog(tk.Toplevel):
             self.toggle.configure(text=T.BTN_DETAIL_SHOW)
 
 
-VIEW_CLASSES = (StartView, ScanView, DiscoverView, ChecklistView, ExportView, PackageView, PreviewView, ConfirmView,
+VIEW_CLASSES = (StartView, ScanView, DiscoverView, ChecklistView, ExportView, PackageView, InstallView, PreviewView, ConfirmView,
                 ResultView, TransferView, AutoView)
 
 
@@ -375,10 +376,17 @@ class App(tk.Tk):
     def show(self, screen: str) -> None:
         view = self.views[screen]
         self.current = screen
-        view.tkraise()
-        self.crumb.configure(text=T.CRUMB_HOME if screen == S.START else T.TITLES.get(screen, screen))
-        self.update_overall()
-        view.on_show()
+        if getattr(view, "fill_hidden", False):
+            view.on_show()  # 아직 아래에 가려진 채로 내용을 먼저 채운 뒤 올린다(깜빡임 방지)
+            view.update_idletasks()
+            view.tkraise()
+            self.crumb.configure(text=T.TITLES.get(screen, screen))
+            self.update_overall()
+        else:
+            view.tkraise()
+            self.crumb.configure(text=T.CRUMB_HOME if screen == S.START else T.TITLES.get(screen, screen))
+            self.update_overall()
+            view.on_show()
         view.refresh_card()
         self._sync_footer()
 

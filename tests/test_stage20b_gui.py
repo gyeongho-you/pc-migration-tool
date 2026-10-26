@@ -390,8 +390,11 @@ def test_auto_new_single_package_goes_to_preview_then_waits_for_both_checks_and_
     pkg.write_text("x")
     c.auto_run("new")
     assert api.calls == [("import", True, False, False)]  # 미리보기만(쓰지 않음)
-    assert c.state.package == str(pkg) and steps(c) == {"find": "done", "preview": "done", "confirm": "waiting", "apply": "todo"}
-    assert c.auto.gate == "restore"
+    assert c.state.package == str(pkg) and steps(c) == {"find": "done", "preview": "done", "install": "waiting", "confirm": "todo",
+                                                        "apply": "todo"}
+    assert c.auto.gate == "install" and api.install_calls == [str(pkg)]  # 설치 확인은 사람이 확인/건너뛰기를 고를 때까지 기다린다
+    c.auto_install_continue()
+    assert steps(c)["install"] == "done" and steps(c)["confirm"] == "waiting" and c.auto.gate == "restore"
     for attempt in (lambda: c.auto_apply(),):  # 체크도 확인창도 없이는 복원하지 않는다
         with pytest.raises(GuardError) as e:
             attempt()
@@ -428,7 +431,9 @@ def test_auto_new_multiple_packages_need_a_choice_from_the_found_list(env):
     with pytest.raises(GuardError):
         c.auto_pick_package(str(d / "evil.zip"))  # 찾은 목록에 없는 경로는 받지 않는다
     c.auto_pick_package(paths[0])
-    assert c.state.package == paths[0] and c.auto.gate == "restore"
+    assert c.state.package == paths[0] and c.auto.gate == "install"
+    c.auto_install_continue(skip=True)
+    assert c.auto.gate == "restore" and steps(c)["install"] == "skipped"
 
 
 def test_auto_new_stops_on_rejected_and_on_package_problems(env):
@@ -449,6 +454,7 @@ def test_auto_new_apply_failure_stops_with_reason(env):
     c, api, ev = env
     (Path(c.default_desktop()) / "pcmigrate-settings.zip").write_text("x")
     c.auto_run("new")
+    c.auto_install_continue()
     c.set_preview_checked(True)
     c.set_bak_understood(True)
     c.confirm_final(True)
@@ -634,6 +640,9 @@ def test_auto_view_restore_gate_enforces_checks_and_final_dialog(ctx):
     c.auto_run("new")
     app.update()
     v = app.views[S.AUTO]
+    assert c.auto.gate == "install"  # 설치 확인 지점에서 '확인했습니다'를 눌러야 복원 확인으로 간다
+    v.gate_btn.invoke()
+    app.update()
     assert c.auto.gate == "restore" and "disabled" in v.apply_btn.state()
     assert v.apply_why.cget("text") == T.G_NEED_CHECK_PREVIEW
     v.check.invoke()

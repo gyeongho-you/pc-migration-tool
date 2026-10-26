@@ -12,7 +12,7 @@ from pcmigrate.gui import texts as T
 
 BANNED = ["dry-run", "dry run", "manifest", "SHA-256", "sha256", "robocopy", "extra", "strict", "UNC"]
 GUI_DIR = Path(__file__).resolve().parents[1] / "src" / "pcmigrate" / "gui"
-SCREENS = (S.START, S.OLD_SCAN, S.OLD_DISCOVER, S.OLD_CHECKLIST, S.OLD_EXPORT, S.NEW_PACKAGE, S.NEW_PREVIEW,
+SCREENS = (S.START, S.OLD_SCAN, S.OLD_DISCOVER, S.OLD_CHECKLIST, S.OLD_EXPORT, S.NEW_PACKAGE, S.NEW_INSTALL, S.NEW_PREVIEW,
            S.NEW_CONFIRM, S.NEW_RESULT, S.TRANSFER)
 
 
@@ -122,7 +122,7 @@ def test_polite_tone_no_plain_style_sentences():
 def test_screen_names_titles_and_help_are_complete_and_consistent():
     assert (T.START, T.OLD_SCAN, T.OLD_DISCOVER, T.OLD_CHECKLIST, T.OLD_EXPORT) == (S.START, S.OLD_SCAN, S.OLD_DISCOVER,
                                                                                     S.OLD_CHECKLIST, S.OLD_EXPORT)
-    assert (T.NEW_PACKAGE, T.NEW_PREVIEW, T.NEW_CONFIRM, T.NEW_RESULT, T.TRANSFER) == (S.NEW_PACKAGE, S.NEW_PREVIEW,
+    assert (T.NEW_PACKAGE, T.NEW_INSTALL, T.NEW_PREVIEW, T.NEW_CONFIRM, T.NEW_RESULT, T.TRANSFER) == (S.NEW_PACKAGE, S.NEW_INSTALL, S.NEW_PREVIEW,
                                                                                        S.NEW_CONFIRM, S.NEW_RESULT, S.TRANSFER)
     assert S.TITLES is T.TITLES
     for scr in SCREENS:

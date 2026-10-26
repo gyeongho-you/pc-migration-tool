@@ -15,6 +15,7 @@ import os
 import platform
 import re
 import sys
+import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -29,8 +30,9 @@ from .discover import (Discovery, ExtraItem, SelectionError, build_selection, di
                        load_selection,
                        program_has_rule, secret_names, summarize)
 import inspect
+from .install_check import InstallCheck, NewState, check_install, read_new_state
 from .package import (COMPRESS_MODES, ImportPlan, PackageError, apply_import, export_package, extract_winget,
-                      plan_import, verify_package)
+                      is_unfinished_part, plan_import, verify_package)
 from .rules import Rule, RuleError, load_rules
 from . import fs
 from .manifest import build_manifest, verify_against_manifest
@@ -409,6 +411,31 @@ def run_checklist(rules_dir: str | Path, *, package: str | Path | None = None, s
     cl = build_checklist(pairs, registry, winget, list_text, rule_ids=rule_ids, show_all=show_all,
                          discovery=disc)
     return ChecklistResult(render_checklist(cl, fmt), cl, disc)
+
+
+# --------------------------------------------------------------------------- install-check
+
+def run_install_check(package: str | Path, *, deps: Deps | None = None,
+                      progress_info: Callable[[ProgressInfo], None] | None = None,
+                      new_state: NewState | None = None) -> InstallCheck:
+    """묶음의 구 PC 설치 목록과 이 PC(새 PC)의 현재 설치 상태를 비교한다. 읽기 전용(winget import/install 은 실행하지 않는다).
+
+    new_state 를 주면 이 PC 를 읽지 않고 그 값을 쓴다(시험/--winget-list-file 용). 패키지가 손상되면 ApiError.
+    """
+    deps = deps or Deps()
+    if is_unfinished_part(Path(package)):
+        raise ApiError("이 파일(.part)은 아직 완성되지 않은 임시 파일입니다. 완성된 .zip 파일을 선택하세요.")
+    manifest, problems = verify_package(Path(package))
+    if manifest is None or problems:
+        raise ApiError("패키지 검증 실패: " + "; ".join(problems[:3]))
+    try:
+        registry, winget, list_text = load_package_programs(Path(package))
+    except (ValueError, KeyError, TypeError, AttributeError, RecursionError, zipfile.BadZipFile, OSError) as e:
+        raise ApiError(f"패키지의 프로그램 목록을 읽을 수 없습니다({type(e).__name__}). 구 PC 에서 설정 묶음 파일을 다시 만들어 주세요.") from e
+    _phase(progress_info, "list", "이 PC 에 설치된 프로그램 목록을 읽는 중입니다…")
+    state = new_state if new_state is not None else read_new_state(deps.registry, deps.winget_export, deps.winget_list)
+    _phase(progress_info, "match", "묶음의 프로그램과 비교하는 중입니다…")
+    return check_install(registry, winget, list_text, state)
 
 
 # --------------------------------------------------------------------------- discover

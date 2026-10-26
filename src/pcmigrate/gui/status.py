@@ -21,6 +21,7 @@ PHASE_MAP = {
     T.TASK_SCAN: {"list": 0, "match": 1},
     T.TASK_DISCOVER: {"list": 0, "find": 1, "scan": 2},
     T.TASK_CHECKLIST: {"list": 0, "match": 1},
+    T.TASK_INSTALL_CHECK: {"list": 0, "match": 1},
     T.TASK_EXPORT: {"find": 0, "pack": 1, "check": 2},
     T.TASK_APPLY: {"restore": 1},
     T.TASK_TRANSFER: {"scan": 0, "copy": 1, "verify": 2, "manifest": 2},

@@ -10,11 +10,12 @@ from . import texts as T
 START = "start"
 OLD_SCAN, OLD_DISCOVER, OLD_CHECKLIST, OLD_EXPORT = "old_scan", "old_discover", "old_checklist", "old_export"
 NEW_PACKAGE, NEW_PREVIEW, NEW_CONFIRM, NEW_RESULT = "new_package", "new_preview", "new_confirm", "new_result"
+NEW_INSTALL = "new_install"  # 프로그램 설치 확인(건너뛰기 가능)
 TRANSFER = "transfer"
 AUTO = "auto_run"  # 추천대로 한 번에(진행 화면 하나)
 
 OLD_FLOW = (OLD_SCAN, OLD_DISCOVER, OLD_CHECKLIST, OLD_EXPORT)
-NEW_FLOW = (NEW_PACKAGE, NEW_PREVIEW, NEW_CONFIRM, NEW_RESULT)
+NEW_FLOW = (NEW_PACKAGE, NEW_INSTALL, NEW_PREVIEW, NEW_CONFIRM, NEW_RESULT)
 
 TITLES = T.TITLES  # 화면 제목은 texts.py 에서 관리
 
@@ -71,6 +72,15 @@ class WizardState:
     final_confirmed: bool = False  # 확인 대화상자에서 '예'
     extra_consent: bool = False  # 규칙 없이 선택 포함된 파일 복원 동의(--allow-extra)
     import_result: Any = None  # api.ImportResult (mode=applied)
+    # 프로그램 설치 확인(읽기 전용 비교. 설치 명령은 도구가 실행하지 않는다)
+    install_check: Any = None  # install_check.InstallCheck
+    install_prev: Any = None  # 직전 확인 결과('다시 확인' 때 새로 설치된 개수를 세기 위해)
+    install_package: str = ""  # 확인에 쓴 묶음 파일 경로(바뀌면 무효)
+    install_skipped: bool = False
+    install_marks: set = field(default_factory=set)  # 사용자가 '설치 끝냄' 표시한 프로그램 이름(기억용, 판정에는 쓰지 않음)
+    install_folder: str = ""  # 설치 목록(winget.json)을 꺼낼 폴더(빈 값이면 바탕화면의 새 폴더)
+    install_command: str = ""  # 마지막으로 복사용으로 만든 명령
+    install_new: list = field(default_factory=list)  # 다시 확인으로 새로 설치된 것으로 확인된 프로그램 이름
     # 대용량 복사
     transfer_src: str = ""
     transfer_dst: str = ""

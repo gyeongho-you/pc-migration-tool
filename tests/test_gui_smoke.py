@@ -19,7 +19,7 @@ from pcmigrate.gui.views.common import TextDialog, sort_tree  # noqa: E402
 
 from test_gui_controller import FakeApi, item, plan  # noqa: E402
 
-ALL_SCREENS = (S.START, S.OLD_SCAN, S.OLD_DISCOVER, S.OLD_CHECKLIST, S.OLD_EXPORT, S.NEW_PACKAGE, S.NEW_PREVIEW,
+ALL_SCREENS = (S.START, S.OLD_SCAN, S.OLD_DISCOVER, S.OLD_CHECKLIST, S.OLD_EXPORT, S.NEW_PACKAGE, S.NEW_INSTALL, S.NEW_PREVIEW,
                S.NEW_CONFIRM, S.NEW_RESULT, S.TRANSFER, S.AUTO)
 
 
@@ -361,7 +361,10 @@ def test_new_pc_flow_preview_confirm_and_result_summary(ctx):
     assert "disabled" not in pv.next_btn.state()
     pv._next()
     app.update()
-    assert c.state.screen == S.NEW_PREVIEW and [x for x in api.calls if x[0] == "import"] == [("import", True, False, False)]
+    assert c.state.screen == S.NEW_INSTALL and [x for x in api.calls if x[0] == "import"] == [("import", True, False, False)]
+    app.views[S.NEW_INSTALL].next_btn.invoke()  # 프로그램 설치 확인(건너뛰어도 됨) 다음에 미리보기
+    app.update()
+    assert c.state.screen == S.NEW_PREVIEW
     prev = app.views[S.NEW_PREVIEW]
     rows = children(prev.tree)
     assert len(rows) == 2 and rows[0]["values"][3] == T.PREV_KIND_EXTRA and rows[1]["values"][0] == T.PREV_STATUS["would_overwrite"]
