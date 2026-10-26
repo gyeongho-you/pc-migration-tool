@@ -564,6 +564,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
     for f in r.hard_failures:
         _err(f"실패: {f['src']} -> {f['error']}")
     _print_warnings(r.manifest.get("manual_warnings", []))
+    _err(*summary.install_export_notes(r.manifest))
     _print_checklist_hint(r.checklist)
     if r.discovery:
         _print_hint("(자동으로 포함되지 않습니다).", *r.discovery)
@@ -580,7 +581,8 @@ def _cmd_import(args: argparse.Namespace) -> int:
         _err("[진행] 패키지를 검사하는 중입니다. 파일이 많으면 몇 분 걸릴 수 있으며, 진행 상황이 10초마다 표시됩니다.")
     try:
         r = run_import(args.package, args.rules, dry_run=args.dry_run, yes=args.yes,
-                       allow_extra=args.allow_extra, deps=_deps(), progress_info=_cli_info_progress())
+                       allow_extra=args.allow_extra, deps=_deps(), progress_info=_cli_info_progress(),
+                       allow_install_dir=args.allow_install_dir)
     except ApiError as e:
         return _fail(e)
     if r.mode == "blocked":
@@ -603,6 +605,7 @@ def _cmd_import(args: argparse.Namespace) -> int:
         if r.n_extra:
             _err(f"[주의] 규칙 없이 선택 포함된 파일 {r.n_extra}개가 있습니다. "
                  "실제 복원은 --yes 와 --allow-extra 가 모두 필요합니다.")
+        _err(*summary.install_notes(r))
         if r.mode == "dry-run":
             _err("미리보기입니다. 실제 변경은 없었습니다.")
             return 0
@@ -633,6 +636,7 @@ def _cmd_import(args: argparse.Namespace) -> int:
     for f in report.failures:
         _err(f"실패: {f.dst} -> {f.error}")
     _print_warnings(r.plan.warnings)
+    _err(*summary.install_notes(r))
     return 1 if report.failures else 0
 
 
@@ -731,7 +735,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     e = sub.add_parser("export", help="설정 패키지(.zip) 내보내기")
     e.add_argument("--output", type=_path_arg, required=True, help="생성할 .zip 경로")
-    e.add_argument("--extra", type=_path_arg, help="discover --output-selection 으로 만들고 사용자가 고른 선택 파일(규칙 없는 폴더 포함)")
+    e.add_argument("--extra", type=_path_arg, help="discover --output-selection 으로 만들고 사용자가 고른 선택 파일(규칙 없는 폴더 + 프로그램 설치 폴더 설정 파일(install_dir 목록) 포함)")
     e.add_argument("--allow-secrets", action="store_true",
                    help="선택 항목에 비밀 정보 가능성이 있어도 포함(내용을 확인한 경우에만)")
     e.add_argument("--include-caches", action="store_true",
@@ -755,6 +759,9 @@ def build_parser() -> argparse.ArgumentParser:
     i.add_argument("--dry-run", action="store_true", help="변경 없이 미리보기만 출력(--yes 보다 우선)")
     i.add_argument("--yes", action="store_true", help="미리보기 확인 후 실제 복원 수행")
     i.add_argument("--allow-extra", action="store_true", help="규칙 없이 선택 포함된 파일의 복원을 허용")
+    i.add_argument("--allow-install-dir", action="store_true",
+                   help="프로그램 설치 폴더(Program Files 등) 안의 설정 파일 복원을 허용(기본은 복원 안 함). 관리자 권한과 같은 버전의 프로그램이 필요하며 "
+                        "설정 형식 파일만 쓰고 기존 파일은 .bak 으로 보존")
     i.add_argument("--rules", type=_path_arg, default=str(default_rules_dir()), help="규칙 JSON 폴더")
     i.add_argument("--report", type=_path_arg, help="결과 리포트(JSON) 저장 경로")
     i.add_argument("--json", action="store_true", help="사람이 읽는 요약 대신 JSON 으로 출력")

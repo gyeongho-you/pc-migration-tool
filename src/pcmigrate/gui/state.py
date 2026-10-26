@@ -73,6 +73,8 @@ class WizardState:
     bak_understood: bool = False  # '백업 파일(.bak)이 남는다는 것을 이해했습니다'(두 번째 확인)
     final_confirmed: bool = False  # 확인 대화상자에서 '예'
     extra_consent: bool = False  # 규칙 없이 선택 포함된 파일 복원 동의(--allow-extra)
+    install_consent: bool = False  # '설치 폴더 설정도 복원' 체크(기본 꺼짐 = 복원 안 함). 미리보기 화면에서 켜고, 새 묶음/복원 뒤에는 다시 꺼진다
+    preview_install_consent: bool = False  # 미리보기를 만들 때의 install_consent(달라지면 미리보기 무효)
     import_result: Any = None  # api.ImportResult (mode=applied)
     # 프로그램 설치 확인(읽기 전용 비교. 설치 명령은 도구가 실행하지 않는다)
     install_check: Any = None  # install_check.InstallCheck

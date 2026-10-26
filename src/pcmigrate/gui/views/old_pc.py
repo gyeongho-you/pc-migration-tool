@@ -154,7 +154,7 @@ class DiscoverView(BaseView):
         r = self.rows.get(iid)
         if r is None:
             return ""
-        return {1: ", ".join(r.secret), 2: r.programs, 3: r.path}.get(col, "")
+        return {1: ", ".join(r.secret) or r.badge_note, 2: r.programs, 3: r.path}.get(col, "")
 
     def _refresh(self) -> None:
         sort_state = dict(getattr(self.tree, "_sort_state", {}))

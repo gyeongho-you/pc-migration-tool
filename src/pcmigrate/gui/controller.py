@@ -26,6 +26,7 @@ from ..checklist import write_output
 from .. import coverage, fs
 from ..discover import fmt_size, items_from_selection
 from ..install_check import INSTALLED, import_command, newly_installed
+from ..install_dir import install_items_from_selection
 from ..manifest import DEFAULT_NAME as MANIFEST_NAME
 from ..manifest import ManifestError
 from ..package import inspect_savepoint
@@ -268,6 +269,8 @@ class CandRow:
     size_eff: str = ""  # 표에 보이는 크기: 내보낼 때 기본으로 빠지는 임시 저장물(캐시)을 뺀 값
     files_eff: str = ""  # 표에 보이는 파일 수(캐시 제외)
     detail_cache: str = ""  # 캐시가 있으면 '전체 X 중 캐시 Y' 안내(상세줄용)
+    install: bool = False  # 프로그램 설치 폴더 안의 설정 파일 후보(설치 폴더 설정)
+    badge_note: str = ""  # 배지의 전체 설명(툴팁/상세줄용)
 
 
 @dataclass
@@ -328,6 +331,7 @@ class Controller:
         self.state = S.WizardState(rules_dir=str(rules_dir or default_rules_dir()))
         self.log = logger or logging.getLogger("pcmigrate.gui")
         self.make_items = make_items or items_from_selection
+        self.make_install_items = install_items_from_selection
         self.record_error = record_error or errorlog.record  # (예외, 실행 화면/작업 이름, traceback) -> 로그 파일 경로 | None
         self.status = StatusModel()  # 현황 카드의 상태(tkinter 와 무관)
         self.last_error: FriendlyError | None = None
@@ -621,7 +625,12 @@ class Controller:
                 kind=T.KIND_FOLDER if c.is_dir else T.KIND_FILE, size=fmt_size(c), grade=link.grade if link else "없음",
                 reason=link.reason if link else "", weak=bool(link and link.weak), secret=list(c.secret),
                 selectable=((not c.secret) or self.state.secrets_ack) and not c.license_only,
-                badge=c.badge, license_only=c.license_only, size_eff=eff_size, files_eff=eff_files, detail_cache=note))
+                badge=c.badge, license_only=c.license_only, size_eff=eff_size, files_eff=eff_files, detail_cache=note,
+                install=bool(getattr(c, "install_program", "")),
+                badge_note=T.DISC_INSTALL_BADGE_FULL if getattr(c, "install_program", "") else ""))
+        for r in rows:
+            if r.install:  # 설치 폴더 설정 후보: 상세줄에 복원 조건을 더한다(캐시 안내 대신)
+                r.detail_cache = T.DISC_DETAIL_INSTALL
         return rows
 
     def _cache_excluded(self, c) -> bool:
@@ -724,7 +733,7 @@ class Controller:
         entry = next((e for e in d.programs if e.program.name == name), None)
         have = {c.key for c in d.candidates()}
         new = dup = 0
-        for c in getattr(res, "candidates", []):
+        for c in [*getattr(res, "candidates", []), *getattr(res, "install_candidates", [])]:  # 설치 폴더 설정 후보도 체크 가능한 후보로(선택은 안 함)
             if c.key in have:
                 dup += 1
                 continue
@@ -741,10 +750,18 @@ class Controller:
             return T.FIND_RESULT_RULE.format(name=name)
         if not res.candidates and not res.install_files:
             return T.FIND_RESULT_NONE.format(name=name)
+        n_inst = len(getattr(res, "install_candidates", []) or [])
         toks = ", ".join(t for t, _s in res.tokens[:6]) or "-"
         text = T.FIND_RESULT.format(name=name, new=info["new"], dup=info["dup"], tokens=toks)
         text += "\n" + T.FIND_SCOPE_NOTE
-        if res.install_files:
+        if n_inst:
+            names = ", ".join(os.path.basename(x["path"]) for x in res.install_files[:6])
+            text += "\n" + T.FIND_INSTALL_CANDIDATES.format(n=n_inst, names=names)
+            if res.install_more:
+                text += T.FIND_INSTALL_MORE.format(k=res.install_more)
+            if getattr(res, "install_excluded", None):
+                text += T.FIND_INSTALL_EXCLUDED.format(k=len(res.install_excluded))
+        elif res.install_files:
             names = ", ".join(os.path.basename(x["path"]) for x in res.install_files[:6])
             text += "\n" + T.FIND_INSTALL_FILES.format(n=len(res.install_files) + res.install_more, names=names)
         if res.budget_hit:
@@ -986,10 +1003,21 @@ class Controller:
         has_secret = any(r.secret for r in sel)
         if has_secret and not self.state.secrets_ack:
             raise GuardError(T.G_SECRET_NO_ACK)
-        cache_keys = {c.key for c in (self.state.discovery.candidates() if self.state.discovery else []) if c.include_caches}
+        all_cands = {c.key: c for c in (self.state.discovery.candidates() if self.state.discovery else [])}
+        cache_keys = {k for k, c in all_cands.items() if c.include_caches}
+        inst_rows = [r for r in sel if r.install]
+        plain_rows = [r for r in sel if not r.install]
         items = self.make_items({"format": 1, "candidates": [
             {"include": True, "root": k[0], "rel": k[1], **({"include_caches": True} if k in cache_keys else {})}
-            for k in sorted(r.key for r in sel)]}) if sel else []
+            for k in sorted(r.key for r in plain_rows)]}) if plain_rows else []
+        install_items = []
+        if inst_rows:  # 설치 폴더 설정: 별도 영역에 담는다(복원은 새 PC 에서 별도 동의가 있을 때만)
+            if not _accepts(self.api.run_export, "install_items"):
+                raise GuardError(T.G_INSTALL_UNSUPPORTED)
+            install_items = self.make_install_items({"format": 1, "candidates": [], "install_dir": [
+                {"include": True, "program": all_cands[r.key].install_program, "root": r.key[0],
+                 "folder": all_cands[r.key].install_folder, "rel": r.key[1], "path": r.path}
+                for r in sorted(inst_rows, key=lambda x: x.key) if r.key in all_cands]})
 
         stage_kw = {"stage_dir": stage_dir} if stage_dir else {}
         if include_caches is None:
@@ -1002,7 +1030,8 @@ class Controller:
         def work(progress, token):
             return self.api.run_export(self.state.rules_dir, output, extra_items=items or None,
                                        allow_secrets=has_secret, deps=self.deps,
-                                       **_supported(self.api.run_export, progress_info=progress, resume=resume), **stage_kw)
+                                       **_supported(self.api.run_export, progress_info=progress, resume=resume), **stage_kw,
+                                       **({"install_items": install_items} if install_items else {}))
 
         def done(res):
             self.state.export_result, self.state.export_output = res, output
@@ -1012,6 +1041,7 @@ class Controller:
     # ------------------------------------------------------------------ 신 PC
     def set_package(self, path: str) -> None:
         self.state.package = path
+        self.state.install_consent = self.state.preview_install_consent = False  # 설치 폴더 설정은 묶음을 새로 고를 때마다 '복원 안 함'으로 시작
         self._reset_confirms()
         self.state.preview = None
         self._reset_install()
@@ -1136,22 +1166,73 @@ class Controller:
             raise GuardError(T.G_NEED_PACKAGE)
         package = self.state.package
 
+        consent = self.state.install_consent
+        if consent and not _accepts(self.api.run_import, "allow_install_dir"):
+            raise GuardError(T.G_INSTALL_UNSUPPORTED)
+        inst_kw = {"allow_install_dir": True} if consent else {}
+
         def work(progress, token):
-            return self.api.run_import(package, self.state.rules_dir, dry_run=True, deps=self.deps)
+            return self.api.run_import(package, self.state.rules_dir, dry_run=True, deps=self.deps, **inst_kw)
 
         def done(res):
             self.state.preview, self.state.preview_package = res, package
+            self.state.preview_install_consent = consent
             self._reset_confirms()
             self.emit("preview_done", res)
         self._run(T.TASK_PREVIEW, work, done)
+
+    def set_install_consent(self, on: bool) -> None:
+        """'설치 폴더 설정도 복원' 체크. 바뀌면 미리보기를 다시 만든다(권한 점검과 덮어쓸 목록이 달라지므로)."""
+        on = bool(on)
+        if on == self.state.install_consent:
+            return
+        self.state.install_consent = on
+        self.state.final_confirmed = False
+        self.emit("confirm_changed")
+        if self.state.package:
+            self.start_preview()
+
+    def install_view(self) -> list[dict]:
+        p = self.state.preview
+        return list(getattr(p, "install_view", None) or []) if p is not None else []
+
+    def install_note_lines(self) -> list[str]:
+        """미리보기 요약 아래의 설치 폴더 설정 안내(없으면 빈 목록): 개수/복원 조건, 폴더 없음, 버전 경고."""
+        view = self.install_view()
+        if not view:
+            return []
+        p = self.state.preview
+        allowed = bool(getattr(p, "install_allowed", False))
+        n = len(view)
+        out = [(T.PREV_INSTALL_ON if allowed else T.PREV_INSTALL_OFF).format(icon=T.ICON_WARN, n=n)]
+        miss = [v for v in view if v.get("status") in ("missing_dir", "missing_program")]
+        if miss:
+            out.append(T.PREV_INSTALL_MISSING.format(icon=T.ICON_WARN, k=len(miss)))
+        out.append(T.PREV_INSTALL_VERSION.format(icon=T.ICON_WARN))
+        for pr in getattr(p.plan, "install_programs", []) or []:
+            old, new = pr.get("old_version") or "", pr.get("new_version") or ""
+            if allowed and old and new and old != new:
+                out.append(T.PREV_INSTALL_VERSION_DIFF.format(icon=T.ICON_WARN, name=pr.get("program") or "?", old=old, new=new))
+        return out
+
+    def install_count(self) -> int:
+        """복원 대상(허용했을 때 실제로 쓰는) 설치 폴더 설정 개수."""
+        p = self.state.preview
+        return sum(1 for it in p.plan.items if it.get("install") and it.get("status") in ("would_copy", "would_overwrite")) if p else 0
 
     def preview_rows(self) -> list[dict]:
         p = self.state.preview
         if p is None:
             return []
-        return [{"status": T.PREV_STATUS.get(it["status"], it["status"]), "target": it["target"],
-                 "backup": it.get("backup", ""), "extra": bool(it.get("extra")), "size": it.get("size", 0)}
-                for it in p.plan.items]
+        rows = [{"status": T.PREV_STATUS.get(it["status"], it["status"]), "target": it["target"],
+                 "backup": it.get("backup", ""), "extra": bool(it.get("extra")), "size": it.get("size", 0), "install": False}
+                for it in p.plan.items if not it.get("install")]
+        allowed = bool(getattr(p, "install_allowed", False))
+        for v in self.install_view():  # 설치 폴더 설정: 허용 전에는 '복원 안 함'으로만 보여 준다(덮어쓸 목록은 허용하면 그대로 나온다)
+            label = T.PREV_STATUS.get(v["status"], v["status"]) if allowed else T.PREV_INSTALL_NOT_RESTORED
+            rows.append({"status": label, "target": v["target"], "backup": v.get("backup", "") if allowed else "", "extra": False,
+                         "size": v.get("size", 0), "install": True})
+        return rows
 
     def preview_rejected_count(self) -> int:
         p = self.state.preview
@@ -1210,6 +1291,8 @@ class Controller:
             return False, T.G_NEED_PREVIEW
         if p.mode == "blocked" or p.plan.problems:
             return False, T.G_PACKAGE_BLOCKED
+        if s.preview_install_consent != s.install_consent:  # 체크를 바꾼 뒤 아직 새 미리보기가 없다
+            return False, T.G_NEED_PREVIEW
         if not s.preview_checked:
             return False, T.G_NEED_CHECK_PREVIEW
         if not s.bak_understood:
@@ -1230,13 +1313,18 @@ class Controller:
         if not ok:
             raise GuardError(why)
         package, allow_extra = self.state.package, self.state.extra_consent
+        consent = self.state.install_consent
+        if consent and not _accepts(self.api.run_import, "allow_install_dir"):
+            raise GuardError(T.G_INSTALL_UNSUPPORTED)
+        inst_kw = {"allow_install_dir": True} if consent else {}
 
         def work(progress, token):
             return self.api.run_import(package, self.state.rules_dir, yes=True, allow_extra=allow_extra,
-                                       deps=self.deps, **_supported(self.api.run_import, progress_info=progress))
+                                       deps=self.deps, **_supported(self.api.run_import, progress_info=progress), **inst_kw)
 
         def done(res):
             self.state.import_result = res
+            self.state.install_consent = self.state.preview_install_consent = False  # 다음 복원은 다시 '복원 안 함'으로 시작
             self.state.preview = None  # 확정은 한 번만 유효: 다시 복원하려면 미리보기부터
             self._reset_confirms()
             self.emit("import_done", res)

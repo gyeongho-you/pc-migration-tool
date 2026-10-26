@@ -66,6 +66,7 @@ def import_lines(r, package: str, report=None) -> list[str]:
         if len(denied) > 5:
             lines.append(f"    … 외 {len(denied) - 5}개")
     lines += coverage.lines(plan.manifest)
+    lines += install_lines(r, report)
     if r.git_config_warning:
         lines.append(f"- [주의] {r.git_config_warning}")
     if report is not None:
@@ -82,6 +83,61 @@ def import_lines(r, package: str, report=None) -> list[str]:
     else:
         lines.append(f"다음 할 일: 실제 복원하려면 --yes 를 붙여 다시 실행하세요(pcmigrate import {_q(package)} --yes).")
     return lines
+
+
+_INSTALL_STATUS_LABELS = (("would_copy", "새로 만듦"), ("would_overwrite", "덮어씀(.bak 으로 백업)"), ("skipped_identical", "이미 같음(건너뜀)"),
+                          ("denied", "복원 안 함(설정 형식이 아니거나 허용되지 않은 위치)"), ("rejected", "복원 안 함(링크를 거치는 위치)"),
+                          ("missing_dir", "복원 안 함(프로그램 폴더 없음)"), ("missing_program", "복원 안 함(프로그램이 설치되어 있지 않음)"))
+
+
+def install_lines(r, report=None) -> list[str]:
+    """복원 요약의 설치 폴더 설정 줄. 패키지에 설치 폴더 설정이 없으면 빈 목록."""
+    from . import install_dir
+    if not getattr(r, "n_install", 0):
+        return []
+    counts = r.install_counts()
+    head = f"- 설치 폴더 설정 {r.n_install}개: " + _counts_line(counts, _INSTALL_STATUS_LABELS)
+    if not r.install_allowed:
+        return [head, "  기본은 복원 안 함입니다. 복원하려면 --allow-install-dir 를 붙이고 관리자 권한으로 실행하세요."]
+    lines = [head]
+    for p in getattr(r.plan, "install_programs", []):
+        old, new = p.get("old_version") or "?", p.get("new_version") or "?"
+        if p.get("old_version") and p.get("new_version") and old != new:
+            lines.append(f"  [주의] {p.get('program') or p.get('root')}: 구 PC 버전 {old} / 이 PC 버전 {new} — 버전이 달라 오작동할 수 있습니다")
+    missing = [v for v in r.install_view if v["status"] in (install_dir.MISSING_DIR, install_dir.MISSING_PROGRAM)]
+    if missing:
+        lines.append(f"  - {install_dir.INSTALL_FIRST_NOTE}: " + ", ".join(sorted({v.get('program') or v['entry'] for v in missing})[:5]))
+    return lines
+
+
+def install_notes(r) -> list[str]:
+    """import 의 stderr 안내(설치 폴더 설정). 없으면 빈 목록."""
+    from . import install_dir
+    if not getattr(r, "n_install", 0):
+        return []
+    out = [f"[주의] {install_dir.VERSION_WARNING}."]
+    if not r.install_allowed:
+        out.append(f"[안내] 설치 폴더 설정 {r.n_install}개는 복원하지 않습니다. {install_dir.OFF_NOTE}.")
+    else:
+        out.append("[안내] 설치 폴더 설정은 설정 형식 파일만 쓰고, 기존 파일은 .bak 으로 보존하며, 프로그램 폴더가 없으면 건너뜁니다.")
+    if any(v["status"] in (install_dir.MISSING_DIR, install_dir.MISSING_PROGRAM) for v in r.install_view):
+        out.append(f"[안내] 대상 프로그램 폴더가 없는 항목이 있습니다. {install_dir.INSTALL_FIRST_NOTE}.")
+    return out
+
+
+def install_export_notes(manifest: dict) -> list[str]:
+    """export 의 stderr 안내(설치 폴더 설정을 담았을 때). 없으면 빈 목록."""
+    from . import install_dir
+    info = manifest.get(install_dir.MANIFEST_KEY)
+    if not isinstance(info, dict):
+        return []
+    n = sum(1 for f in manifest.get("files", []) if isinstance(f, dict) and f.get("rule") == install_dir.INSTALL_ID)
+    out = [f"[안내] 설치 폴더 설정 {n}개를 담았습니다. {install_dir.MANIFEST_NOTE}", f"[주의] {install_dir.VERSION_WARNING}."]
+    big = [s for s in manifest.get("skipped", []) if isinstance(s, dict) and s.get("rule") == install_dir.INSTALL_ID and not s.get("denied")
+           and ("상한" in s.get("reason", "") or "너무 큼" in s.get("reason", ""))]
+    if big:
+        out.append(f"[주의] 크기/개수 상한으로 제외한 설치 폴더 설정 파일 {len(big)}개가 있습니다(패키지 manifest 'skipped' 참고).")
+    return out
 
 
 def verify_lines(d: dict, rep) -> list[str]:

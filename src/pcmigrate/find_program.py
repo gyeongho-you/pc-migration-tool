@@ -2,7 +2,8 @@
 
 전역 discover 의 판정(link_candidate / _prep / _folder_key / _list_root / scan_candidate)을 그대로 재사용한다.
 여기서 더하는 것은 (1) 프로그램 이름·게시자·설치 경로에서 뽑은 '토큰'과 폴더 이름의 일치, (2) 일치한 토큰을 근거로 보여 주기,
-(3) 설치 폴더 안의 사용자 설정 파일 후보(참고용: 설치 폴더 쓰기는 하지 않으므로 자동으로 옮기지 않는다), (4) 시간 상한과 취소.
+(3) 설치 폴더 안의 설정 형식 파일 후보(체크 가능한 '설치 폴더 설정' 후보: 기본 선택 없음, 복원은 기본 꺼짐이며 관리자 권한과 같은 버전의
+프로그램이 필요하다. install_dir 모듈 참고), (4) 시간 상한과 취소.
 이 버튼은 전역 discover 와 달리 캐시/로그/임시/라이선스 이름의 폴더도 찾는다(기본 탐색이 놓친 곳에 설정이 있을 수 있다는 가정).
 각 후보에 분류 배지('임시 저장물일 수 있음'/'로그'/'라이선스')와 근거를 붙이고, 자동 선택은 하지 않는다. 캐시/로그 이름 후보를 사용자가
 직접 고르면 그 후보에는 임시 저장물 자동 제외를 적용하지 않는다(Candidate.include_caches). 라이선스 후보는 발견만 표시하고 선택할 수 없다
@@ -24,11 +25,13 @@ from .discover import (CERTAIN, PROBABLE, Candidate, Discovery, Expand, Link, Pr
 from .discover_data import (FIND_SKIP_WORDS, ROOTS, SETTINGS_EXT_PREFIXES, SETTINGS_EXTENSIONS, TOKEN_STOPWORDS,
                             is_regenerable)
 from .envpaths import expand_env
+from .install_dir import (INSTALL_FILE_MAX_BYTES, INSTALL_PROGRAM_MAX_FILES, build_candidate_entry, is_settings_name,
+                          locate_install_dir, secret_hints)
 from .progress import ProgressInfo
 from .rules import Rule
 
-MAX_INSTALL_FILES = 30
-INSTALL_FILE_MAX_BYTES = 5 * 1024 * 1024
+MAX_INSTALL_FILES = INSTALL_PROGRAM_MAX_FILES  # 프로그램 하나당 설치 폴더 설정 후보 상한(install_dir 의 상수를 쓴다)
+BADGE_INSTALL = "설치 폴더 설정"
 _WORDS = re.compile(r"[0-9a-z가-힣]+")
 _VERSIONISH = re.compile(r"^(v?\d[\d.]*|x64|x86|64bit|32bit)$")
 
@@ -38,8 +41,10 @@ class ProgramFind:
     program: Program
     tokens: list[tuple[str, str]] = field(default_factory=list)  # (토큰, 출처: 이름/게시자/설치 경로)
     candidates: list[Candidate] = field(default_factory=list)
-    install_files: list[dict] = field(default_factory=list)  # 참고용: 설치 폴더의 사용자 설정 파일 후보(자동으로 옮기지 않음)
+    install_files: list[dict] = field(default_factory=list)  # 설치 폴더의 설정 형식 파일(표시용 목록; 체크 가능한 후보는 install_candidates)
     install_more: int = 0
+    install_candidates: list[Candidate] = field(default_factory=list)  # 체크 가능한 '설치 폴더 설정' 후보(기본 선택 없음)
+    install_excluded: list[dict] = field(default_factory=list)  # 크기 상한 초과로 제외한 설정 파일({path, size, why})
     nested: list[dict] = field(default_factory=list)  # 찾은 폴더 안쪽 캐시/로그 폴더에 든 설정 형식 파일(참고용)
     nested_more: int = 0
     budget_hit: bool = False  # 시간 상한에 걸려 일부 크기를 못 쟀다
@@ -47,7 +52,7 @@ class ProgramFind:
 
     def as_discovery(self) -> Discovery:
         """build_selection/render 같은 기존 도구를 재사용하기 위한 변환."""
-        return Discovery(programs=[ProgramEntry(self.program, list(self.candidates))], with_sizes=True)
+        return Discovery(programs=[ProgramEntry(self.program, list(self.candidates) + list(self.install_candidates))], with_sizes=True)
 
 
 def _words(text: str) -> list[str]:
@@ -122,9 +127,10 @@ def _match(p: Program, name: str, path: str, is_home: bool, tokens: list[tuple[s
     return Link(link.programs, link.grade, reason, weak)
 
 
-def _install_files(p: Program, deadline: float, clock: Callable[[], float]) -> tuple[list[dict], int]:
-    """설치 폴더(와 바로 아래 폴더)의 사용자 설정일 수 있는 파일(확장자 허용 목록). 참고용 목록이며 상한 개수까지만."""
-    root = p.install_location
+def _install_files(p: Program, deadline: float, clock: Callable[[], float], excluded: list[dict] | None = None,
+                   root: str | None = None) -> tuple[list[dict], int]:
+    """설치 폴더(와 바로 아래 폴더)의 설정 형식 파일(install_dir 의 확장자 허용 목록). 개수 상한까지만, 큰 파일은 excluded 에 모은다."""
+    root = root if root is not None else p.install_location
     if not root or not os.path.isdir(root):
         return [], 0
     found: list[dict] = []
@@ -147,19 +153,42 @@ def _install_files(p: Program, deadline: float, clock: Callable[[], float]) -> t
                     if depth < 1 and not _skip_name(e.name) and not _skip_find_name(e.name):
                         stack.append((e.path, depth + 1))
                     continue
-                ext = os.path.splitext(e.name)[1].lower()
-                if not (ext in SETTINGS_EXTENSIONS or ext.startswith(SETTINGS_EXT_PREFIXES)) or _skip_find_name(e.name):
+                if not is_settings_name(e.name):
                     continue
-                size = e.stat(follow_symlinks=False).st_size
+                st = e.stat(follow_symlinks=False)
+                size = st.st_size
             except OSError:
                 continue
+            ext = os.path.splitext(e.name)[1].lower()
             if size > INSTALL_FILE_MAX_BYTES:
+                if excluded is not None:
+                    excluded.append({"path": e.path, "size": size,
+                                     "why": f"파일이 {INSTALL_FILE_MAX_BYTES // (1024 * 1024)}MB 를 넘어 제외"})
                 continue
             if len(found) < MAX_INSTALL_FILES:
-                found.append({"path": e.path, "size": size, "why": f"설치 폴더의 설정 형식 파일({ext})"})
+                found.append({"path": e.path, "size": size, "mtime": st.st_mtime, "why": f"설치 폴더의 설정 형식 파일({ext})"})
             else:
                 more += 1
     return found, more
+
+
+def _install_candidates(p: Program, files: list[dict], base: str, from_location: bool, expand: Expand) -> list[Candidate]:
+    """설치 폴더 설정 파일을 체크 가능한 후보로. 환경 토큰으로 바꿀 수 없는 위치(드라이브 루트 등)면 후보를 만들지 않는다."""
+    out: list[Candidate] = []
+    reason = ("프로그램 설치 위치(InstallLocation)의 설정 형식 파일" if from_location
+              else "Program Files 아래에서 프로그램 이름과 폴더 이름이 같은 폴더의 설정 형식 파일")
+    for f in files:
+        ent = build_candidate_entry(p, f["path"], Path(base), from_location, expand)
+        if ent is None:
+            continue
+        c = Candidate(ent["root"], ent["rel"], f["path"], False)
+        c.link = Link([p.name], CERTAIN if from_location else PROBABLE,
+                      f"[{BADGE_INSTALL}] {reason} — 복원 시 관리자 권한과 같은 버전의 프로그램이 필요합니다", not from_location)
+        c.size, c.files, c.mtime, c.scan_complete = f["size"], 1, f.get("mtime"), True
+        c.badge, c.install_program, c.install_folder = BADGE_INSTALL, p.name, ent["folder"]
+        c.secret = secret_hints(f["path"])
+        out.append(c)
+    return out
 
 
 def find_program(program: Program, rules: list[Rule], expand: Expand = expand_env, *, per_limit: float = 3.0,
@@ -222,7 +251,11 @@ def find_program(program: Program, rules: list[Rule], expand: Expand = expand_en
     res.candidates = cands
     check()
     say("설치 폴더의 설정 형식 파일을 찾는 중입니다…", "find")
-    res.install_files, res.install_more = _install_files(program, min(budget_end, clock() + per_limit), clock)
+    loc = locate_install_dir(program, expand)
+    res.install_files, res.install_more = _install_files(program, min(budget_end, clock() + per_limit), clock, res.install_excluded,
+                                                         str(loc[0]) if loc else None)
+    if loc:
+        res.install_candidates = _install_candidates(program, res.install_files, str(loc[0]), loc[1], expand)
     res.nested, res.nested_more = _nested_cache_settings([c for c in cands if c.is_dir and not c.badge],
                                                          min(budget_end, clock() + per_limit), clock)
     return res
@@ -275,7 +308,10 @@ def render(f: ProgramFind, fmt: str = "text") -> str:
         d = {"program": {"name": f.program.name, "version": f.program.version, "publisher": f.program.publisher},
              "has_rule": f.has_rule, "tokens": [{"token": t, "source": s} for t, s in f.tokens], "budget_hit": f.budget_hit,
              "candidates": [dict(asdict(c), secret_risk=bool(c.secret)) for c in f.candidates],
-             "install_files": f.install_files, "install_files_more": f.install_more}
+             "install_files": f.install_files, "install_files_more": f.install_more,
+             "install_excluded": f.install_excluded,
+             "install_candidates": [{"root": c.root, "folder": c.install_folder, "rel": c.rel, "path": c.path, "size": c.size,
+                                     "secret_risk": bool(c.secret)} for c in f.install_candidates]}
         return json.dumps(d, ensure_ascii=False, indent=2) + "\n"
     lines = [f"프로그램 설정 찾기: {f.program.display}" + (f" — {f.program.publisher}" if f.program.publisher else "")]
     if f.has_rule:
@@ -300,11 +336,17 @@ def render(f: ProgramFind, fmt: str = "text") -> str:
         lines.append("이 파일들은 폴더 단위 후보 안에 있지만 내보낼 때 임시 저장물로 기본 제외됩니다(export --include-caches 로 포함 가능).")
         lines += [f"  - {x['path']} ({x['size']}B)" for x in f.nested]
     lines.append("")
-    lines.append(f"=== 설치 폴더의 설정 형식 파일(참고용) {len(f.install_files)}개" + (f" 외 {f.install_more}개" if f.install_more else "") + " ===")
+    lines.append(f"=== 설치 폴더 설정 후보 {len(f.install_files)}개" + (f" 외 {f.install_more}개(개수 상한으로 제외)" if f.install_more else "") + " ===")
     if f.install_files:
-        lines.append("설치 폴더(Program Files 등) 안의 파일은 자동으로 옮기지 않습니다. 사용자가 바꾼 설정인지 확인한 뒤 직접 복사하세요.")
-        lines += [f"  - {x['path']} ({x['size']}B)" for x in f.install_files]
+        lines.append("설치 폴더(Program Files 등) 안의 설정 형식 파일입니다. 자동으로 선택되지 않습니다. --output-selection 으로 만든 선택 파일의 "
+                     "install_dir 항목에서 include 를 true 로 바꾼 것만 담깁니다. 복원할 때는 관리자 권한과 같은 버전의 프로그램이 필요하고, "
+                     "import 에 --allow-install-dir 을 붙여야 합니다(기본은 복원 안 함).")
+        secret_paths = {c.path for c in f.install_candidates if c.secret}
+        lines += [f"  - {x['path']} ({x['size']}B)" + (" [비밀 정보 가능성]" if x["path"] in secret_paths else "") for x in f.install_files]
     else:
         lines.append("(없음)")
+    if f.install_excluded:
+        lines.append(f"크기 상한으로 제외한 설정 형식 파일 {len(f.install_excluded)}개:")
+        lines += [f"  - {x['path']} ({x['size']}B) — {x['why']}" for x in f.install_excluded[:10]]
     lines.append("⚠ '비밀 정보 가능성' 항목은 기본 제외입니다. 선택 파일에 넣어도 export 시 --allow-secrets 가 필요합니다.")
     return "\n".join(lines) + "\n"

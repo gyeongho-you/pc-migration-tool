@@ -67,6 +67,12 @@ class Candidate:
     include_caches: bool = False  # 이 후보 자체가 캐시/로그 이름이라 사용자가 고르면 임시 저장물 자동 제외를 적용하지 않는다
     license_only: bool = False  # 라이선스 폴더: 발견만 표시, 이 도구는 라이선스를 옮기지 않으므로 선택할 수 없다
     rule_programs: list[str] = field(default_factory=list)  # 연결된 프로그램 중 규칙이 있는 것(숨김 사유)
+    install_program: str = ""  # 설치 폴더 설정 파일 후보(프로그램 설치 폴더 안의 파일 하나)면 그 프로그램 이름. 이때 root 는 %ProgramFiles% 등 토큰, rel 은 루트 기준 파일 경로
+    install_folder: str = ""   # 위 후보의 루트 기준 프로그램 폴더(posix)
+
+    @property
+    def is_install(self) -> bool:
+        return bool(self.install_program)
 
     @property
     def key(self) -> tuple[str, str]:
@@ -580,11 +586,14 @@ def render(d: Discovery, fmt: str = "text", show_all: bool = False) -> str:
 
 def build_selection(d: Discovery, show_all: bool = False) -> dict:
     """후보 템플릿(모두 include:false). 사용자가 포함할 항목만 true 로 바꾼다."""
-    cands = d.candidates()
+    from .install_dir import SELECTION_KEY as INSTALL_KEY
+    all_cands = d.candidates()
+    cands = [c for c in all_cands if not c.is_install]
+    installs = [c for c in all_cands if c.is_install]  # 설치 폴더 설정 후보: 별도 목록(이전 버전은 이 키를 무시하므로 호환)
     if show_all:
         seen = {c.key for c in cands}
         cands += [c for c in d.unlinked + d.rule_linked if c.key not in seen]
-    return {
+    sel = {
         "format": SELECTION_FORMAT,
         "created": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "note": "포함할 항목의 include 를 true 로 바꾸세요. secret 이 있는 항목은 export --allow-secrets 가 필요합니다. "
@@ -597,6 +606,14 @@ def build_selection(d: Discovery, show_all: bool = False) -> dict:
             **({"license_only": True, "include": False} if c.license_only else {}),
         } for c in cands],
     }
+    if installs:
+        sel[INSTALL_KEY] = [{
+            "include": False, "kind": "install_dir", "program": c.install_program, "root": c.root, "folder": c.install_folder,
+            "rel": c.rel, "path": c.path, "size": c.size, "secret": c.secret, "requires_allow_secrets": bool(c.secret),
+        } for c in installs]
+        sel["note"] += (" install_dir 는 프로그램 설치 폴더(Program Files 등) 안의 설정 파일입니다. 복원할 때 관리자 권한과 같은 버전의 "
+                        "프로그램이 필요하며, 복원은 기본으로 꺼져 있습니다(import --allow-install-dir).")
+    return sel
 
 
 @dataclass

@@ -43,6 +43,7 @@ from .rules import PathRule, Rule
 
 FORMAT_VERSION = 1
 EXTRA_ID = "extra"  # 규칙 없는 프로그램 중 사용자가 선택해 포함한 항목(manifest rule id)
+INSTALL_ID = "install"  # 프로그램 설치 폴더의 설정 파일(install_dir 모듈): 복원은 기본 꺼짐
 MANIFEST = "manifest.json"
 CHUNK = 1024 * 1024
 ZIP64_THRESHOLD = 2 * 1024 ** 3
@@ -516,11 +517,14 @@ def is_unfinished_part(path: Path | str) -> bool:
     return str(path).lower().endswith(PART_SUFFIX)
 
 
-def _fingerprint(rules: list[Rule], extras: list | None, compress: str, include_caches: bool = False) -> tuple[str, dict]:
+def _fingerprint(rules: list[Rule], extras: list | None, compress: str, include_caches: bool = False,
+                 install_items: list | None = None) -> tuple[str, dict]:
     info = {"tool": __version__, "format": FORMAT_VERSION, "compress": compress, "include_caches": bool(include_caches),
             "rules": [[r.id, str(r.version)] for r in rules],
             "extras": sorted([e.root, e.rel] + (["caches"] if getattr(e, "include_caches", False) else [])
                              for e in (extras or []))}
+    if install_items:  # 설치 폴더 설정을 고른 경우에만 키를 넣는다(고르지 않은 내보내기의 지문/이어받기는 이전과 같다)
+        info["install"] = sorted([i.root, i.rel] for i in install_items)
     raw = json.dumps(info, sort_keys=True, ensure_ascii=False).encode("utf-8")
     return hashlib.sha256(raw).hexdigest(), info
 
@@ -532,6 +536,8 @@ def _fp_reason(old: dict, new: dict) -> str:
         return "프로그램 규칙의 버전이 달라졌습니다"
     if old.get("extras") != new["extras"]:
         return "직접 고른 추가 항목이 달라졌습니다"
+    if old.get("install") != new.get("install"):
+        return "고른 설치 폴더 설정 파일이 달라졌습니다"
     if old.get("compress") != new["compress"]:
         return "압축 설정이 달라졌습니다"
     if bool(old.get("include_caches")) != bool(new.get("include_caches")):
@@ -926,7 +932,8 @@ def export_package(rules: list[Rule], out: Path, programs: list[Program],
                    notice: Callable[[str], None] | None = None,
                    clock: Callable[[], float] = time.monotonic,
                    dest_info_fn: Callable[[str], fs.DestInfo] | None = None,
-                   stage_dir: Path | str | None = None, include_caches: bool = False) -> dict:
+                   stage_dir: Path | str | None = None, include_caches: bool = False,
+                   install_items: list | None = None) -> dict:
     """감지된 프로그램의 규칙(rules)으로 설정 패키지를 만든다. manifest dict 반환.
 
     stage_dir: 64MB 를 넘는 파일을 담기 전에 임시로 읽어 두는 폴더의 위치(기본: 출력 파일이 있는 폴더). 출력 드라이브가 느리거나
@@ -941,6 +948,7 @@ def export_package(rules: list[Rule], out: Path, programs: list[Program],
     compress: auto(이미 압축된 형식은 STORED) / always(모두 deflate) / never(모두 STORED).
     include_caches: 기본 False. 직접 고른 폴더(extras) 안의 재생성되는 임시 저장물 폴더(Cache, GPUCache, node_modules 등)는 담지 않고
     skipped 에 이름·파일 수·용량을 기록한다. True 면 모두 담는다(규칙 경로 안은 이 옵션과 무관, 규칙의 exclude 를 따른다).
+    install_items: 사용자가 고른 설치 폴더 설정 파일(install_dir.InstallItem). data/install/ 영역에 담고 manifest 의 install_dir/coverage 에 기록한다.
     반환 manifest 에는 패키지에 저장되지 않는 "resume" 항목({resumed, kept_files, kept_bytes, dropped, reason})이 추가된다.
     파일 단위 실패는 manifest["failed"] 에 기록(읽지 못한 파일은 다음 시도에서 다시 읽는다).
     """
@@ -951,7 +959,8 @@ def export_package(rules: list[Rule], out: Path, programs: list[Program],
         raise IsADirectoryError(errno.EISDIR, "대상이 폴더입니다", str(out))
     args = (rules, out, programs, winget_text, expand, winget_list_text, extras, now, progress_info)
     kw = dict(compress=compress, savepoint_bytes=savepoint_bytes, savepoint_seconds=savepoint_seconds,
-              notice=notice, clock=clock, dest_info_fn=dest_info_fn, stage_dir=stage_dir, include_caches=include_caches)
+              notice=notice, clock=clock, dest_info_fn=dest_info_fn, stage_dir=stage_dir, include_caches=include_caches,
+              install_items=install_items)
     lock = _OutputLock(out)
     lock.acquire()  # 같은 출력 이름으로 동시에 내보내면 .part 를 서로 망가뜨린다(R1-6)
     try:
@@ -969,7 +978,7 @@ def export_package(rules: list[Rule], out: Path, programs: list[Program],
 
 def _export_once(rules, out, programs, winget_text, expand, winget_list_text, extras, now, progress_info, *,
                  resume, compress, savepoint_bytes, savepoint_seconds, notice, clock, dest_info_fn=None, stage_dir=None,
-                 include_caches=False) -> dict:
+                 include_caches=False, install_items=None) -> dict:
     part, jpath = part_paths(out)
     manifest: dict = {
         "format": FORMAT_VERSION,
@@ -1027,6 +1036,16 @@ def _export_once(rules, out, programs, winget_text, expand, winget_list_text, ex
                 "items": ["규칙 없이 사용자가 직접 골라 포함한 폴더입니다. 신 PC 에서 같은 버전의 프로그램을 설치한 뒤 "
                           "복원하고, 라이선스/로그인은 직접 처리하세요."]})
             groups.append(items)
+        if install_items:  # 설치 폴더 설정: 별도 영역(data/install/)에 담고 모든 조건을 여기서 다시 확인한다
+            from . import install_dir
+            info: dict = {}
+            items, skipped = install_dir.collect_install_items(install_items, programs, expand, avoid=avoid, failed=manifest["failed"],
+                                                               cov=manifest["coverage"], info=info)
+            manifest["skipped"] += skipped
+            manifest[install_dir.MANIFEST_KEY] = info
+            manifest["manual_warnings"].append({"rule": install_dir.INSTALL_ID, "name": "설치 폴더 설정(선택 포함)",
+                                                "items": [install_dir.MANIFEST_NOTE, install_dir.VERSION_WARNING]})
+            groups.append(items)
         for r in roots:  # 출력이 백업 대상 폴더 안이면 자기 자신을 담게 되므로 시작하지 않는다
             if _within(out, r) and Path(os.path.realpath(r)).is_dir():
                 raise PackageError(f"출력 파일이 백업할 폴더 안에 있습니다: {out} (폴더: {r}). 백업 대상 밖(예: 다른 드라이브나 문서 폴더)에 저장하세요.")
@@ -1064,7 +1083,7 @@ def _export_once(rules, out, programs, winget_text, expand, winget_list_text, ex
                 last_emit[0] = t
                 progress_info(tracker.snapshot())
 
-        fp, fp_info = _fingerprint(rules, extras, compress, include_caches)
+        fp, fp_info = _fingerprint(rules, extras, compress, include_caches, install_items)
         head = {"t": "head", "v": JOURNAL_VERSION, "fp": fp, "info": fp_info}
         by_arc: dict[str, Item] = {}
         for g in groups:
@@ -1473,6 +1492,11 @@ class ImportPlan:
     manifest: dict
     items: list[dict] = field(default_factory=list)  # {entry, target, status, backup}
     problems: list[str] = field(default_factory=list)
+    # 설치 폴더 설정(rule='install'): install 은 보기용 전체 목록(상태: would_copy/…/denied/rejected/missing_dir/missing_program).
+    # 실제로 쓰는 항목은 install_allowed=True 일 때만 items 에 들어간다(기본은 복원 안 함).
+    install: list[dict] = field(default_factory=list)
+    install_allowed: bool = False
+    install_programs: list[dict] = field(default_factory=list)  # {program, root, folder, old_version, new_version, files}
 
     @property
     def warnings(self) -> list[dict]:
@@ -1484,13 +1508,19 @@ class ImportPlan:
         return GIT_CONFIG_WARNING if git_config_targets(self.items) else ""
 
 
-def plan_import(path: Path, rules: list[Rule], expand: Expand = expand_env) -> ImportPlan:
+def plan_import(path: Path, rules: list[Rule], expand: Expand = expand_env, *, allow_install_dir: bool = False,
+                programs: list[Program] | Callable[[], list[Program]] | None = None,
+                write_check: Callable[[Path], bool] | None = None) -> ImportPlan:
     """검증 후 복원 계획을 만든다. 파일 시스템은 읽기만 한다.
+
+    allow_install_dir: 설치 폴더 설정(rule='install')도 복원할지. 기본(False)은 복원 안 함이며 plan.install 에 보기용으로만 남는다.
+    programs: 이 PC(신 PC)의 설치 프로그램 목록(없으면 None: 프로그램 확인을 건너뛰고 폴더 존재만 본다).
+    write_check(dir): 설치 폴더에 쓸 수 있는지(권한 사전 점검). 쓸 수 없으면 plan.problems 에 안내를 넣어 부분 쓰기 없이 중단한다.
 
     검증 단계가 놓친 구조 오류로 예외가 나더라도 traceback 대신 PackageError('패키지 검증 실패: …')로 알린다.
     """
     try:
-        return _plan_import(path, rules, expand)
+        return _plan_import(path, rules, expand, allow_install_dir, programs, write_check)
     except PackageError:
         raise
     except (KeyError, TypeError, AttributeError, ValueError, IndexError, RecursionError) as e:
@@ -1510,7 +1540,8 @@ def _denied_item(f: dict, target: Path, why: str, is_extra: bool, base_path: Pat
             "error": f"복원 안 함: {why}"}
 
 
-def _plan_import(path: Path, rules: list[Rule], expand: Expand) -> ImportPlan:
+def _plan_import(path: Path, rules: list[Rule], expand: Expand, allow_install_dir: bool = False,
+                 programs: list[Program] | None = None, write_check: Callable[[Path], bool] | None = None) -> ImportPlan:
     if is_unfinished_part(path):  # 만드는 중/중단된 임시 파일: 완성본이 아니다
         raise PackageError("이 파일(.part)은 아직 완성되지 않은 임시 파일입니다. 내보내기를 같은 저장 위치로 다시 실행해 "
                            "끝내거나(이어서 합니다), 완성된 .zip 파일을 선택하세요.")
@@ -1522,9 +1553,13 @@ def _plan_import(path: Path, rules: list[Rule], expand: Expand) -> ImportPlan:
     seen_targets: set[str] = set()
     allowed = {rid: {split_rule_path(p.path)[0] for p in r.paths if split_rule_path(p.path)}
                for rid, r in by_id.items()}
+    install_files: list[dict] = []
     for f in manifest["files"]:
         rid, base = f["rule"], f["base"]
         is_extra = rid == EXTRA_ID
+        if rid == INSTALL_ID:  # 설치 폴더 설정은 규칙/extra 의 허용 루트와 섞지 않고 install_dir 의 허용 목록 판정으로만 처리한다
+            install_files.append(f)
+            continue
         if is_extra:
             if base not in EXTRA_ROOTS:
                 plan.problems.append(f"허용되지 않은 복원 루트(extra): {base}")
@@ -1578,6 +1613,20 @@ def _plan_import(path: Path, rules: list[Rule], expand: Expand) -> ImportPlan:
         plan.items.append({"entry": f["arc"], "target": str(target), "status": status,
                            "backup": backup, "size": f["size"], "sha256": f["sha256"],
                            "extra": is_extra, "base_dir": str(base_path)})
+    if install_files:
+        from . import install_dir
+        if callable(programs):  # 신 PC 의 프로그램 목록은 설치 폴더 항목이 있을 때만 읽는다
+            try:
+                programs = programs()
+            except Exception:  # 목록을 못 읽으면 프로그램 확인 없이 폴더 존재만 본다(폴더 존재/허용 확장자 확인은 그대로)
+                programs = None
+        items, view, progs, probs = install_dir.plan_install(
+            manifest, install_files, expand, allow=allow_install_dir, programs=programs, write_check=write_check,
+            sha256_file=sha256_file)
+        plan.install, plan.install_programs, plan.install_allowed = view, progs, bool(allow_install_dir)
+        plan.problems += probs
+        if not probs:
+            plan.items += items
     return plan
 
 
@@ -1589,6 +1638,8 @@ def apply_import(path: Path, plan: ImportPlan,
     """
     if plan.problems:
         raise PackageError("검증 실패 상태에서는 복원할 수 없습니다")
+    if not plan.install_allowed and any(it.get("install") for it in plan.items):  # 계획을 손으로 바꿔도 동의 없이는 설치 폴더에 쓰지 않는다
+        raise PackageError("설치 폴더 설정은 사용자가 복원을 허용했을 때만 쓸 수 있습니다")
     report = Report(dry_run=False)
     if plan.git_config_warning:  # 복원은 허용하되 내용을 확인하라고 알린다(GUI 는 이 키를 읽는다)
         report.meta.update(git_config_warning=plan.git_config_warning, git_config_files=git_config_targets(plan.items))
@@ -1624,6 +1675,12 @@ def apply_import(path: Path, plan: ImportPlan,
                 done(FileResult(it["entry"], it["target"], REJECTED, it["size"], it["sha256"], error=link,
                                 reason=failure.LINK_IN_PATH))
                 continue
+            if it.get("install"):  # 설치 폴더: 쓰기 직전 마지막 확인(허용 확장자/대상 폴더 존재). 새 폴더는 만들지 않는다
+                from . import install_dir
+                why = install_dir.recheck_before_write(it)
+                if why:
+                    done(FileResult(it["entry"], it["target"], FAILED, it["size"], it["sha256"], error=why, reason=failure.OTHER))
+                    continue
             staged = Path(tmp) / "entry"
             try:
                 bad = _stage_entry(zf, it, staged, tmp)
