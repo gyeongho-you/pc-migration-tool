@@ -23,7 +23,7 @@ from .. import api as real_api
 from .. import errorlog
 from ..cancel import CancelToken
 from ..checklist import write_output
-from .. import fs
+from .. import coverage, fs
 from ..discover import fmt_size, items_from_selection
 from ..install_check import INSTALLED, import_command, newly_installed
 from ..manifest import DEFAULT_NAME as MANIFEST_NAME
@@ -263,6 +263,11 @@ class CandRow:
     weak: bool
     secret: list = field(default_factory=list)
     selectable: bool = True
+    badge: str = ""  # 프로그램 설정 찾기의 분류 배지(임시 저장물일 수 있음/로그/라이선스)
+    license_only: bool = False
+    size_eff: str = ""  # 표에 보이는 크기: 내보낼 때 기본으로 빠지는 임시 저장물(캐시)을 뺀 값
+    files_eff: str = ""  # 표에 보이는 파일 수(캐시 제외)
+    detail_cache: str = ""  # 캐시가 있으면 '전체 X 중 캐시 Y' 안내(상세줄용)
 
 
 @dataclass
@@ -610,12 +615,171 @@ class Controller:
         rows = []
         for c in d.candidates():
             link = c.link
+            eff_size, eff_files, note = self._effective(c)
             rows.append(CandRow(
                 key=c.key, programs=", ".join(link.programs) if link else T.NO_PROGRAM, path=c.path,
                 kind=T.KIND_FOLDER if c.is_dir else T.KIND_FILE, size=fmt_size(c), grade=link.grade if link else "없음",
                 reason=link.reason if link else "", weak=bool(link and link.weak), secret=list(c.secret),
-                selectable=(not c.secret) or self.state.secrets_ack))
+                selectable=((not c.secret) or self.state.secrets_ack) and not c.license_only,
+                badge=c.badge, license_only=c.license_only, size_eff=eff_size, files_eff=eff_files, detail_cache=note))
         return rows
+
+    def _cache_excluded(self, c) -> bool:
+        return not self.state.include_caches and bool(getattr(c, "cache_files", 0) or getattr(c, "cache_size", 0))
+
+    def _effective(self, c) -> tuple[str, str, str]:
+        """후보의 (크기 문구, 파일 수 문구, 캐시 안내). 크기를 다 못 쟀으면 '이상', 아예 모르면 '크기 미확인'.
+        임시 저장물(캐시)은 내보낼 때 기본으로 빠지므로 그만큼 뺀 값을 보여 준다(include_caches 를 켜면 전체)."""
+        if c.size is None:
+            return fmt_size(c), (f"{c.files}개 이상" if c.files else "-"), ""
+        cut = self._cache_excluded(c)
+        size = c.size - (c.cache_size if cut else 0)
+        files = (c.files or 0) - (c.cache_files if cut else 0)
+        note = ""
+        if cut:
+            note = T.DISC_DETAIL_CACHE.format(total=fmt_bytes(c.size), files=c.files or 0, cache=fmt_bytes(c.cache_size),
+                                              cfiles=c.cache_files)
+        return fmt_bytes(size), f"{files}개", note
+
+    def selection_totals(self) -> dict:
+        """선택한 후보의 합계: n, bytes, files, cache_bytes/cache_files(빠지는 양), approx(시간 초과로 일부만 센 수), unknown(크기 모름)."""
+        d = self.state.discovery
+        out = {"n": 0, "bytes": 0, "files": 0, "cache_bytes": 0, "cache_files": 0, "approx": 0, "unknown": 0, "big": 0}
+        if d is None:
+            return out
+        for c in d.candidates():
+            if c.key not in self.state.selected:
+                continue
+            out["n"] += 1
+            before = out["bytes"]
+            if c.size is None:
+                if getattr(c, "partial_size", None):
+                    out["bytes"] += c.partial_size
+                    out["files"] += c.files or 0
+                    out["approx"] += 1
+                else:
+                    out["unknown"] += 1
+                if out["bytes"] - before >= 1024 ** 3:
+                    out["big"] += 1
+                continue
+            if self._cache_excluded(c):
+                out["bytes"] += c.size - c.cache_size
+                out["files"] += (c.files or 0) - c.cache_files
+                out["cache_bytes"] += c.cache_size
+                out["cache_files"] += c.cache_files
+            else:
+                out["bytes"] += c.size
+                out["files"] += c.files or 0
+            if out["bytes"] - before >= 1024 ** 3:
+                out["big"] += 1
+        return out
+
+    def selection_total_text(self) -> str:
+        """'선택한 N개: 약 X MB, 파일 Y개 (캐시 제외 후 …)' 한 줄(선택이 없으면 안내)."""
+        t = self.selection_totals()
+        if not t["n"]:
+            return T.DISC_TOTAL_NONE
+        if t["cache_bytes"] or t["cache_files"]:
+            note = T.DISC_TOTAL_CACHE.format(size=fmt_bytes(t["cache_bytes"]), files=t["cache_files"])
+        elif self.state.include_caches:
+            note = T.DISC_TOTAL_CACHE_IN
+        else:
+            note = ""
+        if t["approx"]:
+            note += T.DISC_TOTAL_APPROX.format(k=t["approx"])
+        if t["unknown"]:
+            note += T.DISC_TOTAL_UNKNOWN.format(k=t["unknown"])
+        return T.DISC_TOTAL.format(n=t["n"], size=fmt_bytes(t["bytes"]), files=t["files"], note=note)
+
+    def set_include_caches(self, on: bool) -> None:
+        self.state.include_caches = bool(on)
+        self.emit("selection_changed")
+
+    # ---- 이 프로그램 설정 찾기(규칙 없는 프로그램 하나)
+    def ruleless_program_names(self) -> list[str]:
+        d = self.state.discovery
+        return [e.program.name for e in d.programs] if d is not None else []
+
+    def start_find_program(self, name: str) -> None:
+        d = self.state.discovery
+        if d is None:
+            raise GuardError(T.G_FIND_NEED_DISCOVERY)
+        name = (name or "").strip()
+        if name not in self.ruleless_program_names():
+            raise GuardError(T.G_FIND_NEED_PROGRAM)
+
+        def work(progress, token):
+            return self.api.run_find_program(self.state.rules_dir, name, deps=self.deps, cancel=token,
+                                             **_supported(self.api.run_find_program, progress_info=progress))
+
+        def done(res):
+            new, dup = self._merge_find(name, res)
+            self.state.find_results[name] = res
+            self.emit("find_done", {"name": name, "result": res, "new": new, "dup": dup})
+        self._run(T.TASK_FIND_PROGRAM, work, done, cancellable=True)
+
+    def _merge_find(self, name: str, res) -> tuple[int, int]:
+        """찾은 후보를 해당 프로그램 항목에 더한다(이미 목록에 있는 폴더는 건너뜀). 자동 선택은 하지 않는다."""
+        d = self.state.discovery
+        entry = next((e for e in d.programs if e.program.name == name), None)
+        have = {c.key for c in d.candidates()}
+        new = dup = 0
+        for c in getattr(res, "candidates", []):
+            if c.key in have:
+                dup += 1
+                continue
+            if entry is not None:
+                entry.candidates.append(c)
+                have.add(c.key)
+                new += 1
+        return new, dup
+
+    def find_summary(self, info: dict) -> str:
+        res = info["result"]
+        name = info["name"]
+        if getattr(res, "has_rule", False):
+            return T.FIND_RESULT_RULE.format(name=name)
+        if not res.candidates and not res.install_files:
+            return T.FIND_RESULT_NONE.format(name=name)
+        toks = ", ".join(t for t, _s in res.tokens[:6]) or "-"
+        text = T.FIND_RESULT.format(name=name, new=info["new"], dup=info["dup"], tokens=toks)
+        text += "\n" + T.FIND_SCOPE_NOTE
+        if res.install_files:
+            names = ", ".join(os.path.basename(x["path"]) for x in res.install_files[:6])
+            text += "\n" + T.FIND_INSTALL_FILES.format(n=len(res.install_files) + res.install_more, names=names)
+        if res.budget_hit:
+            text += T.FIND_BUDGET
+        return text
+
+    # ---- 설정 확인표
+    def coverage_table(self, res=None) -> list[dict]:
+        """내보내기 결과(manifest) 또는 복원 미리보기/결과(plan.manifest)에서 설정 확인표의 행. 없으면 빈 목록."""
+        res = res if res is not None else self.state.export_result
+        m = getattr(res, "manifest", None)
+        if not isinstance(m, dict):
+            m = getattr(getattr(res, "plan", None), "manifest", None)
+        if not isinstance(m, dict):
+            return []
+        try:
+            return coverage.rows(m)
+        except (TypeError, KeyError, AttributeError):
+            return []
+
+    def coverage_headline(self, table: list[dict]) -> str:
+        """설정 확인표 머리글: '담김 5 · 직접 해야 함 3 · 해당 없음 12'."""
+        counts = coverage.summary_counts(table)
+        parts = [f"{st} {counts[st]}" for st in coverage.STATUS_ORDER if counts.get(st) and st != coverage.ST_NONE]
+        if counts.get(coverage.ST_NONE):
+            parts.append(f"해당 없음 {counts[coverage.ST_NONE]}")
+        return " · ".join(parts)
+
+    def cache_skipped_text(self, res=None) -> str:
+        res = res if res is not None else self.state.export_result
+        m = getattr(res, "manifest", None)
+        if not isinstance(m, dict):
+            return ""
+        n, f, b = coverage.cache_totals(m)
+        return T.EXP_CACHE_SKIPPED.format(n=n, files=f, size=fmt_bytes(b)) if n else ""
 
     def _row(self, key: tuple) -> CandRow:
         for r in self.candidate_rows():
@@ -633,6 +797,8 @@ class Controller:
 
     def set_selected(self, key: tuple, on: bool) -> None:
         row = self._row(key)
+        if on and row.license_only:
+            raise GuardError(T.G_LICENSE_SELECT)
         if on and row.secret and not self.state.secrets_ack:
             raise GuardError(T.G_SECRET_SELECT)
         (self.state.selected.add if on else self.state.selected.discard)(key)
@@ -654,6 +820,8 @@ class Controller:
         반환: (새로 선택된 개수, 건너뛴 민감 항목 개수)."""
         added = skipped = 0
         for r in self._target_rows(keys):
+            if r.license_only:
+                continue  # 라이선스는 옮기지 않는다
             if r.secret:
                 skipped += 1
                 continue
@@ -798,7 +966,8 @@ class Controller:
             return ""
         return T.EXP_RESUME_HINT.format(n=info["files"], size=fmt_bytes(info["bytes"]))
 
-    def start_export(self, output: str, write_confirmed: bool = False, resume: bool = True, stage_dir: str = "") -> None:
+    def start_export(self, output: str, write_confirmed: bool = False, resume: bool = True, stage_dir: str = "",
+                     include_caches: bool | None = None) -> None:
         if not write_confirmed:
             raise GuardError(T.G_NEED_EXPORT_CONFIRM)
         stage_dir = (stage_dir or "").strip()
@@ -813,14 +982,22 @@ class Controller:
             raise GuardError(T.G_OUTPUT_UNEXPANDED)
         if os.path.isdir(output):
             raise GuardError(T.G_OUTPUT_IS_DIR)
-        sel = self.selected_rows()
+        sel = [r for r in self.selected_rows() if not r.license_only]  # 방어: 라이선스 후보는 어떤 경로로도 담지 않는다
         has_secret = any(r.secret for r in sel)
         if has_secret and not self.state.secrets_ack:
             raise GuardError(T.G_SECRET_NO_ACK)
+        cache_keys = {c.key for c in (self.state.discovery.candidates() if self.state.discovery else []) if c.include_caches}
         items = self.make_items({"format": 1, "candidates": [
-            {"include": True, "root": k[0], "rel": k[1]} for k in sorted(self.state.selected)]}) if sel else []
+            {"include": True, "root": k[0], "rel": k[1], **({"include_caches": True} if k in cache_keys else {})}
+            for k in sorted(r.key for r in sel)]}) if sel else []
 
         stage_kw = {"stage_dir": stage_dir} if stage_dir else {}
+        if include_caches is None:
+            include_caches = self.state.include_caches
+        if include_caches:  # 기본(끔)은 넘기지 않는다: 이 옵션을 모르는 api 에도 안전
+            if not _accepts(self.api.run_export, "include_caches"):
+                raise GuardError(T.G_INCLUDE_CACHES_UNSUPPORTED)
+            stage_kw["include_caches"] = True
 
         def work(progress, token):
             return self.api.run_export(self.state.rules_dir, output, extra_items=items or None,

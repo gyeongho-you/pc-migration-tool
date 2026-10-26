@@ -23,7 +23,7 @@ from . import fs
 from .envpaths import expand_env
 from .detect import Program
 from .discover_data import (BROWSER_VENDOR_DIRS, DOT_HINTS, DOT_SKIP, EXTRA_ROOTS, ROOTS, SECRET_PATTERNS, SKIP_NAMES,
-                            SKIP_PREFIXES, SKIP_SUBSTRINGS, Root)
+                            SKIP_PREFIXES, SKIP_SUBSTRINGS, Root, is_regenerable)
 from .progress import ProgressInfo
 from .rules import Rule
 
@@ -60,6 +60,12 @@ class Candidate:
     mtime: float | None = None
     secret: list[str] = field(default_factory=list)  # 비밀 정보 가능성이 있는 이름(샘플)
     scan_complete: bool = False
+    partial_size: int | None = None  # 시간 초과로 크기를 다 못 쟀을 때 그때까지 센 크기('이상'으로 표시)
+    cache_size: int = 0  # 재생성되는 임시 저장물(Cache, node_modules 등)의 크기/파일 수: 내보낼 때 기본으로 빠진다
+    cache_files: int = 0
+    badge: str = ""  # '이 프로그램 설정 찾기' 전용 분류 배지(임시 저장물일 수 있음/로그/라이선스). 전역 discover 는 비워 둔다
+    include_caches: bool = False  # 이 후보 자체가 캐시/로그 이름이라 사용자가 고르면 임시 저장물 자동 제외를 적용하지 않는다
+    license_only: bool = False  # 라이선스 폴더: 발견만 표시, 이 도구는 라이선스를 옮기지 않으므로 선택할 수 없다
     rule_programs: list[str] = field(default_factory=list)  # 연결된 프로그램 중 규칙이 있는 것(숨김 사유)
 
     @property
@@ -149,7 +155,8 @@ def _covered(cand_path: str, concrete: list[str]) -> bool:
     return False
 
 
-def _list_root(root: Root, expand: Expand) -> list[tuple[Root, Path, os.DirEntry]]:
+def _list_root(root: Root, expand: Expand, skip_noise: bool = True) -> list[tuple[Root, Path, os.DirEntry]]:
+    """루트 바로 아래 후보 폴더/점 파일. skip_noise=False 면 캐시/임시/로그류 이름도 걸러 내지 않는다(프로그램 설정 찾기 전용)."""
     base = expand(root.template)
     if "%" in base or not os.path.isabs(base) or not os.path.isdir(base):
         return []
@@ -172,7 +179,7 @@ def _list_root(root: Root, expand: Expand) -> list[tuple[Root, Path, os.DirEntry
             if not name.startswith(".") or name.lower() in DOT_SKIP:
                 continue
         else:
-            if not is_dir or _skip_name(name):
+            if not is_dir or (skip_noise and _skip_name(name)):
                 continue
         out.append((root, Path(base), e))
     return out
@@ -244,16 +251,23 @@ def program_has_rule(p: Program, rules: list[Rule]) -> bool:
 
 # --------------------------------------------------------------------------- 크기/비밀 스캔
 
-def scan_tree(path: Path, deadline: float, clock: Callable[[], float]) -> tuple[int, int, float | None, list[str], bool]:
-    """(크기, 파일 수, 최신 수정 시각, 비밀 이름 샘플, 완료 여부). 심볼릭 링크는 따라가지 않는다. 읽기 전용."""
+def scan_tree(path: Path, deadline: float, clock: Callable[[], float],
+              cache: dict | None = None) -> tuple[int, int, float | None, list[str], bool]:
+    """(크기, 파일 수, 최신 수정 시각, 비밀 이름 샘플, 완료 여부). 심볼릭 링크는 따라가지 않는다. 읽기 전용.
+
+    cache 가 dict 이면 재생성되는 임시 저장물 폴더(discover_data.is_regenerable)는 크기/파일 수를 cache['size'], cache['files']
+    에 따로 더하고 위 반환값에서는 뺀다(내보낼 때 기본으로 제외되는 양을 미리 보여 주기 위함)."""
     size = files = 0
     newest: float | None = None
     secrets: list[str] = []
-    stack = [str(path)]
+    stack: list[tuple[str, tuple[str, ...], bool]] = [(str(path), (), False)]
     tick = 0
     complete = True
+    if cache is not None:
+        cache.setdefault("size", 0)
+        cache.setdefault("files", 0)
     while stack:
-        cur = stack.pop()
+        cur, parts, in_cache = stack.pop()
         try:
             with os.scandir(cur) as it:
                 for e in it:
@@ -269,9 +283,14 @@ def scan_tree(path: Path, deadline: float, clock: Callable[[], float]) -> tuple[
                         if e.is_dir(follow_symlinks=False):
                             if getattr(e.stat(follow_symlinks=False), "st_file_attributes", 0) & fs.FILE_ATTRIBUTE_REPARSE_POINT:
                                 continue  # 정션(reparse point)도 따라가지 않는다: 링크 너머의 크기를 세지 않는다
-                            stack.append(e.path)
+                            sub = parts + (e.name,)
+                            stack.append((e.path, sub, in_cache or (cache is not None and is_regenerable(sub))))
                         else:
                             st = e.stat(follow_symlinks=False)
+                            if in_cache and cache is not None:
+                                cache["size"] += st.st_size
+                                cache["files"] += 1
+                                continue
                             size += st.st_size
                             files += 1
                             if newest is None or st.st_mtime > newest:
@@ -309,15 +328,19 @@ def scan_candidate(c: Candidate, per_limit: float, clock: Callable[[], float], b
     now = clock()
     if now >= budget_end:
         return  # 전체 시간 상한 소진: 크기 미확인
-    size, files, newest, secrets, complete = scan_tree(Path(c.path), min(now + per_limit, budget_end), clock)
+    cache: dict = {}
+    size, files, newest, secrets, complete = scan_tree(Path(c.path), min(now + per_limit, budget_end), clock, cache)
+    c.cache_size, c.cache_files = cache.get("size", 0), cache.get("files", 0)
     for s in secrets:
         if s not in c.secret and len(c.secret) < SECRET_SAMPLES:
             c.secret.append(s)
     c.scan_complete = complete
-    if complete:
-        c.size, c.files, c.mtime = size, files, newest
+    if complete:  # size/files 는 임시 저장물까지 합친 전체, 그중 cache_* 는 내보낼 때 기본으로 빠지는 양
+        c.size, c.files, c.mtime = size + c.cache_size, files + c.cache_files, newest
     else:
         c.size, c.files, c.mtime = None, files, newest  # 크기 미확인(시간 초과/접근 거부)
+        c.partial_size = size + c.cache_size  # 그때까지 센 크기(표에는 '이상'으로 보인다)
+        c.files = files + c.cache_files
 
 
 # --------------------------------------------------------------------------- 탐지 본체
@@ -443,8 +466,14 @@ def summarize(rules: list[Rule], programs: list[Program], expand: Expand = expan
 
 def fmt_size(c: Candidate) -> str:
     if c.size is None:
+        if c.partial_size:
+            return _fmt_n(c.partial_size) + " 이상"
         return "크기 미확인"
-    n = float(c.size)
+    return _fmt_n(c.size)
+
+
+def _fmt_n(size: int) -> str:
+    n = float(size)
     for unit in ("B", "KB", "MB", "GB"):
         if n < 1024 or unit == "GB":
             return f"{n:.0f}{unit}" if unit == "B" else f"{n:.1f}{unit}"
@@ -564,6 +593,8 @@ def build_selection(d: Discovery, show_all: bool = False) -> dict:
             "include": False, "root": c.root, "rel": c.rel, "path": c.path,
             "programs": c.link.programs if c.link else [], "grade": c.link.grade if c.link else NONE,
             "secret": c.secret, "requires_allow_secrets": bool(c.secret),
+            **({"include_caches": True} if c.include_caches else {}),
+            **({"license_only": True, "include": False} if c.license_only else {}),
         } for c in cands],
     }
 
@@ -574,6 +605,7 @@ class ExtraItem:
     rel: str
     path: Path  # 확장된 절대 경로
     is_dir: bool
+    include_caches: bool = False  # 선택 파일의 후보별 '캐시 포함'(프로그램 설정 찾기에서 캐시/로그 이름 후보를 직접 고른 경우)
 
 
 def _safe_top_rel(rel: str) -> None:
@@ -623,7 +655,7 @@ def items_from_selection(data: object, expand: Expand = expand_env) -> list[Extr
         if (root, rel) in seen:
             continue
         seen.add((root, rel))
-        items.append(ExtraItem(root, rel, target, target.is_dir()))
+        items.append(ExtraItem(root, rel, target, target.is_dir(), c.get("include_caches") is True))
     return items
 
 

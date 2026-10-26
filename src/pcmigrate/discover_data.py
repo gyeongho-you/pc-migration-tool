@@ -81,3 +81,45 @@ BROWSER_VENDOR_DIRS: frozenset[str] = frozenset({
 # --------------------------------------------------------------------------- 가져오기 방어
 # export --extra 로 들어온 항목을 복원할 때 거부할 경로 조각(소문자). 시작 프로그램 등록 경로를 통한 실행을 막는다.
 RESTORE_DENY_SUBSTRINGS: tuple[str, ...] = ("\\startup\\", "\\start menu\\", "authorized_keys")
+
+# --------------------------------------------------------------------------- 재생성되는 임시 저장물(내보내기 extra 에서 자동 제외)
+# 사용자가 고른 폴더 '안쪽'을 순회할 때, 이름이 아래와 '정확히 일치'(대소문자 무시)하는 하위 폴더만 통째로 건너뛴다.
+# 이름에 cache 가 들어간다는 이유만으로는 제외하지 않는다(예: "CacheTool" 같은 사용자 폴더는 그대로 담긴다).
+# 규칙(rules/*.json)이 지정한 경로 안은 규칙의 exclude 가 정하므로 이 표를 적용하지 않는다.
+# 근거 등급: A = Chromium/Electron 이 매번 다시 만드는 캐시/크래시 폴더로 널리 문서화됨,
+#            B = 일반 관행(사용자가 직접 만든 자료가 아니라 도구가 다시 만드는 폴더). 근거가 불확실한 이름은 넣지 않는다.
+REGENERABLE_DIRS: dict[str, str] = {
+    "cache": "A", "code cache": "A", "gpucache": "A", "grshadercache": "A", "shadercache": "A",
+    "dawncache": "B", "crashpad": "A", "crash reports": "A",
+    "logs": "B", "node_modules": "B",
+}
+# 두 단계 이름(상위, 하위)이 모두 일치할 때만 제외하는 폴더. 근거 등급 A(Chromium 서비스 워커 캐시).
+REGENERABLE_SUBPATHS: dict[tuple[str, str], str] = {("service worker", "cachestorage"): "A"}
+REGENERABLE_REASON = "재생성되는 임시 저장물"
+
+
+def is_regenerable(parts: tuple[str, ...]) -> bool:
+    """top 아래 하위 경로 이름들(마지막이 지금 폴더)이 재생성되는 임시 저장물인지. 정확 일치(대소문자 무시)만."""
+    if not parts:
+        return False
+    last = parts[-1].lower()
+    if last in REGENERABLE_DIRS:
+        return True
+    return len(parts) >= 2 and (parts[-2].lower(), last) in REGENERABLE_SUBPATHS
+
+
+# --------------------------------------------------------------------------- '이 프로그램 설정 찾기'
+# 설치 폴더 안에서 사용자 설정일 수 있는 파일 확장자(허용 목록). .cui* 는 AutoCAD 계열 사용자 인터페이스 파일(.cuix 등).
+SETTINGS_EXTENSIONS: frozenset[str] = frozenset({".ini", ".json", ".xml", ".cfg", ".config", ".pgp", ".conf", ".yaml", ".yml", ".toml"})
+SETTINGS_EXT_PREFIXES: tuple[str, ...] = (".cui",)
+# 이름을 공백/기호로 나눈 낱말 중에 이것이 있으면 라이선스/로그/캐시로 보고 찾지 않는다(낱말 정확 일치, 소문자. 'Catalog' 는 걸리지 않는다).
+FIND_SKIP_WORDS: frozenset[str] = frozenset({"license", "licenses", "licence", "licensing", "eula", "log", "logs", "cache", "caches",
+                                              "crash", "crashes", "telemetry", "temp", "tmp"})
+# 프로그램 이름에서 뽑은 낱말 중 너무 흔해서 폴더 이름 일치의 근거로 쓰지 않는 것.
+TOKEN_STOPWORDS: frozenset[str] = frozenset({
+    "microsoft", "windows", "software", "update", "updater", "tool", "tools", "edition", "setup", "driver", "drivers",
+    "runtime", "redistributable", "desktop", "client", "server", "service", "services", "program", "programs", "free",
+    "standard", "professional", "enterprise", "ultimate", "version", "x64", "x86", "build", "plugin", "plugins",
+    "application", "apps", "viewer", "player", "installer", "package", "core", "common", "library", "libraries",
+    "studio", "suite", "editor", "manager",
+})

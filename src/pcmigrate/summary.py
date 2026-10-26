@@ -4,7 +4,7 @@
 """
 from __future__ import annotations
 
-from . import fs
+from . import coverage, fs
 from .progress import fmt_bytes
 
 _IMPORT_LABELS = (("would_copy", "새로 만듦"), ("would_overwrite", "덮어씀(.bak 으로 백업)"),
@@ -29,6 +29,10 @@ def export_lines(r, output: str) -> list[str]:
              f"- 담은 파일 {len(m['files'])}개 (프로그램 규칙: {', '.join(rules) if rules else '없음'})",
              f"- 제외된 항목 {len(m['skipped'])}개(없는 경로, 라이선스, 링크 등)"
              + (f" — 이 중 보안상 복원하지 않는 형식 {denied}개" if denied else "")]
+    cl = coverage.cache_line(m)
+    if cl:
+        lines.append(f"- {cl}")
+    lines += coverage.lines(m)
     if r.unreadable:
         lines.append(f"- 사용 중이라 읽지 못한 파일 {len(r.unreadable)}개(해당 프로그램을 닫고 다시 실행하면 담깁니다)")
     if r.hard_failures:
@@ -61,6 +65,7 @@ def import_lines(r, package: str, report=None) -> list[str]:
         lines += [f"    · {fs.plain_path_text(it['target'])}" for it in denied[:5]]
         if len(denied) > 5:
             lines.append(f"    … 외 {len(denied) - 5}개")
+    lines += coverage.lines(plan.manifest)
     if r.git_config_warning:
         lines.append(f"- [주의] {r.git_config_warning}")
     if report is not None:

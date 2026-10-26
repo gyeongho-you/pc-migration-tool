@@ -9,7 +9,7 @@ from .. import state as S
 from .. import texts as T
 from ...api import unreadable_lines
 from .common import (DANGER_BG, DANGER_FG, INFO_BG, INFO_FG, LIST_BG, MUTED_FG, OK_FG, SUB_FONT, WARN_FG, BaseView,
-                     bind_alt,
+                     bind_alt, CoverageBox,
                      Collapsible, PathField, ResultSummary, ScrollBody, TreeTooltip, autowrap, clear, clean_path, make_text,
                      make_tree, open_location, set_text, sort_tree, table_hint)
 
@@ -73,8 +73,9 @@ class DiscoverView(BaseView):
         self.info.pack(anchor="w", fill="x")
         autowrap(self.info)
 
-        cols = [("sel", T.DISC_COLS[0], 56), ("warn", T.DISC_COLS[1], 96), ("prog", T.DISC_COLS[2], 190),
-                ("path", T.DISC_COLS[3], 320), ("size", T.DISC_COLS[4], 80), ("grade", T.DISC_COLS[5], 90)]
+        cols = [("sel", T.DISC_COLS[0], 56), ("warn", T.DISC_COLS[1], 150), ("prog", T.DISC_COLS[2], 190),
+                ("path", T.DISC_COLS[3], 230), ("size", T.DISC_COLS[4], 110), ("files", T.DISC_COLS[5], 70),
+                ("grade", T.DISC_COLS[6], 80)]
         frame, self.tree = make_tree(self, cols, height=6)
         self.bulk = ttk.Frame(self)
         self.select_all_btn = ttk.Button(self.bulk, text=T.DISC_SELECT_ALL, command=self._select_all)
@@ -91,9 +92,22 @@ class DiscoverView(BaseView):
         self.tree.bind("<space>", self._key_toggle)
         self.tree.bind("<<TreeviewSelect>>", self._show_detail)
         self.tips = TreeTooltip(self.tree, self._tip_text)
+        # 이 프로그램 설정 찾기: 규칙 없는 프로그램 하나를 골라 그 프로그램의 설정 폴더만 국소적으로 찾는다(표 위쪽)
+        self.find_row = ttk.Frame(self)
+        ttk.Label(self.find_row, text=T.FIND_LABEL).pack(side="left")
+        self.find_var = tk.StringVar(value=T.FIND_PICK)
+        self.find_box = ttk.Combobox(self.find_row, textvariable=self.find_var, state="readonly", width=34, values=[T.FIND_PICK])
+        self.find_box.pack(side="left", padx=6)
+        self.find_btn = ttk.Button(self.find_row, text=T.FIND_BTN, command=self._find)
+        self.find_btn.pack(side="left")
+        self.find_msg = ttk.Label(self, text="", justify="left")
+        autowrap(self.find_msg)
         # 아래쪽 묶음을 먼저 pack(side=bottom) 해 두어야 창이 낮아도 '이해했습니다' 체크와 선택 개수가 잘리지 않는다(표가 남는 높이를 쓴다)
         self.count = ttk.Label(self, text=T.DISC_SELECTED.format(n=0, m=0))
         self.count.pack(side="bottom", anchor="w", pady=(4, 0))
+        self.total = ttk.Label(self, text=T.DISC_TOTAL_NONE, justify="left")  # 선택 합계(크기, 파일 수, 캐시 제외 후)
+        self.total.pack(side="bottom", anchor="w", fill="x")
+        autowrap(self.total)
         self.ack_var = tk.BooleanVar(value=False)
         self.ack = ttk.Checkbutton(self, variable=self.ack_var, command=self._ack_changed, text=T.DISC_ACK)
         self.ack.pack(side="bottom", anchor="w")
@@ -108,6 +122,8 @@ class DiscoverView(BaseView):
         self.bulk_hint.pack(side="bottom", anchor="w", fill="x")
         autowrap(self.bulk_hint)
         self.bulk.pack(side="bottom", anchor="w", fill="x", pady=(4, 0))  # 표 바로 아래 줄
+        self.find_row.pack(side="top", anchor="w", fill="x", pady=(4, 0))
+        self.find_msg.pack(side="top", anchor="w", fill="x")
         frame.pack(side="top", fill="both", expand=True, pady=6)
         self.rows: dict[str, object] = {}
         self.finish()
@@ -126,6 +142,10 @@ class DiscoverView(BaseView):
             self.start_btn.emphasize(False)
             self.next_btn.emphasize(True)
             self.ack_var.set(False)
+            self.find_msg.configure(text="")
+            self._refresh()
+        elif kind == "find_done":
+            self.find_msg.configure(text=self.c.find_summary(payload))
             self._refresh()
         elif kind == "selection_changed":
             self._refresh()
@@ -144,10 +164,10 @@ class DiscoverView(BaseView):
         for r in rows:
             checked = r.key in self.c.state.selected
             mark = T.CHECKED if checked else (T.LOCKED if not r.selectable else T.UNCHECKED)
-            warn = T.DISC_WARN_SECRET if r.secret else (T.DISC_WARN_WEAK if r.weak else "")
+            warn = T.DISC_WARN_SECRET if r.secret else (r.badge or (T.DISC_WARN_WEAK if r.weak else ""))
             tags = ("secret",) if r.secret else (("weak",) if r.weak else ())
-            iid = self.tree.insert("", "end", values=(mark, warn, r.programs, T.ellipsize_path(r.path), r.size, r.grade),
-                                   tags=tags)
+            iid = self.tree.insert("", "end", values=(mark, warn, r.programs, T.ellipsize_path(r.path), r.size_eff, r.files_eff,
+                                                      r.grade), tags=tags)
             self.rows[iid] = r
         for col, desc in sort_state.items():
             sort_tree(self.tree, col, desc)
@@ -156,9 +176,15 @@ class DiscoverView(BaseView):
             self.banner.configure(text=T.DISC_BANNER.format(icon=T.ICON_WARN, n=n_secret), bg=DANGER_BG, fg=DANGER_FG)
         else:
             self.banner.configure(text="", bg=self._bg)
+        self.tree.heading("size", text=T.DISC_COL_SIZE_ALL if self.c.state.include_caches else T.DISC_COLS[4])
+        names = self.c.ruleless_program_names()
+        self.find_box.configure(values=[T.FIND_PICK] + names)
+        if self.find_var.get() not in names:
+            self.find_var.set(T.FIND_PICK)
         sel = self.c.selected_rows()
-        big = sum(1 for r in sel if r.size.endswith("GB"))
+        big = self.c.selection_totals()["big"]
         self.count.configure(text=T.DISC_SELECTED.format(n=len(sel), m=len(rows)) + (T.DISC_SELECTED_BIG.format(n=big) if big else ""))
+        self.total.configure(text=self.c.selection_total_text())
         self.ack_var.set(self.c.state.secrets_ack)
 
     def _visible_keys(self) -> list:
@@ -198,9 +224,21 @@ class DiscoverView(BaseView):
         r = self.rows[sel[0]]
         self.detail.pack(side="bottom", anchor="w", fill="x", after=self.banner)
         text = T.DISC_DETAIL.format(kind=r.kind, path=r.path, grade=r.grade, reason=f" — {r.reason}" if r.reason else "")
+        if r.detail_cache:
+            text += r.detail_cache
         if r.secret:
             text += T.DISC_DETAIL_SECRET.format(names=", ".join(r.secret))
         self.detail.configure(text=text)
+        first = r.programs.split(", ")[0]
+        if first in self.c.ruleless_program_names():
+            self.find_var.set(first)  # 고른 줄의 프로그램을 '설정 찾기' 목록에 미리 채워 준다
+
+    def _find(self) -> None:
+        name = self.find_var.get()
+        if name == T.FIND_PICK:
+            messagebox.showwarning(T.GUARD_TITLE, T.G_FIND_NEED_PROGRAM, parent=self)
+            return
+        self.guarded(self.c.start_find_program, name)
 
     def _ack_changed(self) -> None:
         on = self.ack_var.get()
@@ -390,8 +428,14 @@ class ExportView(BaseView):
         self.stage_var = tk.StringVar()  # 비워 두면 기본 위치
         self.stage_field = PathField(self.adv.body, self.stage_var, self._browse_stage, label=T.EXP_STAGE_LABEL, hint=T.EXP_STAGE_HINT)
         self.stage_field.pack(fill="x")
+        self.cache_var = tk.BooleanVar(value=False)  # 고급 옵션: 재생성되는 임시 저장물(Cache, node_modules 등)도 포함
+        ttk.Checkbutton(self.adv.body, variable=self.cache_var, text=T.EXP_INCLUDE_CACHES,
+                        command=lambda: self.c.set_include_caches(self.cache_var.get())).pack(anchor="w", pady=(4, 0))
         self.summary = ResultSummary(body)
         self.summary.pack(fill="x", pady=6)
+        self.cov = CoverageBox(body)  # 끝난 뒤: 프로그램별 설정 확인표
+        self.cache_note = ttk.Label(body, text="", justify="left", foreground=MUTED_FG)
+        autowrap(self.cache_note)
         # 끝난 뒤: 큰 '다음에 할 일' 상자와 결과 위치 열기
         self.next_box = tk.Frame(body, bg=INFO_BG, highlightbackground=INFO_FG, highlightthickness=1, padx=12, pady=8)
         tk.Label(self.next_box, text=T.NEXT_TITLE, bg=INFO_BG, fg=INFO_FG, font=SUB_FONT, anchor="w").pack(anchor="w")
@@ -447,6 +491,7 @@ class ExportView(BaseView):
             text += T.EXP_PLAN_NONE
         self.plan.configure(text=text)
         self._reset_done()
+        self.cache_var.set(self.c.state.include_caches)
         self.scroll.scroll_to_top()
         if not self.path_var.get().strip():
             self.path_var.set(self.c.default_export_path())  # 기본: 바탕화면의 pcmigrate-settings.zip
@@ -461,6 +506,8 @@ class ExportView(BaseView):
             self.go_btn.configure(text=T.BTN_EXPORT, command=self._export)
             self.next_box.pack_forget()
             self.more.pack_forget()
+            self.cov.pack_forget()
+            self.cache_note.pack_forget()
             self.summary.clear()
 
     def _browse(self) -> None:
@@ -517,6 +564,12 @@ class ExportView(BaseView):
             for item in w.get("items", [])[:3]:
                 lines.append(f"  - {w.get('name')}: {item}")
         set_text(self.result, lines)
+        self.cov.show(self.c.coverage_table(payload))
+        self.cov.pack(fill="x", pady=(4, 0), before=self.lic_link)
+        note = self.c.cache_skipped_text(payload)
+        self.cache_note.configure(text=note)
+        if note:
+            self.cache_note.pack(anchor="w", fill="x", pady=(2, 0), before=self.lic_link)
         self.next_box.pack(fill="x", pady=(6, 0), before=self.lic_link)
         self.more.pack(fill="x", before=self.lic_link, pady=(4, 0))
         self.after_idle(lambda: self.scroll.scroll_to(self.summary))  # 끝나면 결과와 '다음에 할 일' 상자가 바로 보이게

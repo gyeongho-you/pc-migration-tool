@@ -60,6 +60,8 @@ class WizardState:
     discovery: Any = None  # discover.Discovery
     selected: set = field(default_factory=set)  # 선택한 후보 key (root, rel)
     secrets_ack: bool = False  # '비밀 정보가 포함될 수 있음을 이해했습니다'
+    include_caches: bool = False  # 고급 옵션 '캐시 폴더도 포함'(기본 끔: 재생성되는 임시 저장물 폴더는 뺀다)
+    find_results: dict = field(default_factory=dict)  # '이 프로그램 설정 찾기' 결과(프로그램 이름 -> ProgramFind)
     checklist: Any = None  # api.ChecklistResult
     export_result: Any = None  # api.ExportResult
     export_output: str = ""

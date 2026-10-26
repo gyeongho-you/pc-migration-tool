@@ -1,7 +1,7 @@
 {
   "id": "lumion",
   "name": "Lumion",
-  "version": "1",
+  "version": "2",
   "detect": {
     "display_name_patterns": [
       "Lumion"
@@ -14,91 +14,91 @@
       "path": "%USERPROFILE%\\Documents\\Lumion*\\Library",
       "dest": "lumion/documents/Library",
       "kind": "dir",
-      "description": "Lumion Library (사용자 Documents). 용량이 클 수 있음"
+      "description": "Lumion 라이브러리 폴더(용량이 클 수 있음) - 내 문서 폴더"
     },
     {
       "path": "%USERPROFILE%\\Documents\\Lumion*\\Recent",
       "dest": "lumion/documents/Recent",
       "kind": "dir",
-      "description": "Lumion Recent (사용자 Documents). 용량이 클 수 있음"
+      "description": "Lumion 최근 사용 항목 폴더(용량이 클 수 있음) - 내 문서 폴더"
     },
     {
       "path": "%USERPROFILE%\\Documents\\Lumion*\\Materials",
       "dest": "lumion/documents/Materials",
       "kind": "dir",
-      "description": "Lumion Materials (사용자 Documents). 용량이 클 수 있음"
+      "description": "Lumion 재질 폴더(용량이 클 수 있음) - 내 문서 폴더"
     },
     {
       "path": "%USERPROFILE%\\Documents\\Lumion*\\GroupLibrary",
       "dest": "lumion/documents/GroupLibrary",
       "kind": "dir",
-      "description": "Lumion GroupLibrary (사용자 Documents). 용량이 클 수 있음"
+      "description": "Lumion 그룹 라이브러리 폴더(용량이 클 수 있음) - 내 문서 폴더"
     },
     {
       "path": "%USERPROFILE%\\Documents\\Lumion*\\settings*.ini",
       "dest": "lumion/documents/settings",
       "kind": "file",
-      "description": "Lumion 설정 ini (사용자 Documents)"
+      "description": "Lumion 설정 파일(settings*.ini) - 내 문서 폴더"
     },
     {
       "path": "%OneDrive%\\Documents\\Lumion*\\Library",
       "dest": "lumion/onedrive/Library",
       "kind": "dir",
-      "description": "Lumion Library (OneDrive(개인) Documents 리디렉션). 용량이 클 수 있음"
+      "description": "Lumion 라이브러리 폴더(용량이 클 수 있음) - OneDrive(개인)로 옮겨진 문서 폴더"
     },
     {
       "path": "%OneDrive%\\Documents\\Lumion*\\Recent",
       "dest": "lumion/onedrive/Recent",
       "kind": "dir",
-      "description": "Lumion Recent (OneDrive(개인) Documents 리디렉션). 용량이 클 수 있음"
+      "description": "Lumion 최근 사용 항목 폴더(용량이 클 수 있음) - OneDrive(개인)로 옮겨진 문서 폴더"
     },
     {
       "path": "%OneDrive%\\Documents\\Lumion*\\Materials",
       "dest": "lumion/onedrive/Materials",
       "kind": "dir",
-      "description": "Lumion Materials (OneDrive(개인) Documents 리디렉션). 용량이 클 수 있음"
+      "description": "Lumion 재질 폴더(용량이 클 수 있음) - OneDrive(개인)로 옮겨진 문서 폴더"
     },
     {
       "path": "%OneDrive%\\Documents\\Lumion*\\GroupLibrary",
       "dest": "lumion/onedrive/GroupLibrary",
       "kind": "dir",
-      "description": "Lumion GroupLibrary (OneDrive(개인) Documents 리디렉션). 용량이 클 수 있음"
+      "description": "Lumion 그룹 라이브러리 폴더(용량이 클 수 있음) - OneDrive(개인)로 옮겨진 문서 폴더"
     },
     {
       "path": "%OneDrive%\\Documents\\Lumion*\\settings*.ini",
       "dest": "lumion/onedrive/settings",
       "kind": "file",
-      "description": "Lumion 설정 ini (OneDrive(개인) Documents 리디렉션)"
+      "description": "Lumion 설정 파일(settings*.ini) - OneDrive(개인)로 옮겨진 문서 폴더"
     },
     {
       "path": "%OneDriveCommercial%\\Documents\\Lumion*\\Library",
       "dest": "lumion/onedrive-business/Library",
       "kind": "dir",
-      "description": "Lumion Library (OneDrive(회사/학교) Documents 리디렉션). 용량이 클 수 있음"
+      "description": "Lumion 라이브러리 폴더(용량이 클 수 있음) - OneDrive(회사/학교)로 옮겨진 문서 폴더"
     },
     {
       "path": "%OneDriveCommercial%\\Documents\\Lumion*\\Recent",
       "dest": "lumion/onedrive-business/Recent",
       "kind": "dir",
-      "description": "Lumion Recent (OneDrive(회사/학교) Documents 리디렉션). 용량이 클 수 있음"
+      "description": "Lumion 최근 사용 항목 폴더(용량이 클 수 있음) - OneDrive(회사/학교)로 옮겨진 문서 폴더"
     },
     {
       "path": "%OneDriveCommercial%\\Documents\\Lumion*\\Materials",
       "dest": "lumion/onedrive-business/Materials",
       "kind": "dir",
-      "description": "Lumion Materials (OneDrive(회사/학교) Documents 리디렉션). 용량이 클 수 있음"
+      "description": "Lumion 재질 폴더(용량이 클 수 있음) - OneDrive(회사/학교)로 옮겨진 문서 폴더"
     },
     {
       "path": "%OneDriveCommercial%\\Documents\\Lumion*\\GroupLibrary",
       "dest": "lumion/onedrive-business/GroupLibrary",
       "kind": "dir",
-      "description": "Lumion GroupLibrary (OneDrive(회사/학교) Documents 리디렉션). 용량이 클 수 있음"
+      "description": "Lumion 그룹 라이브러리 폴더(용량이 클 수 있음) - OneDrive(회사/학교)로 옮겨진 문서 폴더"
     },
     {
       "path": "%OneDriveCommercial%\\Documents\\Lumion*\\settings*.ini",
       "dest": "lumion/onedrive-business/settings",
       "kind": "file",
-      "description": "Lumion 설정 ini (OneDrive(회사/학교) Documents 리디렉션)"
+      "description": "Lumion 설정 파일(settings*.ini) - OneDrive(회사/학교)로 옮겨진 문서 폴더"
     }
   ],
   "manual_warnings": [

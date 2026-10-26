@@ -1,7 +1,7 @@
 {
   "id": "sketchup",
   "name": "SketchUp",
-  "version": "2",
+  "version": "3",
   "detect": {
     "display_name_patterns": [
       "SketchUp Pro",
@@ -22,7 +22,7 @@
       "path": "%APPDATA%\\SketchUp\\SketchUp *\\SketchUp\\Plugins",
       "dest": "sketchup/plugins",
       "kind": "dir",
-      "description": "버전별 사용자 플러그인(.rb, 확장). 포럼 근거"
+      "description": "SketchUp 버전별 사용자 플러그인(.rb 확장 프로그램)"
     }
   ],
   "manual_warnings": [

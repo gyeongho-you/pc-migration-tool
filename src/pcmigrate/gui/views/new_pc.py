@@ -7,7 +7,7 @@ from tkinter import filedialog, messagebox, ttk
 from .. import state as S
 from .. import texts as T
 from .common import (BODY_FONT, DANGER_BG, DANGER_FG, INFO_BG, INFO_FG, MUTED_FG, OK_BG, OK_FG, SUB_FONT, TITLE_FONT, WARN_FG,
-                     BaseView, Collapsible, Notice, PathField, ResultSummary, ScrollBody, TreeTooltip, autowrap, clean_path,
+                     BaseView, Collapsible, CoverageBox, Notice, PathField, ResultSummary, ScrollBody, TreeTooltip, autowrap, clean_path,
                      clear, make_text, make_tree, open_location, set_text)
 
 
@@ -81,6 +81,11 @@ class PreviewView(BaseView):
         self.lic_link.pack(side="bottom", anchor="w")
         self.more = Collapsible(self, f"{T.PREV_WARN_TITLE} ▸", f"{T.PREV_WARN_TITLE} ▾")  # 직접 해야 할 일은 접어 둔다
         self.more.pack(side="bottom", fill="x")
+        self.cov_fold = Collapsible(self, f"{T.COV_PREVIEW_TITLE} ▸", f"{T.COV_PREVIEW_TITLE} ▾")  # 설정 확인표도 접어 둔다
+        self.cov_fold.pack(side="bottom", fill="x")
+        self.cov = CoverageBox(self.cov_fold.body, title="")
+        self.cov.title_label.pack_forget()
+        self.cov.pack(fill="x")
         frame.pack(side="top", fill="both", expand=True, pady=4)  # 아래쪽을 먼저 쌓은 뒤 표가 남는 높이를 쓴다
         self.tree.tag_configure("over", foreground=WARN_FG)
         self.tree.tag_configure("extra", background=DANGER_BG, foreground=DANGER_FG)
@@ -132,6 +137,12 @@ class PreviewView(BaseView):
         lines = (self.c.preview_lines()
                  + [f"{w.get('name', '')}: {i}" for w in p.plan.warnings for i in w.get("items", [])])
         set_text(self.warn, lines or [T.CL_EMPTY])
+        table = self.c.coverage_table(p)
+        self.cov.show(table)
+        head = self.c.coverage_headline(table)
+        self.cov_fold.title = f"{T.COV_PREVIEW_TITLE}: {head} ▸" if head else f"{T.COV_PREVIEW_TITLE} ▸"
+        self.cov_fold.title_open = self.cov_fold.title.replace("▸", "▾")
+        self.cov_fold.set_open(self.cov_fold.open)
 
 
 class ConfirmView(BaseView):
@@ -254,6 +265,8 @@ class ResultView(BaseView):
         self.summary.pack(fill="x")
         self.note = ttk.Label(body, text="", justify="left")
         self.note.pack(anchor="w", fill="x")
+        self.cov = CoverageBox(body, title=T.COV_PREVIEW_TITLE)  # 묶음 안에 어떤 설정이 담겼는지(프로그램별)
+        self.cov.pack(fill="x", pady=(4, 0))
         cols = [("kind", T.RES_COLS[0], 90), ("path", T.RES_COLS[1], 520), ("detail", T.RES_COLS[2], 260)]
         frame, self.tree = make_tree(body, cols, height=6)
         frame.pack(fill="x", pady=6)
@@ -301,6 +314,7 @@ class ResultView(BaseView):
             var.set(key in self.c.roadmap_marks)
         self.scroll.scroll_to_top()
         if r is None or r.report is None:
+            self.cov.clear()
             self.summary.clear()
             self.note.configure(text=T.RES_NOT_YET)
             self.open_btn.state(["disabled"])
@@ -309,6 +323,7 @@ class ResultView(BaseView):
         self.note.configure(text="\n".join(x for x in (self.c.denied_note(), self.c.git_config_note(applied=True)) if x))
         ok, skipped, failed = self.c.import_counts()
         self.summary.show(ok, skipped, failed, T.RES_ALL_OK, T.RES_IMPORT_FAIL)
+        self.cov.show(self.c.coverage_table(r))
 
         def add(kind, path, detail, tags=()):
             iid = self.tree.insert("", "end", tags=tags, values=(kind, T.ellipsize_path(path), detail))

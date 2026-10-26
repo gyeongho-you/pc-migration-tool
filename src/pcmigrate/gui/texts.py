@@ -114,12 +114,14 @@ TITLES = {
 TASK_SCAN, TASK_DISCOVER, TASK_CHECKLIST = "프로그램 조사", "자동 목록에 없는 프로그램 찾기", "해야 할 일 목록 만들기"
 TASK_EXPORT, TASK_PREVIEW, TASK_APPLY = "설정 묶음 파일 만들기", "설정 묶음 파일 검사와 미리보기", "복원"
 TASK_INSTALL_CHECK = "프로그램 설치 확인"
+TASK_FIND_PROGRAM = "이 프로그램 설정 찾기"
 TASK_TRANSFER, TASK_TRANSFER_PREVIEW = "대용량 복사", "복사 미리보기(실제로 바꾸지 않음)"
 TASK_VERIFY, TASK_VERIFY_AGAIN, TASK_RETRY = "복사본 검사", "복사본 다시 검사", "실패한 파일만 다시 복사"
 PROGRESS = {
     TASK_SCAN: "설치된 프로그램을 조사하는 중… 보통 10~60초 걸립니다.",
     TASK_DISCOVER: "자동 목록에 없는 프로그램의 설정 폴더를 찾는 중… 폴더 크기를 재느라 보통 30~90초 걸립니다.",
     TASK_CHECKLIST: "해야 할 일 목록을 만드는 중… 보통 10~60초 걸립니다.",
+    TASK_FIND_PROGRAM: "고른 프로그램과 이름이 맞는 설정 폴더만 찾는 중… 보통 몇 초에서 30초 걸립니다. 읽기만 하며 아래 '취소'로 멈출 수 있습니다.",
     TASK_EXPORT: "설정 묶음 파일을 만드는 중… 파일 수에 따라 수십 초에서 몇 분 걸립니다. 원본은 읽기만 합니다.",
     TASK_PREVIEW: "설정 묶음 파일을 검사하고 미리보기를 만드는 중… 보통 몇 초에서 1분 걸립니다. 아무것도 쓰지 않습니다.",
     TASK_INSTALL_CHECK: "이 PC에 설치된 프로그램을 읽어 설정 묶음 파일의 목록과 비교하는 중… 보통 10~60초 걸립니다. 아무것도 설치하거나 바꾸지 않습니다.",
@@ -201,7 +203,8 @@ DISC_SUB = "자동 목록에 없는 프로그램의 설정 폴더 후보입니�
 BTN_DISCOVER = "찾기 시작"
 DISC_HINT = "읽기만 합니다. 폴더 크기를 재느라 1분 안팎 걸릴 수 있으며, 아래 '취소'로 멈출 수 있습니다."
 DISC_SUMMARY = "자동 목록에 없는 프로그램 {n}개, 설정 폴더 후보 {m}개 (민감한 정보 가능성 {k}개)"
-DISC_COLS = ("선택", "주의", "프로그램", "위치", "크기", "연결 근거")
+DISC_COLS = ("선택", "주의", "프로그램", "위치", "크기(캐시 제외)", "파일 수", "연결 근거")
+DISC_COL_SIZE_ALL = "크기(캐시 포함)"
 DISC_WARN_SECRET = f"{ICON_WARN} 민감"
 DISC_WARN_WEAK = "근거 약함"
 DISC_BANNER = ("{icon} 민감한 정보가 들어 있을 수 있는 항목 {n}개는 붉게 표시됩니다(열쇠 파일, 비밀번호, 로그인 정보 등). "
@@ -220,6 +223,30 @@ DISC_BULK_CLEARED = "보이는 항목 {n}개의 선택을 모두 해제했습니
 DISC_SELECTED_BIG = " (1GB 이상 {n}개 — 큰 폴더는 '대용량 복사'를 권장합니다)"
 DISC_DETAIL = "{kind}: {path}\n연결 근거: {grade}{reason}"
 DISC_DETAIL_SECRET = "\n" + ICON_WARN + " 민감한 정보 가능성: {names}"
+DISC_TOTAL = "선택한 {n}개: 약 {size}, 파일 {files}개{note}"
+DISC_TOTAL_NONE = "선택한 항목이 없습니다."
+DISC_TOTAL_CACHE = " (캐시 제외 후 — 임시 저장물 약 {size}, 파일 {files}개는 빠집니다)"
+DISC_TOTAL_CACHE_IN = " (캐시 폴더도 포함하도록 설정됨)"
+DISC_TOTAL_APPROX = " ※ 시간 안에 다 재지 못한 {k}개는 지금까지 센 만큼만 더했습니다(실제는 더 큽니다)"
+DISC_TOTAL_UNKNOWN = " ※ 크기를 알 수 없는 {k}개는 합계에 넣지 못했습니다"
+DISC_DETAIL_CACHE = "\n전체 크기 {total}(파일 {files}개) 중 임시 저장물(Cache, node_modules 등) 약 {cache}(파일 {cfiles}개)는 내보낼 때 기본으로 빠집니다."
+# 이 프로그램 설정 찾기(규칙 없는 프로그램 하나의 설정 폴더만 국소적으로 찾는다)
+FIND_LABEL = "프로그램 하나만 자세히 찾기:"
+FIND_BTN = "이 프로그램 설정 찾기"
+FIND_HINT = ("목록에서 프로그램을 고른 뒤 누르면, 그 프로그램의 이름·제조사·설치 위치와 이름이 맞는 폴더만 찾아 표에 더합니다. "
+             "더해진 항목은 자동으로 체크되지 않습니다.")
+FIND_PICK = "(프로그램 선택)"
+FIND_RESULT = "'{name}' 설정 찾기: 새 후보 {new}개(이미 목록에 있던 {dup}개). 검색에 쓴 단어: {tokens}"
+FIND_RESULT_RULE = "'{name}' 은(는) 이미 자동 목록에 있는 프로그램이라 설정을 자동으로 옮깁니다. 따로 찾을 필요가 없습니다."
+FIND_RESULT_NONE = "'{name}' 와 이름이 맞는 설정 폴더를 찾지 못했습니다. 프로그램의 '설정 내보내기' 기능이나 설치 폴더를 직접 확인해 주세요."
+FIND_INSTALL_FILES = "설치 폴더 안의 설정 형식 파일 {n}개(참고용, 자동으로 옮기지 않습니다): {names}"
+FIND_BUDGET = " 시간 상한에 걸려 일부 크기는 '이상'으로 표시됩니다."
+G_FIND_NEED_DISCOVERY = "먼저 '찾기 시작'으로 자동 목록에 없는 프로그램을 찾아 주세요."
+G_INCLUDE_CACHES_UNSUPPORTED = "이 버전은 캐시 폴더 포함 옵션을 지원하지 않습니다."
+G_LICENSE_SELECT = "라이선스는 이 도구가 옮기지 않습니다. 새 PC 에서 재활성화/재로그인해 주세요."
+FIND_SCOPE_NOTE = ("캐시/로그/임시 폴더도 포함해 찾았습니다. 배지가 붙은 항목은 직접 확인 후 체크해 주세요(자동 선택 안 함). "
+                   "라이선스는 발견만 표시하며 이 도구는 옮기지 않습니다.")
+G_FIND_NEED_PROGRAM = "어느 프로그램의 설정을 찾을지 목록에서 먼저 골라 주세요."
 KIND_FOLDER, KIND_FILE, NO_PROGRAM = "폴더", "파일", "(연결된 프로그램 없음)"
 
 # --------------------------------------------------------------------------- 구 PC 3) 해야 할 일 목록
@@ -296,6 +323,16 @@ EXP_RESTART_CONFIRM = ("이전에 중단된 임시 파일(.part)과 진행 기�
 EXP_RESUMED_DONE = "저장점에서 이어받음: {n:,}개 파일은 다시 담지 않았습니다."
 EXP_RESTART_REASON = "처음부터 만든 이유: {why}"
 EXP_TODO = "새 PC에서 직접 해야 할 일(일부):"
+EXP_INCLUDE_CACHES = "캐시 폴더도 포함(Cache, node_modules 등 다시 만들어지는 폴더. 용량과 시간이 크게 늘 수 있어 보통은 끕니다)"
+EXP_CACHE_SKIPPED = "다시 만들어지는 임시 저장물 폴더 {n}개(파일 {files}개, {size})는 뺐습니다. 필요하면 고급 옵션에서 '캐시 폴더도 포함'을 켜 주세요."
+# 설정 확인표(프로그램별로 어떤 설정이 담겼는지)
+COV_TITLE = "설정 확인표 — 프로그램별로 어떤 설정이 담겼는지"
+COV_COLS = ("프로그램", "옮기는 설정", "상태", "담긴 파일")
+COV_FOLD = "해당 없음 {n}곳 ▸"
+COV_FOLD_OPEN = "해당 없음 {n}곳 ▾"
+COV_FOLD_NOTE = "이 PC에 없는 설정 위치라 건너뛰었습니다. 이 PC에 이 설정이 만들어진 적이 없을 수 있습니다(정상)."
+COV_NONE = "(설정 확인표에 보여 줄 항목이 없습니다)"
+COV_PREVIEW_TITLE = "설정 확인표 — 묶음 안에 어떤 설정이 담겼는지"
 EXP_DONE_BIG = f"{ICON_OK} 설정 묶음 파일을 만들었습니다"
 NEXT_TITLE = "다음에 할 일"
 EXP_NEXT_STEPS = (
@@ -716,6 +753,7 @@ CARD_SUMMARY_SIMPLE = "작업을 마쳤습니다"
 TASK_STEPS = {
     TASK_SCAN: ("목록 읽기", "목록 맞추기"),
     TASK_DISCOVER: ("목록 읽기", "폴더 찾기", "크기 재기"),
+    TASK_FIND_PROGRAM: ("폴더 찾기", "크기 재기"),
     TASK_CHECKLIST: ("목록 읽기", "정리"),
     TASK_EXPORT: ("파일 찾기", "담기", "검사"),
     TASK_PREVIEW: ("설정 묶음 파일 검사",),

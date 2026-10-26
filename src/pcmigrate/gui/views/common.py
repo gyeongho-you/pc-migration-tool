@@ -14,6 +14,7 @@ from tkinter import font as tkfont
 from tkinter import messagebox, ttk
 from typing import Callable
 
+from ... import coverage
 from .. import texts as T
 from ..controller import Controller, GuardError
 
@@ -255,6 +256,66 @@ class Collapsible(tk.Frame):
         lbl.pack(anchor="w", fill="x", pady=2)
         autowrap(lbl, pad)
         return lbl
+
+
+class CoverageBox(ttk.Frame):
+    """프로그램별 설정 확인표: 프로그램 / 옮기는 설정 / 상태 / 담긴 파일 수. '이 PC에 없음' 행은 '해당 없음 N곳' 한 줄로 접고 펼치면 보인다."""
+
+    STATUS_TAGS = {coverage.ST_OK: OK_FG, coverage.ST_PART: WARN_FG, coverage.ST_UNREAD: DANGER_FG,
+                   coverage.ST_MANUAL: INFO_FG, coverage.ST_EXCL: MUTED_FG, coverage.ST_EMPTY: MUTED_FG}
+
+    def __init__(self, parent: tk.Misc, title: str = T.COV_TITLE, max_rows: int = 8) -> None:
+        super().__init__(parent)
+        self.max_rows = max_rows
+        self.title_label = ttk.Label(self, text=title, font=SUB_FONT)
+        self.title_label.pack(anchor="w")
+        cols = [("program", T.COV_COLS[0], 190), ("what", T.COV_COLS[1], 380), ("status", T.COV_COLS[2], 100),
+                ("files", T.COV_COLS[3], 70)]
+        self.frame, self.tree = make_tree(self, cols, height=3)
+        self.frame.pack(fill="x", pady=(2, 0))
+        for st, color in self.STATUS_TAGS.items():
+            self.tree.tag_configure(st, foreground=color)
+        self.full: dict[str, str] = {}
+        self.tips = TreeTooltip(self.tree, lambda iid, col: self.full.get(iid, "") if col in (1, 2) else "")
+        self.fold = Collapsible(self, T.COV_FOLD.format(n=0), T.COV_FOLD_OPEN.format(n=0))
+        self.fold_note = self.fold.add_text(T.COV_FOLD_NOTE)
+        self.fold_list = tk.Label(self.fold.body, text="", justify="left", anchor="w", bg=self.fold.bg)
+        self.fold_list.pack(anchor="w", fill="x")
+        self._fold_shown = False
+        self.rows_shown: list[dict] = []
+        self.rows_hidden: list[dict] = []
+
+    def clear(self) -> None:
+        clear(self.tree)
+        self.full = {}
+        self.rows_shown, self.rows_hidden = [], []
+        self._set_fold(0)
+
+    def _set_fold(self, n: int) -> None:
+        if n and not self._fold_shown:
+            self.fold.pack(anchor="w", fill="x")
+            self._fold_shown = True
+        elif not n and self._fold_shown:
+            self.fold.pack_forget()
+            self._fold_shown = False
+        self.fold.title, self.fold.title_open = T.COV_FOLD.format(n=n), T.COV_FOLD_OPEN.format(n=n)
+        self.fold.toggle_btn.configure(text=self.fold.title_open if self.fold.open else self.fold.title)
+
+    def show(self, table: list[dict]) -> None:
+        """table: coverage.rows() 의 행들. 비어 있으면 안내 한 줄만."""
+        clear(self.tree)
+        self.full = {}
+        shown, hidden = coverage.fold(table)
+        self.rows_shown, self.rows_hidden = shown, hidden
+        if not table:
+            self.tree.insert("", "end", values=("", T.COV_NONE, "", ""))
+        for r in shown:
+            tail = f" — {r['note']}" if r["note"] else ""
+            iid = self.tree.insert("", "end", tags=(r["status"],), values=(r["program"], r["what"], r["status"], f"{r['files']}개"))
+            self.full[iid] = f"{r['program']}: {r['what']}{tail}"
+        self.tree.configure(height=min(self.max_rows, max(2, len(shown) or 1)))
+        self.fold_list.configure(text="\n".join(f"· {r['program']} — {r['what']}" for r in hidden))
+        self._set_fold(len(hidden))
 
 
 class StepStrip(tk.Frame):

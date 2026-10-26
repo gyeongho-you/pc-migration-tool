@@ -1,7 +1,7 @@
 {
   "id": "qgis",
   "name": "QGIS",
-  "version": "2",
+  "version": "3",
   "detect": {
     "display_name_patterns": [
       "QGIS"
@@ -14,7 +14,7 @@
       "path": "%APPDATA%\\QGIS\\QGIS3\\profiles\\default",
       "dest": "qgis/profile-default",
       "kind": "dir",
-      "description": "QGIS 3 기본 사용자 프로파일(설정, 스타일, 플러그인 등, 요약)"
+      "description": "QGIS 3 기본 사용자 프로필: 환경설정, 스타일, 플러그인"
     }
   ],
   "manual_warnings": [

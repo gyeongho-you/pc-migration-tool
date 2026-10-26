@@ -22,37 +22,37 @@
       "path": "%APPDATA%\\JetBrains\\*\\options",
       "dest": "jetbrains/options",
       "kind": "dir",
-      "description": "IDE 설정 XML(버전별 폴더 아래 options)"
+      "description": "JetBrains IDE 환경설정(XML, 버전별 폴더)"
     },
     {
       "path": "%APPDATA%\\JetBrains\\*\\codestyles",
       "dest": "jetbrains/codestyles",
       "kind": "dir",
-      "description": "코드 스타일 스킴"
+      "description": "JetBrains IDE 코드 스타일"
     },
     {
       "path": "%APPDATA%\\JetBrains\\*\\keymaps",
       "dest": "jetbrains/keymaps",
       "kind": "dir",
-      "description": "사용자 단축키 맵(사용자가 만든 경우에만 존재)"
+      "description": "JetBrains IDE 사용자 단축키 맵(직접 만든 경우에만 있음)"
     },
     {
       "path": "%APPDATA%\\JetBrains\\*\\templates",
       "dest": "jetbrains/templates",
       "kind": "dir",
-      "description": "라이브 템플릿(사용자가 만든 경우에만 존재)"
+      "description": "JetBrains IDE 라이브 템플릿(직접 만든 경우에만 있음)"
     },
     {
       "path": "%APPDATA%\\JetBrains\\*\\fileTemplates",
       "dest": "jetbrains/fileTemplates",
       "kind": "dir",
-      "description": "파일 템플릿(사용자가 만든 경우에만 존재)"
+      "description": "JetBrains IDE 파일 템플릿(직접 만든 경우에만 있음)"
     },
     {
       "path": "%APPDATA%\\JetBrains\\*\\colors",
       "dest": "jetbrains/colors",
       "kind": "dir",
-      "description": "사용자 색상 스킴(사용자가 만든 경우에만 존재)"
+      "description": "JetBrains IDE 색상 테마(직접 만든 경우에만 있음)"
     }
   ],
   "manual_warnings": [
@@ -62,7 +62,7 @@
     "플러그인은 신 PC에서 재설치하세요(IDE 버전에 맞는 호환 버전이 필요합니다). 구 PC의 Settings > Plugins 목록을 미리 적어 두세요.",
     "신 PC의 IDE 버전이 다르면 설정이 호환되지 않을 수 있습니다. 같은 제품/버전을 설치하세요."
   ],
-  "version": "1",
+  "version": "2",
   "exclude": [
     "*.lic",
     "*.key",

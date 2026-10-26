@@ -36,9 +36,10 @@ from . import __version__, failure, fs
 from .copier import (COPIED, DENIED, FAILED, REJECTED, SKIPPED_SAME, WOULD_COPY, WOULD_OVERWRITE,
                      FileResult, Report, _backup_path, copy_file, sha256_file)
 from .detect import Program
-from .discover_data import EXTRA_ROOTS, RESTORE_DENY_SUBSTRINGS, ROOTS
+from . import coverage
+from .discover_data import EXTRA_ROOTS, REGENERABLE_REASON, RESTORE_DENY_SUBSTRINGS, ROOTS, is_regenerable
 from .progress import FAILED_KIND, OK, SKIPPED, UNREADABLE, ProgressInfo, ProgressTracker, categorize, fmt_bytes
-from .rules import Rule
+from .rules import PathRule, Rule
 
 FORMAT_VERSION = 1
 EXTRA_ID = "extra"  # 규칙 없는 프로그램 중 사용자가 선택해 포함한 항목(manifest rule id)
@@ -179,11 +180,13 @@ class Item:
 
 
 def _walk_files_no_links(top: Path, files: list[Path], skipped: list[dict], rule_id: str,
-                         failed: list[dict] | None = None) -> None:
+                         failed: list[dict] | None = None, pruned: list[Path] | None = None) -> None:
     """top 아래 파일을 모은다. 정션/심볼릭 링크 폴더(reparse point)는 들어가지 않고 건너뛴 기록을 남긴다.
 
     260자를 넘는 경로도 긴 경로 접두로 순회하고(반환 경로는 접두 없는 사용자 표기), 읽지 못한 폴더는 조용히 넘기지 않고
-    failed 에 기록한다(R2-1: 빼먹고 '실패 0' 으로 보고하지 않는다)."""
+    failed 에 기록한다(R2-1: 빼먹고 '실패 0' 으로 보고하지 않는다).
+    pruned 가 주어지면(내보내기 extra 전용) top 아래에서 이름이 '재생성되는 임시 저장물'(is_regenerable)과 정확히 일치하는
+    하위 폴더는 들어가지 않고 pruned 에 모은다(top 자신은 사용자가 고른 것이므로 검사하지 않는다)."""
     top_s = str(top)
     lp = fs.long_path(top_s)
 
@@ -203,6 +206,8 @@ def _walk_files_no_links(top: Path, files: list[Path], skipped: list[dict], rule
             dp = Path(plain) / d
             if fs.is_reparse(dp):
                 skipped.append({"rule": rule_id, "path": str(dp), "reason": "심볼릭 링크/정션은 따라가지 않음"})
+            elif pruned is not None and is_regenerable(Path(plain, d).relative_to(top).parts):
+                pruned.append(dp)
             else:
                 keep.append(d)
         dirs[:] = keep
@@ -215,100 +220,158 @@ def _denied_skip(rule_id: str, path: Path | str, why: str) -> dict:
             "reason": f"복원하지 않는 형식이라 패키지에 넣지 않음(보안): {why}"}
 
 
+_BENIGN_SKIPS = ("제외 대상", "경로가 없음", "환경변수 확장 실패")
+
+
+def _path_coverage(rule: Rule, pr: PathRule, items: list, skipped: list, failed: list | None, snap: tuple[int, int, int],
+                   found: bool) -> dict:
+    """경로 하나의 결과(설정 확인표용). snap = 이 경로를 처리하기 전의 (items, skipped, failed) 길이."""
+    n_files = len(items) - snap[0]
+    mine = skipped[snap[1]:]
+    n_failed = (len(failed) - snap[2]) if failed is not None else 0
+    bad = sum(1 for x in mine if not any(b in x.get("reason", "") for b in _BENIGN_SKIPS) and not x.get("cache"))
+    return {"rule": rule.id, "name": rule.name, "path": pr.path, "description": pr.description, "files": n_files,
+            "failed": n_failed, "excluded": bad,
+            "status": coverage.classify(found=found, files=n_files, failed=n_failed, excluded=bad)}
+
+
 def collect_items(rule: Rule, expand: Expand = expand_env, *, avoid: Callable[[Path], bool] | None = None,
-                  roots: list[Path] | None = None, failed: list[dict] | None = None
-                  ) -> tuple[list[Item], list[dict]]:
+                  roots: list[Path] | None = None, failed: list[dict] | None = None,
+                  cov: list[dict] | None = None) -> tuple[list[Item], list[dict]]:
     """규칙에 따라 백업할 파일 목록과 건너뛴 항목(사유 포함)을 만든다. 읽기 전용.
 
     복원 때 거부될 파일(실행/스크립트 형식 등)은 내보낼 때도 같은 판정(restore_denied)으로 skipped 에 넣는다(denied=True).
     avoid(path)가 True 인 파일(출력 파일 자신/임시물 등)은 조용히 뺀다. roots 에는 찾은 최상위 경로를 모은다(출력이 그 안인지 검사용).
+    cov 가 있으면 경로별 결과(설정 확인표용)를 덧붙인다.
     """
     items: list[Item] = []
     skipped: list[dict] = []
     for pr in rule.paths:
-        split = split_rule_path(pr.path)
-        if split is None:
-            skipped.append({"rule": rule.id, "path": pr.path, "reason": "경로 형식이 올바르지 않음"})
-            continue
-        base, pattern = split
-        base_path = Path(expand(base))
-        if not _usable_base(base_path):
-            skipped.append({"rule": rule.id, "path": pr.path, "reason": "환경변수 확장 실패 또는 상대 경로"})
-            continue
-        has_glob = bool(WILDCARD & set(pr.path))
-        matches = sorted(base_path.glob(pattern)) if base_path.is_dir() else []
-        if not matches:
-            skipped.append({"rule": rule.id, "path": pr.path, "reason": "경로가 없음"})
-            continue
-        for m in matches:
-            link = fs.reparse_in_chain(base_path, m)  # 일치한 경로 자신과 그 위쪽 폴더(base 아래)가 링크/정션인지
-            if link:
-                skipped.append({"rule": rule.id, "path": link, "reason": "심볼릭 링크/정션은 따라가지 않음"})
-                continue
-            if roots is not None:
-                roots.append(m)
-            files: list[Path] = []
-            if m.is_file():
-                files = [m]
-            else:
-                _walk_files_no_links(m, files, skipped, rule.id, failed)
-            for f in files:
-                if avoid is not None and avoid(f):
-                    continue
-                if os.path.islink(fs.long_path(f)) or _excluded(f.name, rule):
-                    skipped.append({"rule": rule.id, "path": str(f),
-                                    "reason": "제외 대상(라이선스/임시/링크)"})
-                    continue
-                rel = f.relative_to(base_path).as_posix()
-                if unsafe_name(rel):
-                    skipped.append({"rule": rule.id, "path": str(f), "reason": "Windows 에서 쓸 수 없는 이름(예약 이름, 끝의 점/공백 등)"})
-                    continue
-                why = restore_denied(rel, base_path / rel, rule, base)
-                if why:
-                    skipped.append(_denied_skip(rule.id, f, why))
-                    continue
-                if pr.kind == "file" and not has_glob:
-                    arc = f"data/{pr.dest}"
-                else:
-                    arc = f"data/{pr.dest}/{rel}"
-                items.append(Item(arc, f, rule.id, base, rel))
+        snap = (len(items), len(skipped), len(failed) if failed is not None else 0)
+        found = _collect_one_path(rule, pr, expand, avoid, roots, failed, items, skipped)
+        if cov is not None:
+            cov.append(_path_coverage(rule, pr, items, skipped, failed, snap, found))
+    if cov is not None and not rule.paths:  # 자동으로 옮길 설정이 없는 규칙: 직접 해야 함
+        cov.append({"rule": rule.id, "name": rule.name, "path": "", "description": coverage.NO_AUTO_SETTINGS,
+                    "files": 0, "failed": 0, "excluded": 0, "status": coverage.ST_MANUAL})
     return items, skipped
 
 
+def _collect_one_path(rule: Rule, pr: PathRule, expand: Expand, avoid, roots, failed, items: list[Item],
+                      skipped: list[dict]) -> bool:
+    """규칙 경로 하나를 처리해 items/skipped 에 덧붙인다. 경로가 실제로 있었으면 True."""
+    split = split_rule_path(pr.path)
+    if split is None:
+        skipped.append({"rule": rule.id, "path": pr.path, "reason": "경로 형식이 올바르지 않음"})
+        return False
+    base, pattern = split
+    base_path = Path(expand(base))
+    if not _usable_base(base_path):
+        skipped.append({"rule": rule.id, "path": pr.path, "reason": "환경변수 확장 실패 또는 상대 경로"})
+        return False
+    has_glob = bool(WILDCARD & set(pr.path))
+    matches = sorted(base_path.glob(pattern)) if base_path.is_dir() else []
+    if not matches:
+        skipped.append({"rule": rule.id, "path": pr.path, "reason": "경로가 없음"})
+        return False
+    for m in matches:
+        link = fs.reparse_in_chain(base_path, m)  # 일치한 경로 자신과 그 위쪽 폴더(base 아래)가 링크/정션인지
+        if link:
+            skipped.append({"rule": rule.id, "path": link, "reason": "심볼릭 링크/정션은 따라가지 않음"})
+            continue
+        if roots is not None:
+            roots.append(m)
+        files: list[Path] = []
+        if m.is_file():
+            files = [m]
+        else:
+            _walk_files_no_links(m, files, skipped, rule.id, failed)
+        for f in files:
+            if avoid is not None and avoid(f):
+                continue
+            if os.path.islink(fs.long_path(f)) or _excluded(f.name, rule):
+                skipped.append({"rule": rule.id, "path": str(f),
+                                "reason": "제외 대상(라이선스/임시/링크)"})
+                continue
+            rel = f.relative_to(base_path).as_posix()
+            if unsafe_name(rel):
+                skipped.append({"rule": rule.id, "path": str(f), "reason": "Windows 에서 쓸 수 없는 이름(예약 이름, 끝의 점/공백 등)"})
+                continue
+            why = restore_denied(rel, base_path / rel, rule, base)
+            if why:
+                skipped.append(_denied_skip(rule.id, f, why))
+                continue
+            if pr.kind == "file" and not has_glob:
+                arc = f"data/{pr.dest}"
+            else:
+                arc = f"data/{pr.dest}/{rel}"
+            items.append(Item(arc, f, rule.id, base, rel))
+    return True
+
+
+CACHE_COUNT_SECONDS = 8.0  # 제외한 임시 저장물 폴더 하나의 크기/파일 수를 세는 데 쓰는 최대 시간(넘으면 '이상'으로 표시)
+
+
+def _pruned_skip(path: Path) -> dict:
+    """제외한 임시 저장물 폴더의 이름·파일 수·용량을 센다(읽기 전용, 시간 상한). skipped 항목으로 돌려준다."""
+    from .discover import scan_tree
+    size, nfiles, _newest, _sec, complete = scan_tree(path, time.monotonic() + CACHE_COUNT_SECONDS, time.monotonic)
+    return {"rule": EXTRA_ID, "path": str(path), "name": path.name, "reason": REGENERABLE_REASON, "cache": True,
+            "files": nfiles, "bytes": size, "complete": bool(complete)}
+
+
 def collect_extra_items(extras: list, expand: Expand = expand_env, *, avoid: Callable[[Path], bool] | None = None,
-                        roots: list[Path] | None = None, failed: list[dict] | None = None
+                        roots: list[Path] | None = None, failed: list[dict] | None = None,
+                        include_caches: bool = False, cov: list[dict] | None = None
                         ) -> tuple[list[Item], list[dict]]:
-    """discover 선택 파일로 고른 항목(ExtraItem)의 파일 목록. 읽기 전용, 라이선스/임시/링크 제외, 복원 거부 형식은 skipped(denied)."""
+    """discover 선택 파일로 고른 항목(ExtraItem)의 파일 목록. 읽기 전용, 라이선스/임시/링크 제외, 복원 거부 형식은 skipped(denied).
+
+    include_caches=False(기본)면 폴더 안의 재생성되는 임시 저장물 폴더(Cache, GPUCache, node_modules 등 정확히 일치하는 이름)는
+    건너뛰고 skipped(reason='재생성되는 임시 저장물', 이름·파일 수·용량 포함)에 기록한다."""
     keys = {r.template: r.key for r in ROOTS}
     items: list[Item] = []
     skipped: list[dict] = []
     for ex in extras:
+        snap = (len(items), len(skipped), len(failed) if failed is not None else 0)
         top = Path(ex.path)
         files: list[Path] = []
+        pruned: list[Path] = []
         if top.is_symlink() or (top.is_dir() and fs.is_reparse(top)):
             skipped.append({"rule": EXTRA_ID, "path": str(top), "reason": "심볼릭 링크/정션은 따라가지 않음"})
-            continue
-        if top.is_file():
-            files = [top]
         else:
-            _walk_files_no_links(top, files, skipped, EXTRA_ID, failed)
-        if roots is not None:
-            roots.append(top)
-        for f in files:
-            if avoid is not None and avoid(f):
-                continue
-            if os.path.islink(fs.long_path(f)) or _excluded(f.name, None):
-                skipped.append({"rule": EXTRA_ID, "path": str(f), "reason": "제외 대상(라이선스/임시/링크)"})
-                continue
-            rel = ex.rel if f == top else f"{ex.rel}/{f.relative_to(top).as_posix()}"
-            if unsafe_name(rel):
-                skipped.append({"rule": EXTRA_ID, "path": str(f), "reason": "Windows 에서 쓸 수 없는 이름(예약 이름, 끝의 점/공백 등)"})
-                continue
-            why = restore_denied(rel, Path(expand(ex.root)) / rel, None, ex.root)
-            if why:
-                skipped.append(_denied_skip(EXTRA_ID, f, why))
-                continue
-            items.append(Item(f"data/{EXTRA_ID}/{keys[ex.root]}/{rel}", f, EXTRA_ID, ex.root, rel))
+            if top.is_file():
+                files = [top]
+            else:
+                _walk_files_no_links(top, files, skipped, EXTRA_ID, failed,
+                                     None if (include_caches or getattr(ex, "include_caches", False)) else pruned)
+            for pd in pruned:
+                skipped.append(_pruned_skip(pd))
+            if roots is not None:
+                roots.append(top)
+            for f in files:
+                if avoid is not None and avoid(f):
+                    continue
+                if os.path.islink(fs.long_path(f)) or _excluded(f.name, None):
+                    skipped.append({"rule": EXTRA_ID, "path": str(f), "reason": "제외 대상(라이선스/임시/링크)"})
+                    continue
+                rel = ex.rel if f == top else f"{ex.rel}/{f.relative_to(top).as_posix()}"
+                if unsafe_name(rel):
+                    skipped.append({"rule": EXTRA_ID, "path": str(f), "reason": "Windows 에서 쓸 수 없는 이름(예약 이름, 끝의 점/공백 등)"})
+                    continue
+                why = restore_denied(rel, Path(expand(ex.root)) / rel, None, ex.root)
+                if why:
+                    skipped.append(_denied_skip(EXTRA_ID, f, why))
+                    continue
+                items.append(Item(f"data/{EXTRA_ID}/{keys[ex.root]}/{rel}", f, EXTRA_ID, ex.root, rel))
+        if cov is not None:
+            where = f"{ex.root}\\{ex.rel}"
+            c = _path_coverage(Rule(EXTRA_ID, coverage.EXTRA_PROGRAM), PathRule(where, EXTRA_ID, "dir", where),
+                               items, skipped, failed, snap, top.exists())
+            c["name"] = f"{coverage.EXTRA_PROGRAM}: {ex.rel}"
+            mine = [x for x in skipped[snap[1]:] if x.get("cache")]
+            if mine:
+                c.update(cache_dirs=len(mine), cache_files=sum(x["files"] for x in mine), cache_bytes=sum(x["bytes"] for x in mine))
+            cov.append(c)
     return items, skipped
 
 
@@ -453,10 +516,11 @@ def is_unfinished_part(path: Path | str) -> bool:
     return str(path).lower().endswith(PART_SUFFIX)
 
 
-def _fingerprint(rules: list[Rule], extras: list | None, compress: str) -> tuple[str, dict]:
-    info = {"tool": __version__, "format": FORMAT_VERSION, "compress": compress,
+def _fingerprint(rules: list[Rule], extras: list | None, compress: str, include_caches: bool = False) -> tuple[str, dict]:
+    info = {"tool": __version__, "format": FORMAT_VERSION, "compress": compress, "include_caches": bool(include_caches),
             "rules": [[r.id, str(r.version)] for r in rules],
-            "extras": sorted([e.root, e.rel] for e in (extras or []))}
+            "extras": sorted([e.root, e.rel] + (["caches"] if getattr(e, "include_caches", False) else [])
+                             for e in (extras or []))}
     raw = json.dumps(info, sort_keys=True, ensure_ascii=False).encode("utf-8")
     return hashlib.sha256(raw).hexdigest(), info
 
@@ -470,6 +534,8 @@ def _fp_reason(old: dict, new: dict) -> str:
         return "직접 고른 추가 항목이 달라졌습니다"
     if old.get("compress") != new["compress"]:
         return "압축 설정이 달라졌습니다"
+    if bool(old.get("include_caches")) != bool(new.get("include_caches")):
+        return "캐시 폴더 포함 설정이 달라졌습니다"
     if old.get("tool") != new["tool"]:
         return "도구 버전이 달라졌습니다"
     return "내보내기 설정이 달라졌습니다"
@@ -860,7 +926,7 @@ def export_package(rules: list[Rule], out: Path, programs: list[Program],
                    notice: Callable[[str], None] | None = None,
                    clock: Callable[[], float] = time.monotonic,
                    dest_info_fn: Callable[[str], fs.DestInfo] | None = None,
-                   stage_dir: Path | str | None = None) -> dict:
+                   stage_dir: Path | str | None = None, include_caches: bool = False) -> dict:
     """감지된 프로그램의 규칙(rules)으로 설정 패키지를 만든다. manifest dict 반환.
 
     stage_dir: 64MB 를 넘는 파일을 담기 전에 임시로 읽어 두는 폴더의 위치(기본: 출력 파일이 있는 폴더). 출력 드라이브가 느리거나
@@ -873,6 +939,8 @@ def export_package(rules: list[Rule], out: Path, programs: list[Program],
     같은 out 과 같은 설정으로 다시 내보내면(resume=True) 저장점까지는 다시 담지 않는다. 실패/취소 시 .part 와 journal 은
     남기고 성공하면 지운다. resume=False 면 이전 .part/journal 을 지우고 처음부터 만든다.
     compress: auto(이미 압축된 형식은 STORED) / always(모두 deflate) / never(모두 STORED).
+    include_caches: 기본 False. 직접 고른 폴더(extras) 안의 재생성되는 임시 저장물 폴더(Cache, GPUCache, node_modules 등)는 담지 않고
+    skipped 에 이름·파일 수·용량을 기록한다. True 면 모두 담는다(규칙 경로 안은 이 옵션과 무관, 규칙의 exclude 를 따른다).
     반환 manifest 에는 패키지에 저장되지 않는 "resume" 항목({resumed, kept_files, kept_bytes, dropped, reason})이 추가된다.
     파일 단위 실패는 manifest["failed"] 에 기록(읽지 못한 파일은 다음 시도에서 다시 읽는다).
     """
@@ -883,7 +951,7 @@ def export_package(rules: list[Rule], out: Path, programs: list[Program],
         raise IsADirectoryError(errno.EISDIR, "대상이 폴더입니다", str(out))
     args = (rules, out, programs, winget_text, expand, winget_list_text, extras, now, progress_info)
     kw = dict(compress=compress, savepoint_bytes=savepoint_bytes, savepoint_seconds=savepoint_seconds,
-              notice=notice, clock=clock, dest_info_fn=dest_info_fn, stage_dir=stage_dir)
+              notice=notice, clock=clock, dest_info_fn=dest_info_fn, stage_dir=stage_dir, include_caches=include_caches)
     lock = _OutputLock(out)
     lock.acquire()  # 같은 출력 이름으로 동시에 내보내면 .part 를 서로 망가뜨린다(R1-6)
     try:
@@ -900,14 +968,15 @@ def export_package(rules: list[Rule], out: Path, programs: list[Program],
 
 
 def _export_once(rules, out, programs, winget_text, expand, winget_list_text, extras, now, progress_info, *,
-                 resume, compress, savepoint_bytes, savepoint_seconds, notice, clock, dest_info_fn=None, stage_dir=None) -> dict:
+                 resume, compress, savepoint_bytes, savepoint_seconds, notice, clock, dest_info_fn=None, stage_dir=None,
+                 include_caches=False) -> dict:
     part, jpath = part_paths(out)
     manifest: dict = {
         "format": FORMAT_VERSION,
         "tool_version": __version__,
         "created": now().isoformat(timespec="seconds"),
         "compress": compress,
-        "rules": [], "files": [], "skipped": [], "failed": [],
+        "rules": [], "files": [], "skipped": [], "failed": [], "coverage": [],
         "programs": {"registry": "programs/registry.json",
                      "winget": "programs/winget.json" if winget_text else None,
                      "winget_list": "programs/winget-list.txt" if winget_list_text else None},
@@ -943,13 +1012,14 @@ def _export_once(rules, out, programs, winget_text, expand, winget_list_text, ex
             return q in mine or q.startswith(stage_root + os.sep) or (q.startswith(out_prefix + ".bak"))
         roots: list[Path] = []
         for rule in rules:  # 1) 파일 찾기(읽기 전용)
-            items, skipped = collect_items(rule, expand, avoid=avoid, roots=roots, failed=manifest["failed"])
+            items, skipped = collect_items(rule, expand, avoid=avoid, roots=roots, failed=manifest["failed"], cov=manifest["coverage"])
             manifest["skipped"] += skipped
             manifest["rules"].append({"id": rule.id, "name": rule.name, "version": rule.version, "notes": rule.notes})
             manifest["manual_warnings"].append({"rule": rule.id, "name": rule.name, "items": list(rule.manual_warnings)})
             groups.append(items)
         if extras:
-            items, skipped = collect_extra_items(extras, expand, avoid=avoid, roots=roots, failed=manifest["failed"])
+            items, skipped = collect_extra_items(extras, expand, avoid=avoid, roots=roots, failed=manifest["failed"],
+                                                 include_caches=include_caches, cov=manifest["coverage"])
             manifest["skipped"] += skipped
             manifest["extras"] = [{"root": e.root, "rel": e.rel} for e in extras]
             manifest["manual_warnings"].append({
@@ -994,7 +1064,7 @@ def _export_once(rules, out, programs, winget_text, expand, winget_list_text, ex
                 last_emit[0] = t
                 progress_info(tracker.snapshot())
 
-        fp, fp_info = _fingerprint(rules, extras, compress)
+        fp, fp_info = _fingerprint(rules, extras, compress, include_caches)
         head = {"t": "head", "v": JOURNAL_VERSION, "fp": fp, "info": fp_info}
         by_arc: dict[str, Item] = {}
         for g in groups:
