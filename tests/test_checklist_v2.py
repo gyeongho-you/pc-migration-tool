@@ -1,3 +1,4 @@
+from conftest import make_rules_dir
 import json
 import re
 from pathlib import Path
@@ -237,8 +238,7 @@ def test_count_is_actionable_items_only():
 
 def test_cli_checklist_all_flag_and_default(tmp_path, monkeypatch, capsys):
     patch_detection(monkeypatch, [P("Google Chrome")], WINGET)
-    rules_dir = tmp_path / "rules"
-    rules_dir.mkdir()
+    rules_dir = make_rules_dir(tmp_path / "rules")
     out = tmp_path / "c.md"
     assert cli.main(["checklist", "--format", "md", "--output", str(out), "--rules", str(rules_dir)]) == 0
     assert "생략(--all 로 모두 표시)" in out.read_text(encoding="utf-8")
@@ -248,8 +248,7 @@ def test_cli_checklist_all_flag_and_default(tmp_path, monkeypatch, capsys):
 
 def test_scan_hint_counts_actionable_items(monkeypatch, tmp_path, capsys):
     patch_detection(monkeypatch, [P("Google Chrome")], WINGET)
-    rules_dir = tmp_path / "rules"
-    rules_dir.mkdir()
+    rules_dir = make_rules_dir(tmp_path / "rules")
     assert cli.main(["scan", "--rules", str(rules_dir)]) == 0
     err = capsys.readouterr().err
     m = re.search(r"수동 작업 (\d+)건, pcmigrate checklist", err)
@@ -266,8 +265,7 @@ def test_output_parent_is_a_file_gives_one_line_error_not_traceback(tmp_path, mo
     patch_detection(monkeypatch, [P("Google Chrome")], WINGET)
     blocker = tmp_path / "file.txt"
     blocker.write_text("x", encoding="utf-8")
-    rules_dir = tmp_path / "rules"
-    rules_dir.mkdir()
+    rules_dir = make_rules_dir(tmp_path / "rules")
     bad = str(blocker / "sub" / "c.md")
     assert cli.main(["checklist", "--output", bad, "--rules", str(rules_dir)]) == 1
     err = err_of(capsys)
@@ -277,8 +275,7 @@ def test_output_parent_is_a_file_gives_one_line_error_not_traceback(tmp_path, mo
 
 def test_missing_drive_error_has_drive_hint(tmp_path, monkeypatch, capsys):
     patch_detection(monkeypatch, [P("Google Chrome")], WINGET)
-    rules_dir = tmp_path / "rules"
-    rules_dir.mkdir()
+    rules_dir = make_rules_dir(tmp_path / "rules")
 
     def boom(path, text):
         raise FileNotFoundError(3, "지정된 경로를 찾을 수 없습니다", "Z:\\nope\\c.md")
@@ -309,8 +306,7 @@ def test_unexpanded_env_vars_rejected_with_shell_hint(argv, capsys, tmp_path, mo
 
 def test_expanded_env_path_is_fine(tmp_path, monkeypatch):
     patch_detection(monkeypatch, [P("Google Chrome")], WINGET)
-    rules_dir = tmp_path / "rules"
-    rules_dir.mkdir()
+    rules_dir = make_rules_dir(tmp_path / "rules")
     out = tmp_path / "ok" / "c.md"
     assert cli.main(["checklist", "--output", str(out), "--rules", str(rules_dir)]) == 0
     assert out.exists()
@@ -342,8 +338,7 @@ def test_export_output_failure_is_one_line(tmp_path, monkeypatch, capsys):
     patch_detection(monkeypatch, [P("Google Chrome")], WINGET)
     blocker = tmp_path / "f.txt"
     blocker.write_text("x", encoding="utf-8")
-    rules_dir = tmp_path / "rules"
-    rules_dir.mkdir()
+    rules_dir = make_rules_dir(tmp_path / "rules")
     assert cli.main(["export", "--output", str(blocker / "x.zip"), "--rules", str(rules_dir)]) == 1
     err = err_of(capsys)
     assert "출력 경로를 만들 수 없습니다:" in err and "Traceback" not in err

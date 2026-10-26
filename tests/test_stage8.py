@@ -1,3 +1,4 @@
+from conftest import make_rules_dir
 import hashlib
 import io
 import json
@@ -185,8 +186,7 @@ def test_cli_env_option_overrides_even_with_duplicate_case_variables(tmp_path, m
     monkeypatch.setenv("ProgramData", str(tmp_path / "REAL_SHOULD_NOT_BE_USED"))
     monkeypatch.delenv("PROGRAMDATA", raising=False)
     patch_detection(monkeypatch, [Program("Foo Bar Pro", "1", "Foo")], WINGET)
-    rd = tmp_path / "rules"
-    rd.mkdir()
+    rd = make_rules_dir(tmp_path / "rules")
     assert cli.main(["--env", f"PROGRAMDATA={env.pd}", "discover", "--format", "json", "--rules", str(rd)]) == 0
     data = json.loads(capsys.readouterr().out)
     roots = [c["root"] for e in data["programs_without_rule"] for c in e["candidates"]]
@@ -262,8 +262,7 @@ def test_selection_marks_secret_items_and_export_blocks_them(tmp_path, monkeypat
     assert foo["requires_allow_secrets"] is False
     cli_env(env, monkeypatch)
     f = select(env, tmp_path, ("%LOCALAPPDATA%", "Google"))
-    rd = tmp_path / "rules"
-    rd.mkdir()
+    rd = make_rules_dir(tmp_path / "rules")
     out = tmp_path / "pkg.zip"
     assert cli.main(["export", "--output", str(out), "--extra", str(f), "--rules", str(rd)]) == 1
     err = capsys.readouterr().err
@@ -332,8 +331,7 @@ def test_import_json_reflects_real_state(tmp_path, monkeypatch, capsys):
     pkg = extras_package(tmp_path)
     new = Env(tmp_path / "new")
     new.setenv(monkeypatch)
-    rd = tmp_path / "rules"
-    rd.mkdir()
+    rd = make_rules_dir(tmp_path / "rules")
 
     def preview(*extra):
         capsys.readouterr()
@@ -371,8 +369,7 @@ def test_cli_discover_prints_progress_to_stderr(tmp_path, monkeypatch, capsys):
     env = Env(tmp_path)
     touch(env.appdata / "Foo Bar" / "d.db")
     cli_env(env, monkeypatch, [Program("Foo Bar Pro", "1", "Foo")])
-    rd = tmp_path / "rules"
-    rd.mkdir()
+    rd = make_rules_dir(tmp_path / "rules")
     assert cli.main(["discover", "--format", "json", "--rules", str(rd)]) == 0
     cap = capsys.readouterr()
     assert "크기를 계산합니다" in cap.err and "완료: 소요" in cap.err
@@ -393,8 +390,7 @@ def deps(tmp_path):
 def test_api_functions_return_results_without_printing(tmp_path, deps, monkeypatch, capsys):
     env, d = deps
     env.setenv(monkeypatch)
-    rd = tmp_path / "rules"
-    rd.mkdir()
+    rd = make_rules_dir(tmp_path / "rules")
     scan = api.run_scan(rd, d)
     assert scan.program_count >= 2 and scan.discovery == (7, 9) and scan.checklist.count > 0
     assert scan.summary_dict()["matched_rules"] == []
@@ -426,8 +422,7 @@ def test_api_errors_and_modes(tmp_path, deps, monkeypatch):
     with pytest.raises(api.ApiError):
         api.run_checklist(tmp_path / "rules", package=tmp_path / "missing.zip", deps=d)
     pkg = extras_package(tmp_path)
-    rd = tmp_path / "rules"
-    rd.mkdir()
+    rd = make_rules_dir(tmp_path / "rules")
     new = Env(tmp_path / "new")
     new.setenv(monkeypatch)
     assert api.run_import(pkg, rd, dry_run=True, yes=True).mode == "dry-run"

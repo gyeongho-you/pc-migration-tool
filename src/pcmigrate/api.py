@@ -348,11 +348,8 @@ def run_checklist(rules_dir: str | Path, *, package: str | Path | None = None, s
         registry, winget, list_text = load_package_programs(Path(package))
         pairs = manifest_warning_pairs(manifest)
         rule_ids = [r["id"] for r in manifest.get("rules", [])]
-        try:
-            all_rules = load_rules(Path(rules_dir))
-        except RuleError:
-            all_rules = None
-        disc = (count_rule_less_programs(all_rules, registry), None) if all_rules is not None else None
+        all_rules = load_rules_checked(rules_dir)  # 규칙 폴더가 없거나 비어 있으면 조용히 넘어가지 않고 오류로 알린다
+        disc = (count_rule_less_programs(all_rules, registry), None)
     else:
         rules = load_rules_checked(rules_dir)
         winget_text = deps.winget_export()

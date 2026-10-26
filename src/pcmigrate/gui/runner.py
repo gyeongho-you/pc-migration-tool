@@ -20,6 +20,8 @@ class Runner:
         self._thread: threading.Thread | None = None
         self._callbacks: dict[int, dict[str, Callable]] = {}
         self._next = 0
+        # 완료/오류/진행 콜백이 예외를 내면 호출된다(UI 스레드). 없으면 큐를 끝까지 비운 뒤 첫 예외를 다시 던진다.
+        self.on_callback_error: Callable[[BaseException, str], None] | None = None
 
     @property
     def busy(self) -> bool:
@@ -58,27 +60,61 @@ class Runner:
         return tid
 
     def pump(self) -> int:
-        """대기 중인 이벤트를 처리한다(UI 스레드에서 호출). 처리한 개수를 돌려준다."""
+        """대기 중인 이벤트를 처리한다(UI 스레드에서 호출). 처리한 개수를 돌려준다.
+
+        콜백 하나가 예외를 내도 나머지 이벤트와 다음 pump 는 계속 처리된다(UI 폴링이 멈추지 않게).
+        작업 스레드가 결과를 남기지 않고 사라진 경우에도 오류로 마무리해 busy 가 영원히 남지 않게 한다.
+        """
         n = 0
+        errors: list[tuple[BaseException, str]] = []
         while True:
             try:
-                tid, kind, payload, tb = self._q.get_nowait()
+                item = self._q.get_nowait()
             except queue.Empty:
-                return n
+                item = self._dead_thread_event()
+                if item is None:
+                    break
+            tid, kind, payload, tb = item
             n += 1
             cb = self._callbacks.get(tid)
             if cb is None:
                 continue
-            if kind == "progress":
-                cb["progress"](payload)
-                continue
-            del self._callbacks[tid]  # 종료 이벤트: 먼저 busy 해제 후 콜백
-            if kind == "done":
-                cb["done"](payload)
-            elif kind == "cancel":
-                cb["cancel"]()
-            else:
-                cb["error"](payload, tb)
+            if kind != "progress":
+                del self._callbacks[tid]  # 종료 이벤트: 먼저 busy 해제 후 콜백
+            try:
+                if kind == "progress":
+                    cb["progress"](payload)
+                elif kind == "done":
+                    cb["done"](payload)
+                elif kind == "cancel":
+                    cb["cancel"]()
+                else:
+                    cb["error"](payload, tb)
+            except Exception as e:  # noqa: BLE001 - 화면 쪽 콜백 오류가 폴링을 멈추게 두지 않는다
+                errors.append((e, traceback.format_exc()))
+        for exc, tb in errors:
+            hook = self.on_callback_error
+            if hook is None:
+                raise exc
+            try:
+                hook(exc, tb)
+            except Exception:  # noqa: BLE001 - 오류 보고 중 오류가 또 나도 폴링은 계속
+                pass
+        return n
+
+    def _dead_thread_event(self):
+        """작업 스레드가 끝났는데 결과 이벤트가 없으면 '오류' 이벤트를 만들어 돌려준다(없으면 None)."""
+        if self.sync or not self._callbacks:
+            return None
+        th = self._thread
+        if th is None or th.is_alive():
+            return None
+        try:  # 스레드가 마지막 결과를 넣고 막 끝난 경우를 놓치지 않도록 한 번 더 본다
+            return self._q.get_nowait()
+        except queue.Empty:
+            pass
+        tid = max(self._callbacks)
+        return (tid, "error", RuntimeError("작업이 결과를 남기지 않고 끝났습니다"), "")
 
     def join(self, timeout: float = 5.0) -> None:
         if self._thread is not None:

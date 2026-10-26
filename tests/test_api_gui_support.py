@@ -1,4 +1,5 @@
 """9단계(GUI)를 위해 api/transfer/discover 에 추가한 기능(취소, 진행, 설명, 시스템 정보) 테스트. CLI 동작은 그대로."""
+from conftest import make_rules_dir
 import sys
 import time
 from pathlib import Path
@@ -139,8 +140,7 @@ def test_run_export_with_extra_items_rechecks_secrets(tmp_path, monkeypatch):
     touch(env.appdata / "Sec" / "credentials.json")
     env.setenv(monkeypatch)
     items = items_from_selection({"format": 1, "candidates": [{"include": True, "root": "%APPDATA%", "rel": "Sec"}]})
-    rd = tmp_path / "rules"
-    rd.mkdir()
+    rd = make_rules_dir(tmp_path / "rules")
     d = api.Deps(registry=lambda: [], winget_export=lambda: WINGET, winget_list=lambda: None,
                  summarize=lambda r, p: (0, 0))
     with pytest.raises(api.ApiError) as e:  # GUI 가 동의 없이 넘겨도 api 가 다시 막는다

@@ -150,6 +150,18 @@ def _cli_progress():
     return cb
 
 
+def _cli_info_progress(interval: float = 10.0):
+    """패키지 내보내기/복원처럼 파일 수가 많은 작업의 진행 줄. 10초마다(또는 단계가 바뀔 때) 한 번만 stderr 로 출력한다."""
+    state = {"last": None, "phase": ""}
+
+    def cb(info: ProgressInfo) -> None:
+        now = time.monotonic()
+        if info.phase != state["phase"] or state["last"] is None or now - state["last"] >= interval:
+            state["phase"], state["last"] = info.phase, now
+            print(f"[진행] {format_info(info)}", file=sys.stderr)
+    return cb
+
+
 def _cli_hint():
     seen: set[str] = set()
 
@@ -350,7 +362,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
         return 1
     try:
         r = run_export(args.rules, args.output, extra=args.extra, allow_secrets=args.allow_secrets,
-                       deps=_deps())
+                       deps=_deps(), progress_info=_cli_info_progress())
     except ApiError as e:
         return _fail(e)
     except OSError as e:
@@ -376,9 +388,11 @@ def _cmd_import(args: argparse.Namespace) -> int:
     if same_file(args.report, args.package):
         _err("--report 가 패키지 파일 자신입니다. 패키지를 덮어쓰지 않도록 다른 이름으로 저장하세요.")
         return 1
+    if not args.dry_run:
+        _err("[진행] 패키지를 검사하는 중입니다. 파일이 많으면 몇 분 걸릴 수 있으며, 진행 상황이 10초마다 표시됩니다.")
     try:
         r = run_import(args.package, args.rules, dry_run=args.dry_run, yes=args.yes,
-                       allow_extra=args.allow_extra, deps=_deps())
+                       allow_extra=args.allow_extra, deps=_deps(), progress_info=_cli_info_progress())
     except ApiError as e:
         return _fail(e)
     if r.mode == "blocked":

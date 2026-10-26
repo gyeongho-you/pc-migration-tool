@@ -384,14 +384,23 @@ class App(tk.Tk):
             self.views[self.current].refresh_card()
 
     def _tick(self) -> None:
-        self.c.pump()
-        if self.c.status.running:  # 경과 시간/속도가 계속 바뀌도록 작업 중에는 0.1초마다 현황 카드를 다시 그린다
-            self.views[self.current].refresh_card()
-        self.after(100, self._tick)
+        try:
+            self.c.pump()
+            if self.c.status.running:  # 경과 시간/속도가 계속 바뀌도록 작업 중에는 0.1초마다 현황 카드를 다시 그린다
+                self.views[self.current].refresh_card()
+        except Exception as e:  # noqa: BLE001 - 한 번의 오류로 폴링이 멈추면 진행/완료가 영영 화면에 오지 않는다
+            self.report_callback_exception(type(e), e, e.__traceback__)
+        finally:
+            try:
+                self.after(100, self._tick)
+            except tk.TclError:  # 창이 이미 닫힘
+                pass
 
     def _close(self) -> None:
-        if self.c.state.busy and not messagebox.askyesno(T.CLOSE_TITLE, T.CLOSE_BUSY, parent=self):
-            return
+        if self.c.state.busy:
+            msg = T.CLOSE_BUSY if self.c.can_cancel else T.CLOSE_BUSY_NO_CANCEL
+            if not messagebox.askyesno(T.CLOSE_TITLE, msg, icon="warning", parent=self):
+                return
         self.c.cancel()
         self.destroy()
 

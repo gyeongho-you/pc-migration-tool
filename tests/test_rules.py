@@ -63,3 +63,10 @@ def test_bad_json_and_duplicate_id(tmp_path):
     (tmp_path / "b.json").write_text(json.dumps(VALID), encoding="utf-8")
     with pytest.raises(RuleError, match="중복"):
         load_rules(tmp_path)
+
+
+def test_missing_or_empty_rules_dir_is_error(tmp_path):
+    with pytest.raises(RuleError, match="찾을 수 없"):
+        load_rules(tmp_path / "nope")
+    with pytest.raises(RuleError, match="하나도 없"):
+        load_rules(tmp_path)

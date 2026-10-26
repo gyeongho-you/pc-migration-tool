@@ -1,7 +1,8 @@
 # pc-migration-tool (PC 이전 도우미)
 
 구 Windows PC의 업무용(건축 CAD/BIM) 환경을 새 PC로 안전하게 옮기는 Python CLI입니다.
-원본은 읽기만 하고, 복사 후 SHA-256으로 검증하며, 덮어쓸 파일은 `.bak`으로 백업합니다.
+원본은 읽기만 하고, 복사 후 SHA-256으로 검증합니다. 설정 패키지를 복원할 때 덮어쓸 파일은 `.bak`으로 백업합니다
+(대용량 `transfer` 는 예외입니다: 아래 "덮어쓰기와 .bak" 참고). 규칙 폴더(`rules/`)가 없거나 비어 있으면 조용히 넘어가지 않고 오류로 멈춥니다.
 설계 방침과 요구사항은 [CLAUDE.md](CLAUDE.md)를 보세요.
 
 ## 내려받기 (Python 없이 쓰려면)
@@ -317,6 +318,8 @@ Microsoft 는 서명을 끄는 우회를 권장하지 않으므로, 이 문서�
 **각주 1 (net use / net share)**: Microsoft Learn 의 현재 Windows commands 목록에는 `net use`, `net share` 페이지가 없습니다. 두 명령은 Windows 11 에서도 동작하지만
 공식 문서는 보관본([보관본 문서(Windows Server 2012 R2/2012)](https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-server-2012-r2-and-2012/gg651155(v=ws.11)))뿐이라, 옵션은 `net use /?`, `net share /?` 로 직접 확인하세요.
 
+**공유 폴더에 계속 접속되지 않을 때(시스템 오류 67 "네트워크 이름을 찾을 수 없습니다", 1222 "네트워크를 사용할 수 없습니다" 등).** 위 준비 단계(연결, 같은 IP 대역, 네트워크 프로필 "개인", 방화벽의 파일 및 프린터 공유, 비밀번호 있는 계정)과 `Test-NetConnection <새 PC IP> -Port 445` 를 한 번씩 확인했는데도 해결되지 않으면, 설정에 오래 매달리지 말고 **외장 SSD/HDD 방식으로 바꾸세요**("1TB 이전 가이드"의 외장 드라이브 흐름). 회사 보안 소프트웨어나 네트워크 정책이 SMB 접속을 막는 경우는 현장에서 고치기 어렵습니다. 외장 방식은 네트워크 없이 같은 해시 검증과 이어받기를 그대로 씁니다.
+
 네트워크 오류는 쉬운 문구로 나옵니다: 공유 폴더를 찾을 수 없음(IP/공유 이름/프로필 확인), 로그인 실패(계정/비밀번호), 이미 다른 계정으로 연결됨(`net use * /delete`), 쓰기 권한 없음(공유 권한).
 
 ### 1TB 예상 시간 (측정 기반 추정 + 한계)
@@ -353,7 +356,7 @@ Microsoft 는 서명을 끄는 우회를 권장하지 않으므로, 이 문서�
 
 ### 안전하게 돌리기 위한 약속
 
-- **절전 방지**: 복사 중에는 시스템이 잠자기로 들어가지 않게 합니다(화면 끄기는 건드리지 않음, 끝나거나 오류가 나면 반드시 원래대로). 실패하면 경고만 하고 계속하니 전원 설정도 확인하세요. 노트북은 전원을 연결하세요. 명령줄에서 끄려면 `--no-keep-awake`.
+- **절전 방지**: 복사 중에는 시스템이 잠자기로 들어가지 않게 합니다(화면 끄기는 건드리지 않음). 끝나거나 오류가 나면 원래대로 되돌리며, 되돌리기에 실패해도 프로그램이 끝나면 Windows 가 자동으로 해제합니다. 실패하면 경고만 하고 계속하니 전원 설정도 확인하세요. 노트북은 전원을 연결하세요. 명령줄에서 끄려면 `--no-keep-awake`.
 - **OneDrive "클라우드 전용" 파일**: 클라우드에만 있는 파일은 읽는 순간 자동으로 내려받아지는 것이 일반적인 동작입니다(이번에 공식 문서로 확인하지는 못했습니다). 그러면 **구 PC 의 디스크 공간을 쓰고 로컬 상태가 바뀔 수** 있고, 1TB 규모면 시간과 공간이 크게 늘어납니다.
   이 도구는 **파일 속성으로 클라우드 전용 파일을 감지해 기본으로 건너뛰고**, 리포트에 `cloud_only` 로 남깁니다(`--include-cloud` 를 줄 때만 포함). 필요한 파일은 복사 전에 직접 내려받아 두세요:
   탐색기에서 해당 폴더를 우클릭 > **"이 디바이스에 항상 유지"** ([Microsoft 안내](https://support.microsoft.com/en-us/office/0e6860d3-d9f3-4971-b321-7092438fb38e)). 내려받는 동안 디스크 여유 공간을 확인하세요.
@@ -458,7 +461,7 @@ python -m pcmigrate verify --manifest <목록.jsonl> --target <폴더> [--report
 
 ## 권장 사용 순서
 
-구 PC에서:
+구 PC에서(먼저 **Chrome 등 실행 중인 프로그램은 모두 닫고** 시작하세요. 실행 중이면 잠긴 파일은 읽지 못해 패키지에서 제외됩니다):
 1. `python -m pcmigrate scan` — 설치된 프로그램을 감지하고 적용될 규칙을 확인
 2. `python -m pcmigrate checklist --format md --output <폴더>\checklist.md` — 수동 작업 체크리스트 작성
 3. `python -m pcmigrate export --output <폴더>\settings.zip` — 설정 패키지 내보내기
@@ -466,6 +469,8 @@ python -m pcmigrate verify --manifest <목록.jsonl> --target <폴더> [--report
 신 PC에서:
 4. `python -m pcmigrate import <settings.zip> --dry-run` — 무엇이 만들어지고 덮어써지는지 미리보기(쓰기 없음)
 5. `python -m pcmigrate import <settings.zip> --yes` — 실제 복원(덮어쓸 파일은 `.bak` 백업)
+
+`export` 와 `import --yes` 는 파일이 많으면 몇 분 걸릴 수 있어, 진행 상황을 10초마다(단계가 바뀔 때도) `[진행] 복원 파일 1,200/3,000개 …` 처럼 표준 오류로 보여 줍니다. `import` 는 먼저 패키지 전체를 검사하는 단계가 있어 이 동안은 줄이 나오지 않을 수 있습니다(파일 20,000개 규모에서 미리보기만 약 80초, 실제 복원은 5분 이상 걸린 측정이 있습니다).
 
 사진/도면/프로젝트 같은 대용량은 설정 패키지가 아니라 `transfer`로 옮깁니다.
 `python -m pcmigrate transfer <원본폴더> <대상> --dry-run` 으로 먼저 확인한 뒤 `--dry-run` 없이 실행하세요.
@@ -537,6 +542,32 @@ python -m pcmigrate discover --output-selection <폴더>\selection.json
   (정션·대소문자 차이 포함)이면 시작하지 않습니다. GUI 의 결과 파일 저장도 같습니다.
 - `export/discover/checklist --output` 에 기존 **폴더**를 주면 거부합니다(폴더를 `.bak` 으로 바꾸고 같은 이름의 파일을 만드는 일이 없도록).
   `import --report` 가 패키지 파일 자신이면 거부합니다. 빈 문자열 경로("")는 현재 폴더로 보지 않고 오류로 처리합니다.
+- 규칙 폴더(`rules/`, `--rules` 로 바꾼 폴더 포함)가 없거나 규칙 파일(`*.json`)이 하나도 없으면 `scan/discover/checklist/export/import` 모두 "규칙 오류: 규칙 폴더를 찾을 수 없습니다 …" 한국어 안내와 종료 코드 1 로 멈춥니다(빈 패키지를 만들지 않습니다). 프로그램 폴더의 `rules` 가 지워졌다면 다시 내려받으세요.
+- GUI 가드: 작업 중에는 다른 작업을 시작할 수 없고(창을 닫으면 확인), 패키지 저장 위치가 폴더이거나 `%TEMP%` 같은 환경변수 표시가 그대로면 거부합니다. 대용량 복사에서 "클라우드 파일 포함"/"엄격 검사" 옵션을 미리보기 뒤에 바꾸면 미리보기가 무효가 되어 다시 "미리보기 실행"을 해야 복사할 수 있습니다. 복원이 실패하거나 끝나면 확인 표시가 모두 지워져, 다시 복원하려면 미리보기부터 해야 합니다. 화면 갱신 중 오류가 나도 진행 표시와 버튼 상태는 복구되고 오류 대화상자로 알려 줍니다.
+
+## 덮어쓰기와 .bak, 규칙별 복원 범위, 프로그램 설치
+
+**덮어쓰기와 `.bak`**
+
+| 작업 | 대상에 같은 이름 파일이 이미 있을 때 |
+|---|---|
+| `import --yes` / GUI 복원 | 덮어쓰기 전에 `<이름>.bak` 으로 백업합니다(이미 있으면 `.bak.1`). 같은 내용이면 건너뜁니다. |
+| `copy` (소규모) | 덮어쓰기 전에 `.bak` 으로 백업합니다. |
+| `transfer` (대용량) | **`.bak` 없이 robocopy 가 덮어쓸 수 있습니다.** 대상은 새 폴더나 비어 있는 폴더를 쓰세요. `--strict` 로 다시 복사할 때 내용이 어긋난 사본만 `.bak` 으로 남깁니다. |
+| `export/discover/checklist --output` | 같은 이름 파일이 있으면 `.bak` 으로 보존합니다. |
+
+**규칙별 복원 범위** (`rules/*.json` 22개). 복원할 폴더/파일 경로가 있는 규칙과, 감지해서 수동 작업만 안내하는 "경고 전용" 규칙이 있습니다.
+
+| 구분 | 규칙 |
+|---|---|
+| 설정/템플릿 폴더를 패키지에 담고 복원 (10) | AutoCAD, Civil 3D, Enscape, JetBrains, Lumion, QGIS, Revit, Rhino, SketchUp, VS Code |
+| **경고 전용: 감지해서 수동 작업만 안내, 파일은 복원하지 않음 (12)** | ArchiCAD, ArcGIS Pro, Bluebeam, 웹 브라우저(Chrome/Edge/Firefox), EzLoad(이지로드), GeoStudio, MicroStation, MIDAS, Navisworks, PLAXIS, Trimble Business Center, V-Ray |
+
+경고 전용 프로그램의 설정은 각 프로그램의 자체 내보내기/동기화 기능으로 옮기세요(체크리스트에 안내가 나옵니다). 위 표의 근거 등급(원문/요약/미검증)은 각 규칙 파일의 `notes` 에 있습니다.
+
+**프로그램 설치는 안내만 합니다.** `export` 는 설치 목록(`winget export` 와 레지스트리)을 패키지에 담고, 신 PC 의 `checklist --package` 와 GUI 체크 목록이
+**`winget import -i winget.json ...` 와 `winget install --id ...` 명령을 문장으로 보여 줄 뿐**, 도구가 `winget import` 나 설치를 자동으로 실행하지는 않습니다. 보여 준 명령을 직접 실행하세요.
+winget 에 없는 프로그램은 "수동 설치" 목록으로 안내합니다. 라이선스는 복원하지 않습니다.
 
 ## 개인정보 주의
 
@@ -551,7 +582,7 @@ python -m pip install pytest
 python -m pytest -q
 ```
 
-테스트는 `tmp_path`와 mock만 사용하며 실제 레지스트리, winget, 사용자 파일은 건드리지 않습니다.
+테스트는 임시 폴더(`tmp_path`)와 mock 을 주로 쓰며 실제 레지스트리, winget, 사용자 폴더는 건드리지 않습니다. 다만 일부 시험은 실제 도구를 씁니다(GUI 스모크 시험은 숨긴 실제 tkinter 창을 만들고, 통합 시험은 임시 폴더 안에서 실제 robocopy 를 실행합니다).
 
 ## 참고 링크
 

@@ -131,6 +131,8 @@ class TransferView(BaseView):
         self.opts_toggle.pack(anchor="w")
         self.opts = ttk.LabelFrame(body, text=T.TR_OPTIONS, padding=8)
         self.strict_var, self.cloud_var = tk.BooleanVar(value=False), tk.BooleanVar(value=False)
+        for var in (self.strict_var, self.cloud_var):  # 옵션을 바꾸면 이전 미리보기는 무효가 된다
+            var.trace_add("write", lambda *a: self._options_changed())
         ttk.Checkbutton(self.opts, variable=self.strict_var, text=T.TR_STRICT).pack(anchor="w")
         n1 = ttk.Label(self.opts, text=T.TR_STRICT_NOTE, justify="left")
         n1.pack(anchor="w", fill="x")
@@ -353,6 +355,10 @@ class TransferView(BaseView):
         self.src_entry.focus_set()
 
     # ------------------------------------------------------------------ 실행
+    def _options_changed(self) -> None:
+        self.c.set_transfer_options(self.cloud_var.get(), self.strict_var.get())
+        self._update_buttons()
+
     def _opts(self) -> dict:
         return {"strict": self.strict_var.get(), "include_cloud": self.cloud_var.get(),
                 "report_path": self.rep_var.get().strip()}

@@ -1,4 +1,5 @@
 """v0.1.1 수정 1: 다른 프로세스가 잠근 파일을 읽지 못해도 패키지에 흔적이 남지 않고 내보내기는 끝까지 간다."""
+from conftest import make_rules_dir
 import os
 import zipfile
 from pathlib import Path
@@ -216,8 +217,7 @@ def _cli_export(monkeypatch, tmp_path, manifest):
     monkeypatch.setattr(cli, "winget_export_raw", lambda: None)
     monkeypatch.setattr(cli, "winget_list_raw", lambda: None)
     monkeypatch.setattr(cli, "export_package", lambda *a, **k: manifest)
-    rules = tmp_path / "rules"
-    rules.mkdir(exist_ok=True)
+    rules = make_rules_dir(tmp_path / "rules")
     return cli.main(["export", "--output", str(tmp_path / "o.zip"), "--rules", str(rules)])
 
 

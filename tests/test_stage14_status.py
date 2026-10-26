@@ -1,4 +1,5 @@
 """v0.1.1 수정 3: 현황 카드(상태 계산은 tkinter 없이, 화면은 스모크), 전체 단계 표시, 엔진 이벤트의 새 필드."""
+from conftest import make_rules_dir
 import json
 import os
 from pathlib import Path
@@ -343,8 +344,7 @@ def test_apply_import_emits_restore_counts(pkg_env):
 
 
 def test_run_scan_and_discover_emit_phases(tmp_path):
-    rules = tmp_path / "rules"
-    rules.mkdir()
+    rules = make_rules_dir(tmp_path / "rules")
     deps = api.Deps(registry=lambda: [], winget_export=lambda: None, winget_list=lambda: None,
                     summarize=lambda *a, **k: (0, 0))
     events = []

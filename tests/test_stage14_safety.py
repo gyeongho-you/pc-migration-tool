@@ -1,4 +1,5 @@
 """v0.1.1 수정 2(오류 로그/최상위 오류 처리/입력 검증)와 수정 4(안전 가드 3종)."""
+from conftest import make_rules_dir
 import json
 import os
 import subprocess
@@ -284,8 +285,7 @@ def test_verify_and_plan_import_never_raise_on_corrupt_manifest(tmp_path, name):
 @pytest.mark.parametrize("name", sorted(BAD_PACKAGE_MANIFESTS))
 def test_cli_import_corrupt_manifest_friendly(tmp_path, capsys, name):
     z = _zip_with_manifest(tmp_path / "p.zip", BAD_PACKAGE_MANIFESTS[name])
-    rules = tmp_path / "rules"
-    rules.mkdir()
+    rules = make_rules_dir(tmp_path / "rules")
     code, out, err = run(["import", str(z), "--dry-run", "--rules", str(rules)], capsys, tmp_path / "L")
     assert code == 1 and "Traceback" not in err and "패키지 검증 실패" in err
     assert not (tmp_path / "L").exists()
@@ -301,16 +301,14 @@ def test_plan_import_wraps_unexpected_structure_in_package_error(tmp_path, monke
 def test_api_run_import_converts_package_error_to_api_error(tmp_path):
     from pcmigrate import api
     deps = api.Deps(plan=lambda p, r: (_ for _ in ()).throw(PackageError("구조 이상")))
-    rules = tmp_path / "rules"
-    rules.mkdir()
+    rules = make_rules_dir(tmp_path / "rules")
     with pytest.raises(api.ApiError, match="패키지 검증 실패"):
         api.run_import(tmp_path / "p.zip", rules, deps=deps)
 
 
 def test_checklist_package_corrupt_manifest_friendly(tmp_path, capsys):
     z = _zip_with_manifest(tmp_path / "p.zip", BAD_PACKAGE_MANIFESTS["rules_items_str"])
-    rules = tmp_path / "rules"
-    rules.mkdir()
+    rules = make_rules_dir(tmp_path / "rules")
     code, out, err = run(["checklist", "--package", str(z), "--rules", str(rules)], capsys, tmp_path / "L")
     assert code == 1 and "패키지 검증 실패" in err and "Traceback" not in err
 
@@ -322,8 +320,7 @@ def test_output_that_is_existing_folder_is_rejected_and_untouched(tmp_path, caps
     folder = tmp_path / "out"
     folder.mkdir()
     (folder / "keep.txt").write_text("keep")
-    rules = tmp_path / "rules"
-    rules.mkdir()
+    rules = make_rules_dir(tmp_path / "rules")
     code, out, err = run([cmd, "--output", str(folder), "--rules", str(rules)], capsys, tmp_path / "L")
     assert code == 1 and "폴더" in err and "Traceback" not in err
     assert folder.is_dir() and (folder / "keep.txt").read_text() == "keep"
@@ -333,8 +330,7 @@ def test_output_that_is_existing_folder_is_rejected_and_untouched(tmp_path, caps
 def test_discover_output_selection_folder_rejected(tmp_path, capsys):
     folder = tmp_path / "sel"
     folder.mkdir()
-    rules = tmp_path / "rules"
-    rules.mkdir()
+    rules = make_rules_dir(tmp_path / "rules")
     code, out, err = run(["discover", "--output-selection", str(folder), "--rules", str(rules)], capsys)
     assert code == 1 and "폴더" in err and folder.is_dir() and not list(tmp_path.glob("sel.bak*"))
 
@@ -354,8 +350,7 @@ def test_library_level_folder_guards(tmp_path, env):
 def test_import_report_equal_to_package_rejected(tmp_path, capsys):
     z = _zip_with_manifest(tmp_path / "p.zip", _good())
     before = z.read_bytes()
-    rules = tmp_path / "rules"
-    rules.mkdir()
+    rules = make_rules_dir(tmp_path / "rules")
     for rep in (str(z), str(z).upper() if os.name == "nt" else str(z)):
         code, out, err = run(["import", str(z), "--dry-run", "--report", rep, "--rules", str(rules)], capsys)
         assert code == 1 and "패키지 파일 자신" in err

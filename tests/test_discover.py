@@ -1,3 +1,4 @@
+from conftest import make_rules_dir
 import json
 import re
 import zipfile
@@ -394,8 +395,7 @@ def test_cli_export_extra_blocks_secrets_without_flag(env, rules, tmp_path, monk
     cli_env(env, monkeypatch)
     sel = select(env, tmp_path, ("%APPDATA%", "Acme"))  # credentials.json 포함
     out = tmp_path / "pkg.zip"
-    rd = tmp_path / "rules"
-    rd.mkdir()
+    rd = make_rules_dir(tmp_path / "rules")
     assert cli.main(["export", "--output", str(out), "--extra", str(sel), "--rules", str(rd)]) == 1
     err = capsys.readouterr().err
     assert "비밀 정보 가능성" in err and "--allow-secrets" in err
@@ -411,8 +411,7 @@ def test_cli_export_extra_selection_error(env, tmp_path, monkeypatch, capsys):
     cli_env(env, monkeypatch)
     bad = tmp_path / "s.json"
     bad.write_text("{broken", encoding="utf-8")
-    rd = tmp_path / "rules"
-    rd.mkdir()
+    rd = make_rules_dir(tmp_path / "rules")
     assert cli.main(["export", "--output", str(tmp_path / "p.zip"), "--extra", str(bad), "--rules", str(rd)]) == 1
     assert "선택 파일 오류" in capsys.readouterr().err
     assert not (tmp_path / "p.zip").exists()
@@ -424,8 +423,7 @@ def test_cli_import_extra_needs_allow_extra(env, rules, tmp_path, monkeypatch, c
     export_package([], out, [], None, expand=env.expand, extras=items)
     new = Env(tmp_path / "newpc")
     new.setenv(monkeypatch)
-    rd = tmp_path / "rules"
-    rd.mkdir()
+    rd = make_rules_dir(tmp_path / "rules")
     assert cli.main(["import", str(out), "--dry-run", "--rules", str(rd)]) == 0
     assert "규칙 없이 선택 포함된 파일 1개" in capsys.readouterr().err
     assert cli.main(["import", str(out), "--yes", "--rules", str(rd)]) == 1
@@ -458,8 +456,7 @@ def test_cli_discover_unexpanded_and_write_errors(tmp_path, capsys):
 def test_scan_export_checklist_print_discovery_hint(env, tmp_path, monkeypatch, capsys):
     cli_env(env, monkeypatch)
     monkeypatch.setattr(cli, "summarize", lambda rules, programs, *a, **k: (3, 7))
-    rd = tmp_path / "rules"
-    rd.mkdir()
+    rd = make_rules_dir(tmp_path / "rules")
     pat = r"규칙 없는 설치 프로그램 3개, 설정 폴더 후보 7개 — pcmigrate discover 로 확인"
     assert cli.main(["scan", "--rules", str(rd)]) == 0
     assert re.search(pat, capsys.readouterr().err)
@@ -486,8 +483,7 @@ def test_checklist_package_mode_prints_program_count(env, tmp_path, monkeypatch,
     out = tmp_path / "pkg.zip"
     export_package([], out, [Program("Acme Tool"), Program("Microsoft Visual Studio Code"), Program("LG Update")],
                    None, expand=env.expand)
-    rd = tmp_path / "rules"
-    rd.mkdir()  # 규칙 폴더가 비어 있으면 모든 비번들 프로그램이 규칙 없음
+    rd = make_rules_dir(tmp_path / "rules")  # 규칙 폴더가 비어 있으면 모든 비번들 프로그램이 규칙 없음
     assert cli.main(["checklist", "--package", str(out), "--rules", str(rd), "--output", str(tmp_path / "c.txt")]) == 0
     assert "규칙 없는 설치 프로그램 2개" in capsys.readouterr().err
 

@@ -1,12 +1,16 @@
 {
   "id": "browser",
   "name": "웹 브라우저(Chrome/Edge/Firefox)",
-  "version": "1",
+  "version": "2",
   "detect": {
     "display_name_patterns": [
       "Google Chrome",
       "Microsoft Edge",
       "Mozilla Firefox"
+    ],
+    "exclude_display_name_patterns": [
+      "WebView2",
+      "Edge Update"
     ],
     "registry_keys": [],
     "install_paths": []

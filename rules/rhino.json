@@ -1,10 +1,19 @@
 {
   "id": "rhino",
   "name": "Rhinoceros / Grasshopper",
-  "version": "2",
+  "version": "3",
   "detect": {
     "display_name_patterns": [
-      "Rhinoceros"
+      "Rhinoceros",
+      "Rhino 6",
+      "Rhino 7",
+      "Rhino 8"
+    ],
+    "exclude_display_name_patterns": [
+      "V-Ray",
+      "Enscape",
+      "Lumion",
+      "for Rhino"
     ],
     "install_paths": [
       "%ProgramFiles%\\Rhino 6",

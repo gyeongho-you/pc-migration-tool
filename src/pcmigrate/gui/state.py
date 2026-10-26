@@ -62,6 +62,8 @@ class WizardState:
     transfer_src: str = ""
     transfer_dst: str = ""
     transfer_preview_key: tuple | None = None  # 마지막으로 dry-run 한 (src, dst)
+    transfer_preview_opts: tuple | None = None  # 미리보기를 만들 때의 (클라우드 포함, 엄격 검사). 달라지면 미리보기 무효
+    transfer_options: tuple = (False, False)  # 지금 화면의 (클라우드 포함, 엄격 검사)
     transfer_report: Any = None  # copier.Report
     transfer_was_dry_run: bool = True
     transfer_mode: str = "external"  # external | network | local (texts.MODE_*)

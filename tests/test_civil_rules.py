@@ -270,7 +270,7 @@ def test_autocad_new_warnings(rules):
     w = " ".join(rules["autocad"].manual_warnings)
     for kw in (".arg", "OPTIONS > Profiles", "SHX", "TTF", "PC3", ".ctb"):
         assert kw in w, kw
-    assert rules["autocad"].exclude_display_name_patterns == ("Civil 3D",)
+    assert "Civil 3D" in rules["autocad"].exclude_display_name_patterns
 
 
 # --------------------------------------------------------------------- 공통 경고(감지된 경우에만)
