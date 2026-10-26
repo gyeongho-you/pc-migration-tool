@@ -11,6 +11,7 @@ START = "start"
 OLD_SCAN, OLD_DISCOVER, OLD_CHECKLIST, OLD_EXPORT = "old_scan", "old_discover", "old_checklist", "old_export"
 NEW_PACKAGE, NEW_PREVIEW, NEW_CONFIRM, NEW_RESULT = "new_package", "new_preview", "new_confirm", "new_result"
 TRANSFER = "transfer"
+AUTO = "auto_run"  # 추천대로 한 번에(진행 화면 하나)
 
 OLD_FLOW = (OLD_SCAN, OLD_DISCOVER, OLD_CHECKLIST, OLD_EXPORT)
 NEW_FLOW = (NEW_PACKAGE, NEW_PREVIEW, NEW_CONFIRM, NEW_RESULT)
@@ -80,6 +81,8 @@ class WizardState:
     transfer_was_dry_run: bool = True
     transfer_mode: str = "external"  # external | network | local (texts.MODE_*)
     transfer_stage: int = 1  # 외장/랜선은 1단계(구 PC), 2단계(새 PC)
+    transfer_split: bool = False  # 지금 화면의 '4GB 넘는 파일을 조각으로 나눠 복사' 체크
+    transfer_preview_split: bool | None = None  # 미리보기를 만들 때의 같은 값(달라지면 미리보기 무효)
     transfer_blocked: str = ""  # 미리보기에서 드러난 시작 불가 이유(여유 공간 부족, FAT32 4GB 초과)
     transfer_progress: Any = None  # progress.ProgressInfo
     verify_manifest: str = ""  # 2단계(랜선): 목록 파일

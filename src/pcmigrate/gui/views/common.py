@@ -594,9 +594,10 @@ def open_location(path: str) -> None:
 
 # --------------------------------------------------------------------------- 경로 입력칸
 class PathField(ttk.Frame):
-    """경로 입력칸: 윗줄에 이름표와 짧은 도움말, 아랫줄에 입력칸 + 찾아보기 + (선택) 드라이브 선택 콤보와 보조 단추.
+    """경로 입력칸: 윗줄에 이름표와 짧은 도움말, 가운데 줄에 입력칸(한 줄 전체), 아랫줄에 찾아보기 + (선택) 보조 단추와 드라이브 선택 콤보.
 
-    입력칸은 폭이 최소 40자이고 창이 넓어지면 늘어난다. 붙여넣은 경로의 따옴표/앞뒤 공백은 입력칸을 벗어나거나 붙여넣을 때 자동으로 지운다.
+    입력칸을 한 줄 전체로 두어 900px 같은 좁은 창에서도 파일 이름 끝이 잘리지 않는다. 붙여넣은 경로의 따옴표/앞뒤 공백은
+    입력칸을 벗어나거나 붙여넣을 때 자동으로 지운다.
     """
 
     def __init__(self, parent: tk.Misc, var: tk.StringVar, browse: Callable[[], None], label: str = "", hint: str = "",
@@ -606,29 +607,31 @@ class PathField(ttk.Frame):
         self.var, self.drives, self.on_drive = var, drives, on_drive
         self.columnconfigure(0, weight=1)
         top = ttk.Frame(self)
-        top.grid(row=0, column=0, columnspan=8, sticky="ew")
+        top.grid(row=0, column=0, sticky="ew")
         self.label = ttk.Label(top, text=label, font=SUB_FONT)
         self.label.pack(side="left", anchor="n", padx=(0, 10))
         self.hint = ttk.Label(top, text=hint, foreground=MUTED_FG, justify="left")
         self.hint.pack(side="left", fill="x", expand=True, anchor="n")
         autowrap(self.hint, 280)
         self.entry = ttk.Entry(self, textvariable=var, width=40)
-        self.entry.grid(row=1, column=0, sticky="ew", padx=(0, 6), pady=(2, 0))
-        self.browse_btn = ttk.Button(self, text=T.BTN_BROWSE, command=browse)
-        self.browse_btn.grid(row=1, column=1, pady=(2, 0))
-        col = 2
+        self.entry.grid(row=1, column=0, sticky="ew", pady=(2, 0))  # 입력칸은 한 줄 전체
+        self.buttons = ttk.Frame(self)  # 단추 줄(입력칸 바로 아래)
+        self.buttons.grid(row=2, column=0, sticky="w", pady=(4, 0))
+        self.browse_btn = ttk.Button(self.buttons, text=T.BTN_BROWSE, command=browse)
+        self.browse_btn.grid(row=0, column=0)
+        col = 1
         self.extra_btns: list[ttk.Button] = []
         for text, cmd in extra or []:
-            b = ttk.Button(self, text=text, command=cmd)
-            b.grid(row=1, column=col, padx=(6, 0), pady=(2, 0))
+            b = ttk.Button(self.buttons, text=text, command=cmd)
+            b.grid(row=0, column=col, padx=(6, 0))
             self.extra_btns.append(b)
             col += 1
         self.drive_box: ttk.Combobox | None = None
         self._drive_map: dict[str, str] = {}
         if drives is not None:
             self.drive_var = tk.StringVar(value=T.DRIVE_PICK_PLACEHOLDER)
-            self.drive_box = ttk.Combobox(self, textvariable=self.drive_var, state="readonly", width=24, postcommand=self._fill_drives)
-            self.drive_box.grid(row=1, column=col, padx=(6, 0), pady=(2, 0))
+            self.drive_box = ttk.Combobox(self.buttons, textvariable=self.drive_var, state="readonly", width=24, postcommand=self._fill_drives)
+            self.drive_box.grid(row=0, column=col, padx=(6, 0))
             self.drive_box.bind("<<ComboboxSelected>>", self._picked)
         self.entry.bind("<FocusOut>", self.normalize, add="+")
         self.entry.bind("<Return>", self.normalize, add="+")

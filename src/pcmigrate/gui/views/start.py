@@ -7,7 +7,7 @@ from tkinter import ttk
 from .. import state as S
 from .. import texts as T
 from .common import (BODY_FONT, INFO_BORDER, INFO_FG, MUTED_FG, SUB_FONT, WARN_BG, WARN_FG, ActionButton, BaseView, Collapsible,
-                     ScrollBody, autowrap)
+                     ScrollBody, add_tooltip, autowrap)
 
 
 class StartView(BaseView):
@@ -27,6 +27,7 @@ class StartView(BaseView):
         grid = ttk.Frame(body)
         grid.pack(fill="x", pady=4)
         self.buttons: list[ActionButton] = []
+        self.auto_buttons: list[ActionButton] = []  # '추천대로 한 번에' 보조 단추(카드마다)
         self.cards: list[tk.Frame] = []
         for i, (title, desc, btn_text, target) in enumerate(T.START_CHOICES):
             box = tk.Frame(grid, highlightbackground=INFO_BORDER, highlightthickness=1, padx=12, pady=10)
@@ -38,6 +39,11 @@ class StartView(BaseView):
             lbl = tk.Label(box, text=desc, justify="left", anchor="w", fg=MUTED_FG, font=BODY_FONT)
             lbl.pack(anchor="w", fill="x", pady=(6, 10))
             autowrap(lbl, 40)
+            flow = ("old", "new", "transfer")[i]
+            auto = ActionButton(box, text=T.BTN_AUTO, command=lambda f=flow: self.guarded(self.c.auto_run, f), kind="plain", pady=3)
+            auto.pack(side="bottom", fill="x", pady=(6, 0))  # 보조 단추: 기본 단추 아래에 작게
+            add_tooltip(auto, T.TIP_AUTO[flow])
+            self.auto_buttons.append(auto)
             b = ActionButton(box, text=btn_text, command=lambda t=target: self.c.go(t), kind="primary", pady=10)
             b.pack(side="bottom", fill="x")
             self.buttons.append(b)

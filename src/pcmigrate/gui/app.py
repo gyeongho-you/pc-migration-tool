@@ -1,6 +1,7 @@
 """Tkinter 마법사 창. 실행: python -m pcmigrate.gui  또는  pcmigrate gui"""
 from __future__ import annotations
 
+import importlib
 import logging
 import os
 import sys
@@ -13,12 +14,14 @@ from tkinter import font as tkfont
 from tkinter import messagebox, ttk
 
 from .. import errorlog
+from . import icons
 from . import state as S
 from . import texts as T
 from .controller import Controller, FriendlyError, anonymize_paths
 from .views import common as C
 from .views.common import (CHIP_DONE_BG, CHIP_TODO_BG, FONT_DELTA_RANGE, INFO_BG, INFO_FG, MUTED_FG, OK_FG, SUB_FONT, TITLE_FONT, WARN_FG,
                            ActionButton, BaseView, TextDialog, add_tooltip, autowrap, install_wheel, open_location, setup_fonts)
+from .views.auto import AutoView
 from .views.new_pc import ConfirmView, PackageView, PreviewView, ResultView
 from .views.old_pc import ChecklistView, DiscoverView, ExportView, ScanView
 from .views.start import StartView
@@ -211,11 +214,11 @@ class ErrorDialog(tk.Toplevel):
 
 
 VIEW_CLASSES = (StartView, ScanView, DiscoverView, ChecklistView, ExportView, PackageView, PreviewView, ConfirmView,
-                ResultView, TransferView)
+                ResultView, TransferView, AutoView)
 
 
 class App(tk.Tk):
-    def __init__(self, controller: Controller | None = None) -> None:
+    def __init__(self, controller: Controller | None = None, detect_icons: bool = False) -> None:
         super().__init__()
         self.c = controller or Controller()
         self.title(T.APP_TITLE)
@@ -228,6 +231,8 @@ class App(tk.Tk):
         self.font_delta = 0
         self.help_dialog: TextDialog | None = None
         self._setup_style()
+        if detect_icons:
+            self.detect_icons()  # 화면 문구를 만들기 전에(글꼴이 정해진 뒤) 그림 글자를 그릴 수 있는지 본다
         install_wheel(self)
         self._build_header()
         self._build_footer()  # 아래쪽 위젯을 먼저 pack 해야 본문이 늘어나도 잘리지 않는다
@@ -255,6 +260,17 @@ class App(tk.Tk):
             return max(1.0, min(3.0, float(self.winfo_fpixels("1i")) / 96.0))
         except (tk.TclError, ValueError):
             return 1.0
+
+    def detect_icons(self) -> bool:
+        """✔ ✖ ⚠ 를 현재 글꼴이 그릴 수 없으면 글자 표시([OK] [X] [!])로 바꾼다. 환경변수 PCMIGRATE_TEXT_ICONS 가 있으면 그것이 우선.
+        글자 표시가 필요하면 texts 를 다시 불러 문구를 새로 만든다(화면은 이 뒤에 만든다). 글자 표시를 쓰는지 돌려준다."""
+        try:
+            want = icons.want_text_icons(tkfont.nametofont("TkDefaultFont"))
+        except tk.TclError:
+            return T.TEXT_ICONS
+        if want != T.TEXT_ICONS:
+            importlib.reload(T)
+        return T.TEXT_ICONS
 
     def _setup_style(self) -> None:
         """글꼴(맑은 고딕, 본문 11pt)을 통일하고, 표 줄 높이/버튼 여백을 글꼴에 맞춘다."""
@@ -536,7 +552,7 @@ def main(argv: list[str] | None = None) -> int:
     except OSError:
         pass
     try:
-        app = App()
+        app = App(detect_icons=True)
     except tk.TclError as e:
         path = errorlog.record(e, "GUI 시작(화면)")
         msg = f"화면을 열 수 없습니다(디스플레이가 없는 환경일 수 있습니다): {e}"

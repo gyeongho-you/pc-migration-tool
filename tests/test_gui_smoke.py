@@ -20,7 +20,7 @@ from pcmigrate.gui.views.common import TextDialog, sort_tree  # noqa: E402
 from test_gui_controller import FakeApi, item, plan  # noqa: E402
 
 ALL_SCREENS = (S.START, S.OLD_SCAN, S.OLD_DISCOVER, S.OLD_CHECKLIST, S.OLD_EXPORT, S.NEW_PACKAGE, S.NEW_PREVIEW,
-               S.NEW_CONFIRM, S.NEW_RESULT, S.TRANSFER)
+               S.NEW_CONFIRM, S.NEW_RESULT, S.TRANSFER, S.AUTO)
 
 
 @pytest.fixture

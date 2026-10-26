@@ -111,8 +111,8 @@ class PreviewView(BaseView):
         counts = p.summary()
         text = T.PREV_SUMMARY.format(new=counts.get("would_copy", 0), over=counts.get("would_overwrite", 0),
                                      same=counts.get("skipped_identical", 0))
-        denied = self.c.denied_note()
-        self.summary.configure(text=text + (f"\n{denied}" if denied else ""))  # 별도 상자 없이 요약 아래 한 줄
+        notes = [x for x in (self.c.denied_note(), self.c.git_config_note()) if x]
+        self.summary.configure(text=text + "".join(f"\n{x}" for x in notes))  # 별도 상자 없이 요약 아래 한 줄씩
         problems = self.c.preview_problems()
         if problems:
             self.problem_box.configure(text=T.PREV_PROBLEMS.format(items="\n".join("• " + x for x in problems[:8])),
@@ -306,7 +306,7 @@ class ResultView(BaseView):
             self.open_btn.state(["disabled"])
             self.bak_btn.state(["disabled"])
             return
-        self.note.configure(text=self.c.denied_note())
+        self.note.configure(text="\n".join(x for x in (self.c.denied_note(), self.c.git_config_note(applied=True)) if x))
         ok, skipped, failed = self.c.import_counts()
         self.summary.show(ok, skipped, failed, T.RES_ALL_OK, T.RES_IMPORT_FAIL)
 

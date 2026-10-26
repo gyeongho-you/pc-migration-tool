@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import os
 
+from . import icons as _icons
+
 # 화면 이름(state.py 의 상수와 같은 값)
 START, OLD_SCAN, OLD_DISCOVER, OLD_CHECKLIST, OLD_EXPORT = "start", "old_scan", "old_discover", "old_checklist", "old_export"
 NEW_PACKAGE, NEW_PREVIEW, NEW_CONFIRM, NEW_RESULT, TRANSFER = "new_package", "new_preview", "new_confirm", "new_result", "transfer"
@@ -61,8 +63,9 @@ BTN_DETAIL_HIDE = "상세 보기 ▾"
 NO_DETAIL = "(자세한 정보 없음)"
 READY = "준비됨"
 CRUMB_HOME = "처음 화면"
-# 글꼴에 ✔ ✖ ⚠ ☑ 가 없어 네모로 보이면 환경변수 PCMIGRATE_TEXT_ICONS=1 로 실행해 글자 표시([OK] [X] [!])로 바꿀 수 있다.
-TEXT_ICONS = os.environ.get("PCMIGRATE_TEXT_ICONS") == "1"
+# 글꼴에 ✔ ✖ ⚠ ☑ 가 없어 네모로 보이면 글자 표시([OK] [X] [!])로 바꾼다. 창을 열 때 gui/icons.py 가 글꼴을 검사해 자동으로 판단하고
+# (app.main), 환경변수 PCMIGRATE_TEXT_ICONS 는 강제 옵션이다(1 = 항상 글자 표시, 0 = 항상 그림 글자).
+TEXT_ICONS = os.environ.get("PCMIGRATE_TEXT_ICONS") == "1" or bool(_icons.auto_result()) and os.environ.get("PCMIGRATE_TEXT_ICONS") != "0"
 ICON_OK, ICON_FAIL, ICON_WARN = ("[OK]", "[X]", "[!]") if TEXT_ICONS else ("✔", "✖", "⚠")
 CHECKED, UNCHECKED, LOCKED = ("[v]", "[ ]", "-") if TEXT_ICONS else ("☑", "☐", "—")
 HEADER_ADMIN = {True: "관리자 권한: 예", False: "관리자 권한: 아니오", None: "관리자 권한: 알 수 없음"}
@@ -81,11 +84,11 @@ START_INTRO = ("새 PC로 업무 환경을 옮기는 일을 도와드립니다. 
                "쓰던 PC의 파일은 읽기만 하며 바꾸지 않습니다.")
 START_ORDER_NOTE = "처음이시면 ① → ② → ③ 순서로 진행해 주세요."
 START_CHOICES = (
-    ("① 쓰던 PC에서 준비하기(구 PC)", "지금 쓰던 PC 앞에 계신가요? 설치된 프로그램과 설정을 조사해서, 새 PC로 옮길 설정 묶음 파일(.zip)을 만듭니다.",
+    ("① 쓰던 PC에서 준비하기\n(구 PC)", "지금 쓰던 PC 앞에 계신가요? 설치된 프로그램과 설정을 조사해서, 새 PC로 옮길 설정 묶음 파일(.zip)을 만듭니다.",
      "준비 시작하기", OLD_SCAN),
-    ("② 새 PC에서 설치하고 가져오기(신 PC)", "새 PC 앞에 계신가요? 만들어 둔 설정 묶음 파일을 먼저 미리 확인한 뒤, 이 PC에 가져옵니다.",
+    ("② 새 PC에서 설치하고\n가져오기(신 PC)", "새 PC 앞에 계신가요? 만들어 둔 설정 묶음 파일을 먼저 미리 확인한 뒤, 이 PC에 가져옵니다.",
      "가져오기 시작하기", NEW_PACKAGE),
-    ("③ 큰 파일(도면·사진) 옮기기", "도면·사진·프로젝트 같은 큰 폴더를 외장 드라이브나 랜선으로 옮기고, 정확히 복사됐는지 확인합니다.",
+    ("③ 큰 파일(도면·사진)\n옮기기(대용량 복사)", "도면·사진·프로젝트 같은 큰 폴더를 외장 드라이브나 랜선으로 옮기고, 정확히 복사됐는지 확인합니다.",
      "큰 파일 옮기기 시작", TRANSFER),
 )
 BTN_ROADMAP_BIG = "전체 이전 순서 보기 (처음부터 끝까지 한눈에)"
@@ -103,7 +106,7 @@ TITLES = {
     START: "시작", OLD_SCAN: "1단계. 프로그램 조사", OLD_DISCOVER: "2단계. 자동 목록에 없는 프로그램 확인",
     OLD_CHECKLIST: "3단계. 해야 할 일 목록", OLD_EXPORT: "4단계. 설정 묶음 파일 만들기",
     NEW_PACKAGE: "1단계. 설정 묶음 파일 선택", NEW_PREVIEW: "2단계. 검사와 미리보기", NEW_CONFIRM: "3단계. 복원 확인",
-    NEW_RESULT: "4단계. 결과", TRANSFER: "큰 파일 옮기기(대용량 복사)",
+    NEW_RESULT: "4단계. 결과", TRANSFER: "큰 파일 옮기기(대용량 복사)", "auto_run": "추천대로 한 번에",
 }
 
 # --------------------------------------------------------------------------- 진행 표시(작업 이름, 예상 시간, 메시지)
@@ -166,7 +169,7 @@ G_SOURCE_OK = "원본 폴더가 있습니다. 원본은 읽기만 하며 바꾸�
 G_DEST_INSIDE = "대상 폴더가 원본 폴더와 같거나 그 안에 있습니다. 다른 위치를 골라 주세요."
 G_DEST_OK = "대상 폴더가 원본 폴더 밖에 있습니다."
 G_TRANSFER_CONFIRM = "대상 폴더에 파일을 쓰기 전에 확인이 필요합니다."
-G_TRANSFER_OPTIONS_CHANGED = "옵션(클라우드 파일 포함/처음부터 모두 다시 확인)이 미리보기 때와 달라졌습니다. 바뀐 옵션으로 '미리보기 실행'을 다시 해서 확인해 주세요."
+G_TRANSFER_OPTIONS_CHANGED = "옵션(클라우드 파일 포함/처음부터 모두 다시 확인/조각으로 나눠 복사)이 미리보기 때와 달라졌습니다. 바뀐 옵션으로 '미리보기 실행'을 다시 해서 확인해 주세요."
 G_TRANSFER_NEED_PREVIEW = "먼저 '미리보기 실행'으로 무엇이 복사되는지 확인해 주세요."
 G_NOTHING_TO_SAVE = "저장할 결과가 없습니다."
 
@@ -372,7 +375,7 @@ TR_DETAIL_NOTES = ("'클라우드 전용 파일 포함'을 켜면 파일을 내�
                    f"대상에 같은 이름의 다른 파일이 이미 있으면 덮어쓰기 전에 같은 폴더에 {TERM_BACKUP}로 보관합니다"
                    "(비어 있는 새 폴더를 고르면 가장 깔끔합니다). 중간에 멈추면 같은 설정으로 다시 실행해 이어서 할 수 있습니다.")
 TR_SRC_HINT = "경로를 복사해 붙여넣어도 됩니다(따옴표는 자동으로 지웁니다)."
-TR_OPTIONS_TOGGLE, TR_OPTIONS_TOGGLE_OPEN = "옵션 ▸", "옵션 ▾"
+TR_OPTIONS_TOGGLE, TR_OPTIONS_TOGGLE_OPEN = "고급 옵션 ▸", "고급 옵션 ▾"
 TR_LAYOUT_MORE_TITLE, TR_LAYOUT_MORE_TITLE_OPEN = "원본의 위치와 참조 경로 주의 ▸", "원본의 위치와 참조 경로 주의 ▾"
 TR_STEP_NAMES = ("방식", "폴더", "미리보기", "복사", "결과")
 TR_VERIFY_STEP_NAMES = ("방식", "목록·폴더", "검사", "결과")
@@ -808,6 +811,117 @@ ROADMAP_NEW = (
     ("new6", "폴더 위치(드라이브 문자)가 구 PC와 같은지 확인합니다", WHO_BOTH,
      "도면의 외부 참조(xref)와 데이터 단축은 절대 경로를 씁니다. 도구가 위치가 다르면 경고해 주지만, 도면을 열어 참조가 이어지는지는 직접 확인하셔야 합니다."),
 )
+
+
+# --------------------------------------------------------------------------- 추천대로 한 번에(시작 화면의 보조 단추)
+AUTO = "auto_run"
+BTN_AUTO = "추천대로 한 번에 ▸"
+TIP_AUTO = {
+    "old": "조사 → 해야 할 일 목록 → 바탕화면에 설정 묶음 파일 만들기를 이어서 합니다. 자동 목록에 없는 프로그램은 아무것도 고르지 않습니다.",
+    "new": "바탕화면·다운로드·연결된 외장 드라이브에서 설정 묶음 파일을 찾아 미리보기까지 이어서 합니다. 복원 확인은 직접 하셔야 합니다.",
+    "transfer": "두 가지만 물어본 뒤 미리보기부터 이어서 합니다. 복사를 시작하기 전에는 반드시 한 번 더 확인합니다.",
+}
+AUTO_HEADING = "추천대로 한 번에"
+AUTO_SUB = {
+    "old": "쓰던 PC에서 조사부터 설정 묶음 파일 만들기까지 이어서 진행합니다. 쓰던 PC의 파일은 읽기만 합니다.",
+    "new": "설정 묶음 파일 찾기부터 복원까지 이어서 진행합니다. 복원 전에는 확인 표시 두 개와 확인 창을 거칩니다.",
+    "transfer": "방식을 정한 뒤 미리보기부터 이어서 진행합니다. 복사를 시작하기 전에는 반드시 확인을 받습니다.",
+}
+AUTO_STEPS = {
+    "old": (("scan", "프로그램 조사"), ("discover", "자동 목록에 없는 프로그램 확인"), ("checklist", "해야 할 일 목록 만들기"),
+            ("export", "설정 묶음 파일 만들기")),
+    "new": (("find", "설정 묶음 파일 찾기"), ("preview", "검사와 미리보기"), ("confirm", "복원 확인"), ("apply", "복원")),
+    "transfer": (("questions", "방식 정하기"), ("folders", "폴더 고르기"), ("preview", "미리보기"), ("copy", "복사"),
+                 ("result", "결과 확인")),
+    "receive": (("questions", "방식 정하기"), ("folders", "목록·폴더 고르기"), ("check", "복사본 검사"), ("result", "결과 확인")),
+}
+AUTO_STATE_LABELS = {"todo": "대기", "doing": "진행 중", "waiting": "확인 기다리는 중", "done": f"{ICON_OK} 끝남",
+                     "skipped": "건너뜀", "warn": f"{ICON_WARN} 끝남(확인 필요)", "stopped": f"{ICON_FAIL} 멈춤"}
+AUTO_DISCOVER_SKIPPED = "자동 목록에 없는 프로그램은 아무것도 자동으로 고르지 않습니다(필요하면 ①을 직접 진행해 주세요)."
+AUTO_SCAN_NOTE = "프로그램 {programs}개 조사, 자동 목록과 일치 {rules}개"
+AUTO_STOP_BTN = "중지"
+AUTO_STOP_NOTE = "지금 하는 단계는 끝난 뒤에 멈춥니다. 쓰던 PC의 파일은 바뀌지 않습니다."
+AUTO_STOP_CANCELLING = "멈추는 중입니다…"
+AUTO_BTN_HOME = "처음 화면으로"
+AUTO_BTN_DETAIL = "자세한 결과 보기"
+AUTO_BTN_CHECKLIST = "해야 할 일 목록 보기"
+AUTO_BTN_MANUAL = "직접 진행하기"
+AUTO_RUNNING_HEAD = "진행 중입니다. 아래 단계를 순서대로 하고 있습니다."
+AUTO_WAITING_HEAD = "확인이 필요합니다"
+AUTO_DONE_HEAD = f"{ICON_OK} 모두 끝났습니다"
+AUTO_DONE_WARN_HEAD = f"{ICON_WARN} 끝났지만 확인이 필요한 것이 있습니다"
+AUTO_STOPPED_HEAD = f"{ICON_WARN} 여기서 멈췄습니다"
+AUTO_STOPPED_USER = "중지했습니다. 여기까지 끝난 단계의 결과는 그대로 남아 있습니다."
+AUTO_STOPPED_USER_HOW = "처음 화면에서 다시 시작하거나, 직접 진행하기로 이어서 할 수 있습니다."
+AUTO_CANCELLED_WHAT = "작업을 취소해서 멈췄습니다."
+AUTO_CANCELLED_HOW = "큰 파일 복사는 같은 설정으로 다시 시작하면 이어서 할 수 있습니다."
+AUTO_EXPORT_DECLINED = "설정 묶음 파일을 만들기 전에 멈췄습니다. 조사와 해야 할 일 목록은 만들어 두었습니다."
+AUTO_EXPORT_CONFIRM_HEAD = "설정 묶음 파일을 만들기 전에 확인해 주세요"
+AUTO_EXPORT_CONFIRM_BTN = "설정 묶음 파일 만들기"
+AUTO_UNREADABLE_WARN = ("읽지 못해 설정 묶음 파일에 담지 못한 파일이 {n}개 있습니다(다른 프로그램이 쓰는 중일 수 있습니다). "
+                        "프로그램을 모두 닫고 다시 만들어 보세요.")
+AUTO_FAILED_WARN = "정확히 담지 못한 파일이 {n}개 있습니다. '자세한 결과 보기'에서 내용을 확인해 주세요."
+# 새 PC
+AUTO_PKG_NONE_WHAT = "설정 묶음 파일을 찾지 못했습니다(바탕화면, 다운로드, 연결된 외장 드라이브를 찾아봤습니다)."
+AUTO_PKG_NONE_HOW = "파일이 다른 곳에 있으면 '직접 고르기'로 위치를 알려 주세요. 외장 드라이브는 컴퓨터에 연결되어 있는지 확인해 주세요."
+AUTO_BTN_PICK_MANUAL = "직접 고르기"
+AUTO_PKG_PICK_HEAD = "설정 묶음 파일이 {n}개 있습니다. 사용할 파일을 골라 주세요(가장 최근 것이 맨 위입니다)."
+AUTO_PKG_PICK_BTN = "이 파일로 계속"
+AUTO_PROBLEMS_WHAT = "설정 묶음 파일 검사에서 문제가 발견되어 멈췄습니다: {items}"
+AUTO_PROBLEMS_HOW = "구 PC에서 설정 묶음 파일을 다시 만들어 복사해 주세요."
+AUTO_REJECTED_WHAT = "복원 위치가 바로가기(링크)를 거치는 파일 {n}개는 복원되지 않아서 자동 진행을 멈췄습니다."
+AUTO_REJECTED_HOW = "'미리보기에서 확인'을 눌러 내용을 직접 보고 진행해 주세요."
+AUTO_BTN_MANUAL_PREVIEW = "미리보기에서 확인"
+AUTO_RESTORE_HEAD = "복원하기 전에 확인해 주세요"
+AUTO_RESTORE_SUMMARY = "새로 만들 파일 {new}개 · 덮어쓸 파일 {over}개 · 같아서 건너뛸 파일 {same}개"
+AUTO_BTN_PREVIEW_LIST = "미리보기 자세히 보기"
+AUTO_PREVIEW_LIST_TITLE = "복원 미리보기"
+AUTO_APPLY_FAILED_HOW = "원인을 해결한 뒤 '직접 진행하기'로 미리보기부터 다시 확인해 주세요."
+# 대용량 복사
+AUTO_Q1 = "어떻게 옮기시나요?"
+AUTO_Q2 = "지금 어느 PC 앞에 계신가요?"
+AUTO_Q_NEXT = "다음으로"
+AUTO_Q2_OPTIONS = ("쓰던 PC(구 PC) 앞입니다. 보내는 쪽입니다", "새 PC 앞입니다. 받는 쪽입니다")
+AUTO_EXPORT_WILL = "다음 위치에 설정 묶음 파일을 만듭니다. 원본은 읽기만 합니다."
+AUTO_TR_WILL = "미리보기를 마쳤습니다. 아직 아무것도 복사하지 않았습니다. 시작하면 아래 확인 창이 한 번 더 나옵니다."
+AUTO_VERIFY_WILL = "복사본을 목록과 비교만 합니다. 폴더는 읽기만 합니다."
+AUTO_FOLDERS_HEAD = "폴더를 골라 주세요"
+AUTO_FOLDERS_BTN = "미리보기부터 이어서 진행"
+AUTO_FOLDERS_BTN_VERIFY = "검사부터 이어서 진행"
+AUTO_FOLDERS_BAD = "폴더를 확인해 주세요: {why}"
+AUTO_TR_CONFIRM_HEAD = "복사를 시작하기 전에 확인해 주세요"
+AUTO_TR_CONFIRM_BTN = "복사 시작"
+AUTO_TR_VERIFY_BTN = "검사 시작"
+AUTO_TR_PREVIEW_DECLINED = "복사를 시작하기 전에 멈췄습니다. 미리보기만 했고 대상 폴더에는 아무것도 쓰지 않았습니다."
+AUTO_TR_BLOCKED_HOW = "문제를 해결하거나 다른 드라이브를 고른 뒤 ③을 다시 시작해 주세요."
+AUTO_TR_FAT32_HOW = ("큰 파일이 있는 FAT32 드라이브에는 ③을 직접 시작해서 '고급 옵션'의 '4GB가 넘는 파일을 조각으로 나눠 복사'를 켜 보세요. "
+                     "아니면 NTFS 로 포맷된 드라이브를 쓰세요.")
+AUTO_TR_PREVIEW_NOTE = "새로 복사 {new}개 · 덮어씀 {over}개 · 이미 같음 {same}개"
+AUTO_TR_PREVIEW_PROBLEM = "미리보기에서 문제가 있는 파일 {n}개가 나왔습니다."
+AUTO_TR_PREVIEW_PROBLEM_HOW = "'직접 진행하기'로 미리보기 내용을 확인한 뒤 진행해 주세요."
+AUTO_TR_FAIL_WHAT = "정확히 복사되지 않은 파일이 {n}개 있습니다."
+AUTO_TR_FAIL_HOW = "'자세한 결과 보기'에서 목록을 확인하고, 원인(파일을 쓰는 프로그램, 연결 끊김, 저장 공간)을 해결한 뒤 '실패한 것만 다시 시도'를 눌러 주세요."
+AUTO_TR_CLOUD_NOTE = "클라우드 전용 파일 {n}개는 복사하지 않습니다(내려받아야 해서 기본은 제외입니다)."
+# 시작 화면 도움말과 시험에서 쓰는 이름
+HELP[AUTO] = ("무엇을 하는 화면인가요?\n추천 설정으로 여러 단계를 이어서 진행하고, 지금 어느 단계인지 보여 줍니다.\n\n"
+              "안전한가요?\n원본은 읽기만 합니다. 파일을 쓰거나 복원하기 전에는 항상 확인을 받고, 문제가 생기면 그 자리에서 멈춥니다. "
+              "'중지'를 누르면 언제든 멈춥니다.\n\n다음 단계\n끝나면 결과와 다음에 할 일이 이 화면에 나옵니다.")
+
+# 4GB 넘는 파일 조각내기(FAT32 외장 디스크용), 임시 파일 위치, Git 설정 안내
+TR_SPLIT = "4GB가 넘는 파일을 조각으로 나눠 복사(FAT32 외장 디스크용)"
+TR_SPLIT_NOTE = ("FAT32 디스크는 4GB 넘는 파일을 저장하지 못합니다. 켜면 큰 파일을 조각 파일로 나눠 저장합니다. "
+                 "새 PC에서 pcmigrate join 으로 합쳐야 열 수 있습니다.")
+TR_SPLIT_RESULT = f"{ICON_WARN} 조각으로 나눈 파일 {{n}}개, 새 PC에서 pcmigrate join 으로 합치세요. 합치기 전에는 열 수 없습니다."
+TR_SPLIT_PREVIEW = "조각으로 나눌 파일 {n}개(새 PC에서 pcmigrate join 으로 합칩니다)"
+G_SPLIT_UNSUPPORTED = "이 버전에서는 큰 파일을 조각으로 나누는 기능을 쓸 수 없습니다. 옵션을 끄고 다시 시도해 주세요."
+EXP_ADV_TOGGLE, EXP_ADV_TOGGLE_OPEN = "고급 옵션 ▸", "고급 옵션 ▾"
+EXP_STAGE_LABEL = "임시 파일 위치(선택):"
+EXP_STAGE_HINT = "큰 파일을 잠시 복제하는 폴더입니다. 비워 두면 기본 위치를 씁니다. 여유 공간이 넉넉한 드라이브의 폴더를 골라 주세요."
+EXP_STAGE_PICK = "임시 파일 위치 선택"
+G_STAGE_MISSING = "임시 파일 위치 폴더를 찾을 수 없습니다: {path}"
+G_STAGE_UNSUPPORTED = "이 버전에서는 임시 파일 위치를 바꿀 수 없습니다. 입력칸을 비우고 다시 시도해 주세요."
+PREV_GIT_NOTE = f"{ICON_WARN} Git 설정 파일에 명령 실행 설정이 들어 있을 수 있으니 복원 전에 내용을 확인해 주세요"
+RES_GIT_NOTE = f"{ICON_WARN} 복원한 Git 설정 파일에 명령 실행 설정이 들어 있을 수 있으니 내용을 확인해 주세요"
 
 
 def roadmap_lines(marks=frozenset(), markdown: bool = False) -> list[str]:
