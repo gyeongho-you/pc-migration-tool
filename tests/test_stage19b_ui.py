@@ -71,8 +71,10 @@ def test_screen_texts_have_no_internal_names():  # U-5: 화면 문구에 해시/
 
 
 def test_start_texts_follow_the_three_situations():  # U-3
-    titles = [c[0] for c in T.START_CHOICES]
+    titles = [" ".join(c[0].split()) for c in T.START_CHOICES]  # 제목 안의 줄바꿈(어색한 줄바꿈 방지용)은 공백으로 본다
     assert titles[0].startswith("① 쓰던 PC에서 준비하기") and titles[1].startswith("② 새 PC에서 설치하고 가져오기")
+    assert all(len(c[0].split("\n")) == 2 for c in T.START_CHOICES)  # 제목은 의도적으로 두 줄: (구 PC)/(신 PC)가 줄 중간에서 끊기지 않는다
+    assert T.START_CHOICES[1][0].split("\n")[1] == "가져오기(신 PC)"
     assert titles[2].startswith("③ 큰 파일(도면·사진) 옮기기")
     assert T.START_ORDER_NOTE == "처음이시면 ① → ② → ③ 순서로 진행해 주세요." and "전체 이전 순서" in T.BTN_ROADMAP_BIG
     assert len(T.START_INTRO.splitlines()) <= 2  # U-6 소개는 2줄 이내

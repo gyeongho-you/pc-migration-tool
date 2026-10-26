@@ -107,8 +107,8 @@ class TransferView(BaseView):
         self.opts = Collapsible(body, T.TR_OPTIONS_TOGGLE, T.TR_OPTIONS_TOGGLE_OPEN)
         self.opts.pack(anchor="w", fill="x")
         self.opts_toggle = self.opts.toggle_btn
-        self.strict_var, self.cloud_var = tk.BooleanVar(value=False), tk.BooleanVar(value=False)
-        for var in (self.strict_var, self.cloud_var):  # 옵션을 바꾸면 이전 미리보기는 무효가 된다
+        self.strict_var, self.cloud_var, self.split_var = tk.BooleanVar(value=False), tk.BooleanVar(value=False), tk.BooleanVar(value=False)
+        for var in (self.strict_var, self.cloud_var, self.split_var):  # 옵션을 바꾸면 이전 미리보기는 무효가 된다
             var.trace_add("write", lambda *a: self._options_changed())
         ob = self.opts.body
         self.copy_opts = ttk.Frame(ob)
@@ -121,6 +121,10 @@ class TransferView(BaseView):
         n2 = ttk.Label(self.copy_opts, text=T.TR_CLOUD_NOTE, justify="left", foreground=WARN_FG)
         n2.pack(anchor="w", fill="x", padx=(24, 0))
         autowrap(n2, 40)
+        ttk.Checkbutton(self.copy_opts, variable=self.split_var, text=T.TR_SPLIT).pack(anchor="w", pady=(6, 0))  # FAT32 외장 디스크용
+        n3 = ttk.Label(self.copy_opts, text=T.TR_SPLIT_NOTE, justify="left", foreground=MUTED_FG)
+        n3.pack(anchor="w", fill="x", padx=(24, 0))
+        autowrap(n3, 40)
         self.rep_field = PathField(self.copy_opts, self.rep_var, self._pick_report, label=T.TR_REPORT, hint=T.TR_REPORT_HINT)
         self.rep_field.pack(fill="x", pady=(8, 0))
         self.verify_opts = ttk.Frame(ob)
@@ -408,12 +412,12 @@ class TransferView(BaseView):
 
     # ------------------------------------------------------------------ 실행
     def _options_changed(self) -> None:
-        self.c.set_transfer_options(self.cloud_var.get(), self.strict_var.get())
+        self.c.set_transfer_options(self.cloud_var.get(), self.strict_var.get(), self.split_var.get())
         self._update_buttons()
 
     def _opts(self) -> dict:
         return {"strict": self.strict_var.get(), "include_cloud": self.cloud_var.get(),
-                "report_path": clean_path(self.rep_var.get())}
+                "report_path": clean_path(self.rep_var.get()), "split_large": self.split_var.get()}
 
     def _dry(self) -> None:
         self._sync_state()
@@ -584,6 +588,9 @@ class TransferView(BaseView):
             lines.append(T.TR_SPACE_UNKNOWN)
         if meta.get("fat32_blocked"):
             lines.append(T.TR_FAT32_BLOCK.format(big=meta.get("fat32_big_files", 0)))
+        n_split = self.c.split_count()
+        if n_split:
+            lines.append(T.TR_SPLIT_PREVIEW.format(n=n_split))
         lines.extend(self.c.preview_link_lines())
         if lines:
             self.notes_box.configure(text="\n".join(lines))

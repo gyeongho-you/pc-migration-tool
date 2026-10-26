@@ -357,6 +357,11 @@ class ExportView(BaseView):
         self._resume_shown = False
         entry.bind("<FocusOut>", lambda e: self._update_resume(), add="+")
         entry.bind("<Return>", lambda e: self._update_resume(), add="+")
+        self.adv = Collapsible(body, T.EXP_ADV_TOGGLE, T.EXP_ADV_TOGGLE_OPEN)  # 고급 옵션(접힘): 임시 파일 위치
+        self.adv.pack(anchor="w", fill="x")
+        self.stage_var = tk.StringVar()  # 비워 두면 기본 위치
+        self.stage_field = PathField(self.adv.body, self.stage_var, self._browse_stage, label=T.EXP_STAGE_LABEL, hint=T.EXP_STAGE_HINT)
+        self.stage_field.pack(fill="x")
         self.summary = ResultSummary(body)
         self.summary.pack(fill="x", pady=6)
         # 끝난 뒤: 큰 '다음에 할 일' 상자와 결과 위치 열기
@@ -437,8 +442,14 @@ class ExportView(BaseView):
             self.path_var.set(p.replace("/", "\\"))
             self._update_resume()
 
+    def _browse_stage(self) -> None:
+        p = filedialog.askdirectory(parent=self, title=T.EXP_STAGE_PICK, mustexist=True)
+        if p:
+            self.stage_var.set(p.replace("/", "\\"))
+
     def _export(self) -> None:
         self.path_field.normalize()
+        self.stage_field.normalize()
         out = clean_path(self.path_var.get())
         if not out:
             messagebox.showwarning(T.EXP_NEED_PATH_TITLE, T.EXP_NEED_PATH, parent=self)
@@ -450,7 +461,8 @@ class ExportView(BaseView):
         restart = bool(self._resume_shown and self.restart_var.get())
         if restart and not messagebox.askokcancel(T.EXP_RESTART_TITLE, T.EXP_RESTART_CONFIRM, parent=self):
             return
-        self.guarded(self.c.start_export, out, write_confirmed=True, resume=not restart)
+        self.guarded(self.c.start_export, out, write_confirmed=True, resume=not restart,
+                     **({"stage_dir": stage} if (stage := clean_path(self.stage_var.get())) else {}))
 
     def on_event(self, kind, payload) -> None:
         if kind != "export_done":

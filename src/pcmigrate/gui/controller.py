@@ -173,6 +173,40 @@ def _supported(fn: Callable, **kw) -> dict:
     return {k: v for k, v in kw.items() if k in params}
 
 
+def _accepts(fn: Callable, name: str) -> bool:
+    """fn 이 키워드 인자 name 을 받는가(**kwargs 도 받는 것으로 본다). 새 옵션을 아직 지원하지 않는 api 에 몰래 빠뜨리지 않으려고 쓴다."""
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+    return name in params or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+
+def _meta_value(res: Any, key: str) -> Any:
+    """결과(ImportResult/Report/ImportPlan)와 그 안쪽 리포트의 meta 에서 key 값을 찾는다(없으면 None)."""
+    seen = [res, getattr(res, "report", None), getattr(res, "plan", None)]
+    for obj in seen:
+        if obj is None:
+            continue
+        for attr in ("meta", "manifest"):
+            d = getattr(obj, attr, None)
+            if isinstance(d, dict) and d.get(key):
+                return d[key]
+    return None
+
+
+def _count_of(value: Any) -> int:
+    """개수(정수) 또는 목록/딕셔너리의 길이를 정수로."""
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    try:
+        return len(value)
+    except TypeError:
+        return 0
+
+
 def _final_status(res: Any) -> tuple[dict | None, dict | None, str]:
     """작업 결과에서 현황 카드에 넣을 확정 개수/문제 목록/요약을 뽑는다. 알 수 없는 결과면 (None, None, '')."""
     try:
@@ -237,6 +271,44 @@ class PathCheck:
     warnings: list = field(default_factory=list)  # FAT32/exFAT/네트워크 경고(문장)
 
 
+@dataclass
+class AutoStep:
+    """'추천대로 한 번에' 진행 화면의 한 줄(단계)."""
+    key: str
+    title: str
+    state: str = "todo"  # todo | doing | waiting | done | skipped | warn | stopped
+    note: str = ""
+
+
+@dataclass
+class AutoRun:
+    """'추천대로 한 번에' 진행 상태(tkinter 와 무관). status: running | waiting | done | stopped."""
+    flow: str  # old | new | transfer
+    steps: list = field(default_factory=list)
+    status: str = "running"
+    gate: str = ""  # 사람의 확인/입력을 기다리는 지점: export_confirm | pick_package | restore | questions | folders | transfer_confirm | verify_confirm
+    what: str = ""  # 멈춘 이유(쉬운 말)
+    how: str = ""  # 어떻게 하면 되는지
+    warning: str = ""  # 끝났지만 확인할 것
+    manual: str = ""  # '직접 진행하기'로 갈 화면
+    candidates: list = field(default_factory=list)  # 찾은 설정 묶음 파일들
+    export_path: str = ""
+    phase: str = ""  # 대용량: preview | copy | verify
+    stop_requested: bool = False
+    by_user: bool = False
+
+    def step(self, key: str) -> AutoStep | None:
+        return next((x for x in self.steps if x.key == key), None)
+
+    @property
+    def active(self) -> bool:
+        return self.status in ("running", "waiting")
+
+
+AUTO_FLOWS = ("old", "new", "transfer")
+_AUTO_KINDS = {"scan_done", "checklist_done", "export_done", "preview_done", "import_done", "transfer_done", "error", "cancelled"}
+
+
 class Controller:
     """화면과 api 사이의 중간층. 이벤트는 listener(kind, payload) 로 전달된다."""
 
@@ -259,6 +331,7 @@ class Controller:
         self._dest_cache: dict[str, Any] = {}
         self.roadmap_marks: set[str] = set()  # 전체 이전 순서에서 체크한 항목(창을 닫았다 열어도 유지)
         self._in_listener_error = False
+        self.auto: AutoRun | None = None  # '추천대로 한 번에' 진행 상태(없으면 None)
         self.drive_lister: Callable[[], list] | None = None  # 시험에서 가짜 드라이브 목록을 넣는 자리
         if hasattr(self.runner, "on_callback_error"):
             self.runner.on_callback_error = self._callback_failed
@@ -302,6 +375,57 @@ class Controller:
                 return c
         return cands[-1]
 
+    def default_downloads(self) -> str:
+        """다운로드 폴더(OneDrive 로 옮겨진 경우 포함). 찾지 못하면 사용자 폴더 아래 Downloads."""
+        home = os.path.expanduser("~")
+        cands = []
+        for var in ("OneDriveCommercial", "OneDriveConsumer", "OneDrive"):
+            base = os.environ.get(var)
+            if base:
+                cands.append(os.path.join(base, "Downloads"))
+        cands.append(os.path.join(home, "Downloads"))
+        for c in cands:
+            if os.path.isdir(c):
+                return c
+        return cands[-1]
+
+    def find_packages(self, limit: int = 30) -> list[str]:
+        """바탕화면·다운로드·연결된 외장 드라이브(드라이브 맨 위와 그 바로 아래 폴더)에서 pcmigrate-settings*.zip 을 찾는다(읽기만).
+        가장 최근 파일이 먼저. 같은 파일은 한 번만."""
+        pat = re.compile(r"^" + re.escape(T.EXP_DEFAULT_NAME.rsplit(".", 1)[0]) + r".*\.zip$", re.IGNORECASE)
+        dirs: list[tuple[str, bool]] = [(self.default_desktop(), False), (self.default_downloads(), False)]
+        system = os.path.normcase(os.environ.get("SystemDrive") or "C:").rstrip("\\/")
+        try:
+            for d in self.list_drives():
+                is_system = d.kind == "fixed" and os.path.normcase(d.root).rstrip("\\/") == system
+                if d.kind in ("removable", "fixed", "unknown") and not is_system:  # 시스템 드라이브는 바탕화면/다운로드로 이미 찾는다
+                    dirs.append((d.root, True))
+        except Exception:  # noqa: BLE001 - 드라이브 조회 실패는 찾기만 줄인다
+            pass
+        found: dict[str, tuple[float, str]] = {}
+
+        def scan(folder: str, deeper: bool) -> None:
+            try:
+                with os.scandir(folder) as it:
+                    entries = list(it)
+            except OSError:
+                return
+            for e in entries:
+                try:
+                    if e.is_file() and pat.match(e.name):
+                        key = os.path.normcase(os.path.realpath(e.path))
+                        found.setdefault(key, (e.stat().st_mtime, e.path))
+                    elif deeper and e.is_dir(follow_symlinks=False) and not e.name.startswith(("$", ".")):
+                        scan(e.path, False)
+                except OSError:
+                    continue
+
+        for folder, deeper in dirs:
+            if folder and os.path.isdir(folder):
+                scan(folder, deeper)
+        ordered = sorted(found.values(), key=lambda t: -t[0])
+        return [path for _m, path in ordered[:limit]]
+
     def default_export_path(self) -> str:
         """구 PC 의 설정 묶음 파일 저장 기본 위치: 바탕화면의 pcmigrate-settings.zip."""
         return os.path.join(self.default_desktop(), T.EXP_DEFAULT_NAME)
@@ -326,6 +450,8 @@ class Controller:
                 self.listener(kind, payload)
             except Exception as e:  # noqa: BLE001 - 화면 갱신 오류가 작업 상태 정리를 막지 않게(이후 이벤트는 계속 전달)
                 self._callback_failed(e, traceback.format_exc(), kind)
+        if self.auto is not None and kind in _AUTO_KINDS:
+            self._auto_event(kind, payload)
 
     def _callback_failed(self, exc: BaseException, tb: str = "", kind: str = "") -> None:
         """화면/콜백에서 난 예외를 로그에 남기고 오류 대화상자로 알린다(재귀 방지)."""
@@ -362,6 +488,8 @@ class Controller:
         return fe
 
     def go(self, screen: str) -> None:
+        if screen != S.AUTO:
+            self.auto = None  # 진행 화면을 떠나면 '한 번에' 진행은 끝난 것으로 본다(이어서 하려면 직접 진행)
         self.state.screen = screen
         self.emit("screen", screen)
 
@@ -636,9 +764,15 @@ class Controller:
             return ""
         return T.EXP_RESUME_HINT.format(n=info["files"], size=fmt_bytes(info["bytes"]))
 
-    def start_export(self, output: str, write_confirmed: bool = False, resume: bool = True) -> None:
+    def start_export(self, output: str, write_confirmed: bool = False, resume: bool = True, stage_dir: str = "") -> None:
         if not write_confirmed:
             raise GuardError(T.G_NEED_EXPORT_CONFIRM)
+        stage_dir = (stage_dir or "").strip()
+        if stage_dir:
+            if not os.path.isdir(stage_dir):
+                raise GuardError(T.G_STAGE_MISSING.format(path=stage_dir))
+            if not _accepts(self.api.run_export, "stage_dir"):  # 지원하지 않는 버전에서 조용히 무시하면 사용자가 모르게 다른 위치를 쓰게 된다
+                raise GuardError(T.G_STAGE_UNSUPPORTED)
         if not output:
             raise GuardError(T.G_NEED_SAVE_PATH)
         if real_api.check_unexpanded(output=output):
@@ -652,10 +786,12 @@ class Controller:
         items = self.make_items({"format": 1, "candidates": [
             {"include": True, "root": k[0], "rel": k[1]} for k in sorted(self.state.selected)]}) if sel else []
 
+        stage_kw = {"stage_dir": stage_dir} if stage_dir else {}
+
         def work(progress, token):
             return self.api.run_export(self.state.rules_dir, output, extra_items=items or None,
                                        allow_secrets=has_secret, deps=self.deps,
-                                       **_supported(self.api.run_export, progress_info=progress, resume=resume))
+                                       **_supported(self.api.run_export, progress_info=progress, resume=resume), **stage_kw)
 
         def done(res):
             self.state.export_result, self.state.export_output = res, output
@@ -712,6 +848,13 @@ class Controller:
         """보안상 복원하지 않는 형식이 있으면 한 줄 안내(미리보기 요약/결과 화면 공용). 없으면 빈 문자열."""
         n = self.preview_denied_count() if self.state.preview else self.import_summary().get("denied", 0)
         return T.PREV_DENIED_NOTE.format(n=n) if n else ""
+
+    def git_config_note(self, applied: bool = False) -> str:
+        """리포트 meta 의 git_config_warning 이 켜져 있으면 한 줄 안내(미리보기/결과 화면 공용). 없으면 빈 문자열."""
+        res = self.state.import_result if applied else self.state.preview
+        if res is None or not _meta_value(res, "git_config_warning"):
+            return ""
+        return T.RES_GIT_NOTE if applied else T.PREV_GIT_NOTE
 
     def preview_problems(self) -> list[str]:
         p = self.state.preview
@@ -811,16 +954,20 @@ class Controller:
         if (s.transfer_mode, s.transfer_stage) != (mode, stage):
             s.transfer_mode, s.transfer_stage = mode, stage
             s.transfer_report, s.transfer_preview_key, s.transfer_blocked = None, None, ""
-            s.transfer_preview_opts = None
+            s.transfer_preview_opts = s.transfer_preview_split = None
             s.transfer_was_dry_run = True
         self.emit("transfer_flow", (mode, stage))
 
-    def set_transfer_options(self, include_cloud: bool, strict: bool) -> None:
+    def set_transfer_options(self, include_cloud: bool, strict: bool, split_large: bool = False) -> None:
         """옵션 체크 상태를 알린다. 미리보기 때와 달라지면 미리보기를 무효로 돌려, 보지 않은 내용으로 복사하지 못하게 한다."""
         s = self.state
         s.transfer_options = (bool(include_cloud), bool(strict))
-        if s.transfer_preview_opts is not None and s.transfer_preview_opts != s.transfer_options:
+        s.transfer_split = bool(split_large)
+        changed = s.transfer_preview_opts is not None and s.transfer_preview_opts != s.transfer_options
+        changed = changed or (s.transfer_preview_split is not None and s.transfer_preview_split != s.transfer_split)
+        if changed:
             s.transfer_preview_key, s.transfer_preview_opts, s.transfer_blocked = None, None, ""
+            s.transfer_preview_split = None
             self.emit("selection_changed")  # 버튼 상태 다시 계산
 
     def flow(self) -> tuple[str, int]:
@@ -980,7 +1127,7 @@ class Controller:
     # ------------------------------------------------------------------ 대용량 복사: 실행
     def start_transfer(self, dry_run: bool = True, strict: bool = False, include_cloud: bool = False,
                        report_path: str = "", write_confirmed: bool = False, verify_only: bool = False,
-                       retry_failed: bool = False, workers: int | None = None) -> None:
+                       retry_failed: bool = False, workers: int | None = None, split_large: bool = False) -> None:
         s = self.state
         if self.is_verify_flow():
             raise GuardError(T.G_NOT_IN_LIST)
@@ -1000,6 +1147,8 @@ class Controller:
                 raise GuardError(T.G_TRANSFER_NEED_PREVIEW)
             if s.transfer_preview_opts is not None and s.transfer_preview_opts != (bool(include_cloud), bool(strict)):
                 raise GuardError(T.G_TRANSFER_OPTIONS_CHANGED)  # 미리보기에 없던 내용(예: 클라우드 파일 내려받기)이 생길 수 있다
+            if s.transfer_preview_split is not None and s.transfer_preview_split != bool(split_large):
+                raise GuardError(T.G_TRANSFER_OPTIONS_CHANGED)
             if s.transfer_blocked:
                 raise GuardError(s.transfer_blocked)
         extra: dict = {}
@@ -1016,6 +1165,10 @@ class Controller:
             extra["retry_failed"] = True
         if workers:
             extra["workers"] = workers
+        if split_large:
+            if not _accepts(self.api.run_transfer, "split_large"):  # 지원하지 않는 버전이 옵션을 무시하고 큰 파일을 그대로 복사하면 안 된다
+                raise GuardError(T.G_SPLIT_UNSUPPORTED)
+            extra["split_large"] = True
 
         def work(progress, token):
             return self.api.run_transfer(s.transfer_src, s.transfer_dst, dry_run=dry_run, include_cloud=include_cloud,
@@ -1027,6 +1180,7 @@ class Controller:
             if dry_run:
                 s.transfer_preview_key = key
                 s.transfer_preview_opts = (bool(include_cloud), bool(strict))
+                s.transfer_preview_split = bool(split_large)
                 meta = getattr(rep, "meta", {}) or {}
                 s.transfer_blocked = (T.WHY_SPACE if meta.get("space_blocked") else T.WHY_FAT32 if meta.get("fat32_blocked") else "")
             else:
@@ -1106,6 +1260,11 @@ class Controller:
         return [T.TR_SKIPPED_LINKS.format(n=n, more=T.TR_SKIPPED_LINKS_MORE.format(shown=len(paths)) if more else "",
                                           paths="\n".join("  " + p for p in paths))]
 
+    def split_count(self) -> int:
+        """조각으로 나눈(나눌) 파일 개수. 리포트 meta 의 split_files(개수 또는 목록) 또는 split_count."""
+        meta = getattr(self.state.transfer_report, "meta", {}) or {}
+        return _count_of(meta.get("split_files")) or _count_of(meta.get("split_count"))
+
     def verify_notes(self) -> list[str]:
         """검사(verify) 결과 안내: 목록에서 빠진 파일이 있으면 '모두 정확함'이 아님."""
         rep = self.state.transfer_report
@@ -1125,6 +1284,9 @@ class Controller:
             notes.append(T.TR_KEEP_AWAKE_FAILED)
         if meta.get("preserved_existing_count"):
             notes.append(T.TR_PRESERVED_NOTE.format(n=meta["preserved_existing_count"]))
+        n_split = self.split_count()
+        if n_split:
+            notes.append(T.TR_SPLIT_RESULT.format(n=n_split))
         notes.extend(self.preview_link_lines())
         notes.extend(self.verify_notes())
         if s.transfer_mode == T.MODE_EXTERNAL and s.transfer_stage == 1 and not rep.failures:
@@ -1153,6 +1315,7 @@ class Controller:
                 "repaired": [x["file"] for x in rep.meta.get("repaired", [])],
                 "pending": counts.get("pending_verify", 0), "added": counts.get("extra", 0),
                 "mode": rep.meta.get("mode", ""), "io": rep.meta.get("io") or {},
+                "split": self.split_count(),
                 "manifest_complete": rep.meta.get("manifest_complete", True),
                 "manifest_errors": int(rep.meta.get("manifest_errors") or 0),
                 "verification_complete": rep.meta.get("verification_complete"),
@@ -1177,3 +1340,317 @@ class Controller:
             rep.write(Path(path))
         except OSError as e:
             raise real_api.ApiError("\n".join(real_api.format_write_error(path, e))) from e
+
+    # ------------------------------------------------------------------ 추천대로 한 번에(auto_run)
+    # 기존 start_* 와 완료 이벤트(*_done)를 순서대로 이어 붙이기만 한다. 새 권한을 만들지 않는다:
+    # 쓰기 전 확인(내보내기/복사/복원)은 반드시 사람의 응답(auto_confirm/auto_apply)을 기다리고,
+    # 복원은 기존 can_apply() 가드(체크 2개 + 최종 확인)를 그대로 지난다.
+    _AUTO_MANUAL = {"old": S.OLD_SCAN, "new": S.NEW_PACKAGE, "transfer": S.TRANSFER}
+
+    def auto_run(self, flow: str) -> None:
+        if self.state.busy:
+            raise GuardError(T.G_BUSY)
+        if flow not in AUTO_FLOWS:
+            raise GuardError(T.G_NOT_IN_LIST)
+        self.auto = AutoRun(flow, [AutoStep(k, t) for k, t in T.AUTO_STEPS[flow]], manual=self._AUTO_MANUAL[flow])
+        self.go(S.AUTO)
+        try:
+            getattr(self, "_auto_begin_" + flow)()
+        except GuardError as e:
+            self._auto_stop(str(e))
+
+    def _auto_notify(self) -> None:
+        self.emit("auto_changed", self.auto)
+
+    def _auto_mark(self, key: str, state: str, note: str = "") -> None:
+        st = self.auto.step(key) if self.auto else None
+        if st is not None:
+            st.state = state
+            if note:
+                st.note = note
+
+    def _auto_stop(self, what: str, how: str = "", manual: str = "", by_user: bool = False) -> None:
+        a = self.auto
+        if a is None or not a.active:
+            return
+        for st in a.steps:
+            if st.state in ("doing", "waiting"):
+                st.state = "stopped"
+        a.status, a.gate, a.what, a.how, a.by_user = "stopped", "", what, how, by_user
+        a.manual = manual or a.manual
+        self.log.info("auto stopped: %s", a.flow)
+        self._auto_notify()
+
+    def _auto_finish(self, warning: str = "") -> None:
+        a = self.auto
+        if a is None or not a.active:
+            return
+        a.status, a.gate, a.warning = "done", "", warning
+        self._auto_notify()
+
+    def _auto_user_stop(self) -> None:
+        self._auto_stop(T.AUTO_STOPPED_USER, T.AUTO_STOPPED_USER_HOW, by_user=True)
+
+    def _auto_wait(self, key: str, gate: str, note: str = "") -> None:
+        a = self.auto
+        if a is None:
+            return
+        if a.stop_requested:
+            self._auto_user_stop()
+            return
+        self._auto_mark(key, "waiting", note)
+        a.status, a.gate = "waiting", gate
+        self._auto_notify()
+
+    def _auto_start(self, key: str, fn: Callable, *args, **kw) -> None:
+        """다음 단계 하나를 시작한다(중지 요청이 있었으면 시작하지 않고 멈춘다)."""
+        a = self.auto
+        if a is None:
+            return
+        if a.stop_requested:
+            self._auto_user_stop()
+            return
+        a.status, a.gate = "running", ""
+        self._auto_mark(key, "doing")
+        self._auto_notify()
+        try:
+            fn(*args, **kw)
+        except GuardError as e:
+            self._auto_stop(str(e))
+        except Exception as e:  # noqa: BLE001 - 예상 밖 오류도 멈춤으로 알린다
+            fe = self.report_error(e, T.TASK_UI, traceback.format_exc())
+            self._auto_stop(fe.what, fe.how)
+            self.emit("error", fe)
+
+    def auto_stop(self) -> bool:
+        """'중지': 취소할 수 있는 작업은 바로 취소하고, 취소할 수 없는 작업은 그 단계가 끝난 뒤 멈춘다. 확인을 기다리는 중이면 바로 멈춘다."""
+        a = self.auto
+        if a is None or not a.active:
+            return False
+        if self.state.busy:
+            a.stop_requested = True
+            if self.can_cancel:
+                self.cancel()
+            self._auto_notify()
+            return True
+        self._auto_user_stop()
+        return True
+
+    def auto_manual(self) -> None:
+        """'직접 진행하기': 멈춘 곳과 가까운 기존 화면으로 가서 거기서부터 직접 진행한다(한 번에 진행은 끝난다)."""
+        a = self.auto
+        self.go(a.manual if a is not None and a.manual else S.START)
+
+    def _auto_event(self, kind: str, payload: Any) -> None:
+        a = self.auto
+        if a is None or not a.active:
+            return
+        if kind == "error":
+            if isinstance(payload, FriendlyError):
+                self._auto_stop(payload.what, payload.how)
+            return
+        if kind == "cancelled":
+            if a.stop_requested:
+                self._auto_user_stop()
+            else:
+                self._auto_stop(T.AUTO_CANCELLED_WHAT, T.AUTO_CANCELLED_HOW)
+            return
+        try:
+            getattr(self, "_auto_on_" + kind)(payload)
+        except GuardError as e:
+            self._auto_stop(str(e))
+
+    # ---- 구 PC: 조사 -> (자동 목록에 없는 프로그램은 고르지 않음) -> 해야 할 일 목록 -> 바탕화면에 설정 묶음 파일
+    def _auto_begin_old(self) -> None:
+        s = self.state
+        s.discovery, s.selected, s.secrets_ack = None, set(), False  # 자동 선택 없음: 예전에 직접 고른 항목도 가져오지 않는다
+        self._auto_mark("discover", "skipped", T.AUTO_DISCOVER_SKIPPED)
+        self._auto_start("scan", self.start_scan)
+
+    def _auto_on_scan_done(self, res: Any) -> None:
+        if self.auto.flow != "old":
+            return
+        self._auto_mark("scan", "done", T.AUTO_SCAN_NOTE.format(programs=getattr(res, "program_count", 0),
+                                                                rules=len(getattr(res, "matched", None) or [])))
+        self._auto_start("checklist", self.start_checklist)
+
+    def _auto_on_checklist_done(self, res: Any) -> None:
+        a = self.auto
+        if a.flow != "old":
+            return
+        self._auto_mark("checklist", "done")
+        a.export_path = self.default_export_path()
+        self._auto_wait("export", "export_confirm", a.export_path)
+
+    def _auto_on_export_done(self, res: Any) -> None:
+        a = self.auto
+        if a.flow != "old":
+            return
+        m = res.manifest
+        unreadable = sum(1 for f in m["failed"] if f.get("reason"))
+        hard = len(m["failed"]) - unreadable
+        warn = " ".join(x for x in (T.AUTO_UNREADABLE_WARN.format(n=unreadable) if unreadable else "",
+                                    T.AUTO_FAILED_WARN.format(n=hard) if hard else "") if x)
+        self._auto_mark("export", "warn" if warn else "done", a.export_path)
+        self._auto_finish(warn)
+
+    # ---- 새 PC: 설정 묶음 파일 찾기 -> 미리보기 -> (복원 확인: 체크 2개 + 최종 확인창) -> 복원
+    def _auto_begin_new(self) -> None:
+        a = self.auto
+        self._auto_mark("find", "doing")
+        a.candidates = self.find_packages()
+        if not a.candidates:
+            self._auto_stop(T.AUTO_PKG_NONE_WHAT, T.AUTO_PKG_NONE_HOW, manual=S.NEW_PACKAGE)
+        elif len(a.candidates) == 1:
+            self._auto_use_package(a.candidates[0])
+        else:
+            self._auto_wait("find", "pick_package", T.AUTO_PKG_PICK_HEAD.format(n=len(a.candidates)))
+
+    def _auto_use_package(self, path: str) -> None:
+        self.set_package(path)
+        self._auto_mark("find", "done", path)
+        self._auto_start("preview", self.start_preview)
+
+    def auto_pick_package(self, path: str) -> None:
+        a = self.auto
+        if a is None or a.gate != "pick_package" or path not in a.candidates:  # 찾은 목록에 없는 경로는 받지 않는다
+            raise GuardError(T.G_NOT_IN_LIST)
+        a.status, a.gate = "running", ""
+        self._auto_use_package(path)
+
+    def _auto_on_preview_done(self, res: Any) -> None:
+        if self.auto.flow != "new":
+            return
+        problems = self.preview_problems()
+        if res.mode == "blocked" or problems:
+            self._auto_stop(T.AUTO_PROBLEMS_WHAT.format(items=" / ".join(problems[:3]) or T.G_PACKAGE_BLOCKED),
+                            T.AUTO_PROBLEMS_HOW, manual=S.NEW_PREVIEW)
+            return
+        n = self.preview_rejected_count()
+        if n:
+            self._auto_stop(T.AUTO_REJECTED_WHAT.format(n=n), T.AUTO_REJECTED_HOW, manual=S.NEW_PREVIEW)
+            return
+        counts = res.summary()
+        self._auto_mark("preview", "done", T.AUTO_RESTORE_SUMMARY.format(
+            new=counts.get("would_copy", 0), over=counts.get("would_overwrite", 0), same=counts.get("skipped_identical", 0)))
+        self._auto_wait("confirm", "restore")
+
+    def auto_apply(self) -> None:
+        """복원 확인 지점에서 '복원 실행': 기존 can_apply() 가 모두 통과해야 한다(체크 2개 + 최종 확인창의 '예')."""
+        a = self.auto
+        if a is None or a.gate != "restore":
+            raise GuardError(T.G_NOT_IN_LIST)
+        ok, why = self.can_apply()
+        if not ok:
+            raise GuardError(why)
+        self._auto_mark("confirm", "done")
+        self._auto_start("apply", self.start_apply)
+
+    def _auto_on_import_done(self, res: Any) -> None:
+        if self.auto.flow != "new":
+            return
+        _ok, _skipped, failed = self.import_counts()
+        self._auto_mark("apply", "warn" if failed else "done")
+        self._auto_finish(T.AUTO_FAILED_WARN.format(n=failed) if failed else "")
+
+    # ---- 대용량: 질문 두 개 -> 폴더 -> 미리보기 -> (복사 시작 직전 확인) -> 복사 / 랜선 새 PC 쪽은 목록·폴더 -> 검사
+    def _auto_begin_transfer(self) -> None:
+        self._auto_wait("questions", "questions")
+
+    def auto_answer_questions(self, mode: str, stage: int) -> None:
+        a = self.auto
+        if a is None or a.gate != "questions":
+            raise GuardError(T.G_NOT_IN_LIST)
+        if mode not in (T.MODE_EXTERNAL, T.MODE_NETWORK) or stage not in (1, 2):
+            raise GuardError(T.G_NOT_IN_LIST)
+        self.set_transfer_flow(mode, stage)
+        self.set_transfer_options(False, False, False)  # 추천 설정: 클라우드 전용 파일 제외, 처음부터 다시 확인 안 함, 조각내기 안 함
+        a.steps = [AutoStep(k, t) for k, t in T.AUTO_STEPS["receive" if self.is_verify_flow() else "transfer"]]
+        self._auto_mark("questions", "done", self.flow_title())
+        self._auto_wait("folders", "folders")
+
+    def auto_set_folders(self, first: str, second: str) -> None:
+        """복사: (원본, 대상) / 랜선 새 PC 쪽: (확인용 목록 파일, 검사할 폴더). 점검에 통과해야 이어간다."""
+        a = self.auto
+        if a is None or a.gate != "folders":
+            raise GuardError(T.G_NOT_IN_LIST)
+        s = self.state
+        if self.is_verify_flow():
+            s.verify_manifest, s.verify_target = first, second
+            check = self.check_verify_inputs(first, second)
+        else:
+            s.transfer_src, s.transfer_dst = first, second
+            check = self.check_transfer_paths(first, second)
+        if not check.ok:
+            raise GuardError(" ".join(t for ok, t in check.lines if not ok))
+        self._auto_mark("folders", "done")
+        if self.is_verify_flow():
+            a.phase = "verify"
+            self._auto_wait("check", "verify_confirm")
+        else:
+            a.phase = "preview"
+            self._auto_start("preview", self.start_transfer, dry_run=True)
+
+    def auto_confirm(self, yes: bool) -> None:
+        """내보내기/복사/검사를 시작하기 직전의 확인. 사람이 '예'라고 답해야만 시작한다."""
+        a = self.auto
+        if a is None or a.status != "waiting" or a.gate not in ("export_confirm", "transfer_confirm", "verify_confirm"):
+            raise GuardError(T.G_NOT_IN_LIST)
+        gate = a.gate
+        if not yes:
+            what = (T.AUTO_EXPORT_DECLINED if gate == "export_confirm"
+                    else T.AUTO_TR_PREVIEW_DECLINED if gate == "transfer_confirm" else T.AUTO_STOPPED_USER)
+            self._auto_stop(what, T.AUTO_STOPPED_USER_HOW, by_user=True)
+            return
+        if gate == "export_confirm":
+            self._auto_start("export", self.start_export, a.export_path, write_confirmed=True, resume=True)
+        elif gate == "transfer_confirm":
+            a.phase = "copy"
+            self._auto_start("copy", self.start_transfer, dry_run=False, write_confirmed=True, strict=False, include_cloud=False,
+                             split_large=False)
+        else:
+            a.phase = "verify"
+            self._auto_start("check", self.start_verify)
+
+    def _auto_on_transfer_done(self, rep: Any) -> None:
+        a = self.auto
+        if a.flow != "transfer":
+            return
+        s, sm = self.state, self.transfer_summary()
+        bad = sm.get("mismatch", 0) + sm.get("missing", 0) + sm.get("failed", 0)
+        if a.phase == "preview":
+            if s.transfer_blocked:
+                how = T.AUTO_TR_FAT32_HOW if s.transfer_blocked == T.WHY_FAT32 else T.AUTO_TR_BLOCKED_HOW
+                self._auto_stop(s.transfer_blocked, how, manual=S.TRANSFER)
+                return
+            if bad:
+                self._auto_stop(T.AUTO_TR_PREVIEW_PROBLEM.format(n=bad), T.AUTO_TR_PREVIEW_PROBLEM_HOW, manual=S.TRANSFER)
+                return
+            c = sm["counts"]
+            note = T.AUTO_TR_PREVIEW_NOTE.format(new=c.get("would_copy", 0), over=c.get("would_overwrite", 0),
+                                                 same=c.get("skipped_identical", 0))
+            if sm["cloud_only"]:
+                note += " · " + T.AUTO_TR_CLOUD_NOTE.format(n=sm["cloud_only"])
+            self._auto_mark("preview", "done", note)
+            self._auto_wait("copy", "transfer_confirm")
+            return
+        key = "copy" if a.phase == "copy" else "check"
+        warn = f"{T.AUTO_TR_FAIL_WHAT.format(n=bad)} {T.AUTO_TR_FAIL_HOW}" if bad else ""
+        self._auto_mark(key, "warn" if bad else "done")
+        self._auto_mark("result", "warn" if bad else "done")
+        self._auto_finish(warn)
+
+    def auto_result_lines(self) -> list[str]:
+        """끝난 뒤 진행 화면에 보여 줄 결과 줄(요약 + 안내)."""
+        a = self.auto
+        if a is None or a.status != "done":
+            return []
+        if a.flow == "old":
+            m = getattr(self.state.export_result, "manifest", None)
+            if not isinstance(m, dict):
+                return []
+            return [T.EXP_DONE.format(path=self.state.export_output), T.result_line(len(m["files"]), len(m["skipped"]), len(m["failed"]))]
+        if a.flow == "transfer" and self.state.transfer_report is not None:
+            ok, skipped, failed = self.transfer_counts()
+            return [T.result_line(ok, skipped, failed), *self.flow_notes()]
+        return []
