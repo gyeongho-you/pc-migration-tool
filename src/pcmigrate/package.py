@@ -859,8 +859,12 @@ def export_package(rules: list[Rule], out: Path, programs: list[Program],
                    savepoint_bytes: int = SAVEPOINT_BYTES, savepoint_seconds: float = SAVEPOINT_SECONDS,
                    notice: Callable[[str], None] | None = None,
                    clock: Callable[[], float] = time.monotonic,
-                   dest_info_fn: Callable[[str], fs.DestInfo] | None = None) -> dict:
+                   dest_info_fn: Callable[[str], fs.DestInfo] | None = None,
+                   stage_dir: Path | str | None = None) -> dict:
     """감지된 프로그램의 규칙(rules)으로 설정 패키지를 만든다. manifest dict 반환.
+
+    stage_dir: 64MB 를 넘는 파일을 담기 전에 임시로 읽어 두는 폴더의 위치(기본: 출력 파일이 있는 폴더). 출력 드라이브가 느리거나
+    여유가 적을 때 로컬 디스크를 지정한다. 원본 폴더 안은 허용하지 않고, 그 안에 만든 임시 폴더는 끝나면 항상 지운다.
 
     progress_info 가 있으면 파일 찾기 -> 담기 -> 검사 단계의 진행(파일 수, 현재 파일, 분류별 개수)을 알린다(GUI 현황 카드용).
 
@@ -879,7 +883,7 @@ def export_package(rules: list[Rule], out: Path, programs: list[Program],
         raise IsADirectoryError(errno.EISDIR, "대상이 폴더입니다", str(out))
     args = (rules, out, programs, winget_text, expand, winget_list_text, extras, now, progress_info)
     kw = dict(compress=compress, savepoint_bytes=savepoint_bytes, savepoint_seconds=savepoint_seconds,
-              notice=notice, clock=clock, dest_info_fn=dest_info_fn)
+              notice=notice, clock=clock, dest_info_fn=dest_info_fn, stage_dir=stage_dir)
     lock = _OutputLock(out)
     lock.acquire()  # 같은 출력 이름으로 동시에 내보내면 .part 를 서로 망가뜨린다(R1-6)
     try:
@@ -896,7 +900,7 @@ def export_package(rules: list[Rule], out: Path, programs: list[Program],
 
 
 def _export_once(rules, out, programs, winget_text, expand, winget_list_text, extras, now, progress_info, *,
-                 resume, compress, savepoint_bytes, savepoint_seconds, notice, clock, dest_info_fn=None) -> dict:
+                 resume, compress, savepoint_bytes, savepoint_seconds, notice, clock, dest_info_fn=None, stage_dir=None) -> dict:
     part, jpath = part_paths(out)
     manifest: dict = {
         "format": FORMAT_VERSION,
@@ -910,8 +914,14 @@ def _export_once(rules, out, programs, winget_text, expand, winget_list_text, ex
         "manual_warnings": [],
     }
     out.parent.mkdir(parents=True, exist_ok=True)
-    _cleanup_stale_stages(out.parent)  # 강제 종료로 남은 이전 임시 폴더 정리(R1-7)
-    stage = tempfile.mkdtemp(prefix=f"{STAGE_PREFIX}{os.getpid()}-", dir=out.parent)  # 큰 파일을 읽어 두는 전용 임시 폴더(항상 삭제)
+    stage_parent = Path(stage_dir) if stage_dir else out.parent
+    if stage_dir and os.path.lexists(stage_parent) and not stage_parent.is_dir():
+        raise PackageError(f"임시 폴더(--stage-dir)가 폴더가 아닙니다: {stage_dir}")
+    if not stage_dir:
+        _cleanup_stale_stages(out.parent)  # 강제 종료로 남은 이전 임시 폴더 정리(R1-7)
+    # 큰 파일을 읽어 두는 전용 임시 폴더(항상 삭제). 원본 폴더 안이 아닌지 확인한 뒤에 만들기 위해 이름만 정해 둔다.
+    stage = os.path.join(os.path.abspath(stage_parent), f"{STAGE_PREFIX}{os.getpid()}-{os.urandom(4).hex()}")
+    stage_made = False
     zf: _PartZip | None = None
     fobj = None
     journal: _Journal | None = None
@@ -950,6 +960,17 @@ def _export_once(rules, out, programs, winget_text, expand, winget_list_text, ex
         for r in roots:  # 출력이 백업 대상 폴더 안이면 자기 자신을 담게 되므로 시작하지 않는다
             if _within(out, r) and Path(os.path.realpath(r)).is_dir():
                 raise PackageError(f"출력 파일이 백업할 폴더 안에 있습니다: {out} (폴더: {r}). 백업 대상 밖(예: 다른 드라이브나 문서 폴더)에 저장하세요.")
+            if _within(stage_parent, r) and Path(os.path.realpath(r)).is_dir():  # 원본은 읽기만: 원본 폴더 안에는 임시 폴더도 만들지 않는다
+                raise PackageError(f"임시 폴더(--stage-dir)가 백업할 폴더 안에 있습니다: {stage_parent} (폴더: {r}). "
+                                   "백업 대상 밖(예: 로컬 디스크의 다른 폴더)을 지정하세요.")
+        try:  # 원본/출력 위치 점검을 통과한 뒤에야 임시 폴더를 만든다(원본 폴더 안에는 아무것도 만들지 않는다)
+            if stage_dir:
+                stage_parent.mkdir(parents=True, exist_ok=True)
+                _cleanup_stale_stages(stage_parent)
+            os.mkdir(stage, 0o700)
+        except OSError as e:
+            raise PackageError(f"임시 폴더(--stage-dir)를 만들 수 없습니다: {stage_parent} ({e.strerror or e})") from e
+        stage_made = True
         total_files = sum(len(g) for g in groups)
         total_bytes = biggest = 0
         for g in groups:
@@ -982,7 +1003,8 @@ def _export_once(rules, out, programs, winget_text, expand, winget_list_text, ex
         rs = _prepare_part(part, jpath, head, fp_info, by_arc, resume)
         kept_bytes = sum(e["size"] for e in rs.kept.values())
         try:
-            _check_export_space(out, total_bytes - kept_bytes, biggest, compress, dest_info_fn, notice)
+            _check_export_space(out, total_bytes - kept_bytes, biggest, compress, dest_info_fn, notice,
+                                stage_parent=stage_parent if stage_dir else None)
         except PackageError:
             if rs.journal is not None:
                 rs.journal.close()
@@ -1121,7 +1143,8 @@ def _export_once(rules, out, programs, winget_text, expand, winget_list_text, ex
     finally:
         if journal is not None:
             journal.close()
-        shutil.rmtree(stage, ignore_errors=True)
+        if stage_made:
+            shutil.rmtree(stage, ignore_errors=True)
     return manifest
 
 
@@ -1129,7 +1152,8 @@ SPACE_FACTOR_DEFLATE = 0.5  # 압축하는 경우 필요한 공간의 하한 추
 
 
 def _check_export_space(out: Path, need_bytes: int, biggest: int, compress: str,
-                        dest_info_fn: Callable[[str], fs.DestInfo] | None, notice: Callable[[str], None] | None) -> None:
+                        dest_info_fn: Callable[[str], fs.DestInfo] | None, notice: Callable[[str], None] | None,
+                        stage_parent: Path | None = None) -> None:
     """출력 위치의 여유 공간/FAT32 4GB 한계를 만들기 전에 점검한다(transfer 와 같은 fs.check_space 사용, R1-10).
 
     zip 으로 얼마나 줄지는 알 수 없으므로, 압축하지 않는 설정이면 원본 총량을, 압축하면 그 절반을 최소 필요량으로 본다.
@@ -1138,7 +1162,15 @@ def _check_export_space(out: Path, need_bytes: int, biggest: int, compress: str,
         return
     dest = (dest_info_fn or fs.describe_destination)(str(out.parent))
     factor = 1.0 if compress == "never" else SPACE_FACTOR_DEFLATE
-    required = int(need_bytes * factor) + (biggest if biggest > SPOOL_MAX else 0)
+    spool = biggest if biggest > SPOOL_MAX else 0
+    other_stage = stage_parent is not None and fs.volume_root(stage_parent).casefold() != fs.volume_root(out.parent).casefold()
+    if other_stage and spool:  # 임시 폴더가 다른 드라이브면 가장 큰 파일 하나 분량은 그쪽 여유 공간에서 따로 본다
+        sd = (dest_info_fn or fs.describe_destination)(str(stage_parent))
+        if sd.free is not None and sd.free < spool:
+            raise PackageError(f"임시 폴더(--stage-dir)가 있는 드라이브의 여유 공간이 부족합니다. 가장 큰 파일 하나({fmt_bytes(spool)})를 "
+                               f"잠시 읽어 둘 공간이 필요한데 현재 여유는 {fmt_bytes(sd.free)} 입니다. 여유가 있는 드라이브의 폴더를 지정하거나 "
+                               "--stage-dir 를 빼세요(출력 폴더를 씁니다).")
+    required = int(need_bytes * factor) + (0 if other_stage else spool)
     sc = fs.check_space(dest, required, need_bytes)
     if sc.fat32_blocked:
         raise PackageError(f"저장할 드라이브가 FAT32 라 4GB 가 넘는 패키지를 만들 수 없습니다(담을 파일 약 {fmt_bytes(need_bytes)}). "
@@ -1352,6 +1384,20 @@ def restore_denied(rel: str, target: Path, rule: Rule | None, base: str) -> str 
     return None
 
 
+GIT_CONFIG_WARNING = ("Git 설정 파일은 명령 실행 설정(core.sshCommand, alias 의 !명령 등)이 들어 있을 수 있어 "
+                      "복원 전에 내용을 확인하세요")
+
+
+def is_git_config_name(name: str) -> bool:
+    """.gitconfig 와 .gitconfig 로 시작하는 이름(.gitconfig-work 등). Git 이 읽어 명령을 실행할 수 있는 설정 파일이다."""
+    return name.casefold().startswith(".gitconfig")
+
+
+def git_config_targets(items: list[dict]) -> list[str]:
+    """복원 계획에서 실제로 복원될(거부/링크 거부가 아닌) Git 설정 파일의 대상 경로."""
+    return [it["target"] for it in items if it.get("status") not in (DENIED, REJECTED) and is_git_config_name(Path(it["target"]).name)]
+
+
 @dataclass
 class ImportPlan:
     manifest: dict
@@ -1361,6 +1407,11 @@ class ImportPlan:
     @property
     def warnings(self) -> list[dict]:
         return self.manifest.get("manual_warnings", [])
+
+    @property
+    def git_config_warning(self) -> str:
+        """복원할 항목에 Git 설정 파일(.gitconfig)이 있으면 한 줄 경고, 없으면 빈 문자열."""
+        return GIT_CONFIG_WARNING if git_config_targets(self.items) else ""
 
 
 def plan_import(path: Path, rules: list[Rule], expand: Expand = expand_env) -> ImportPlan:
@@ -1469,6 +1520,8 @@ def apply_import(path: Path, plan: ImportPlan,
     if plan.problems:
         raise PackageError("검증 실패 상태에서는 복원할 수 없습니다")
     report = Report(dry_run=False)
+    if plan.git_config_warning:  # 복원은 허용하되 내용을 확인하라고 알린다(GUI 는 이 키를 읽는다)
+        report.meta.update(git_config_warning=plan.git_config_warning, git_config_files=git_config_targets(plan.items))
     tracker = ProgressTracker("restore", sum(i["size"] for i in plan.items), len(plan.items))
     last = [0.0]
 

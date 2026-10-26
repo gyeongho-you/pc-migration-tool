@@ -9,6 +9,8 @@
 - 네트워크(공유 폴더)로 복사할 때는 대상을 네트워크로 다시 읽지 않도록 검사를 미루고(해시 목록 manifest_out),
   새 PC 에서 목록과 비교한다(verify).
 - OneDrive 클라우드 전용(온디맨드) 파일은 기본으로 건너뛰고 cloud_only 로 기록한다.
+- 옵션 split_large(--split-large): 4GiB-1 바이트를 넘는 파일은 robocopy 에서 빼고 split.py 가 <이름>.pcm001... 조각으로 나눠 쓴다.
+  조각 단위로 이어받고(상태 파일에 조각별 기록), 조각 해시/전체 해시는 해시 목록(parts)에 기록된다. 새 PC 에서 pcmigrate join 으로 합친다.
 - 전송 중 시스템 절전을 막고(SetThreadExecutionState), 끝나면 반드시 되돌린다.
 """
 from __future__ import annotations
@@ -25,7 +27,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from . import failure, fs
+from . import failure, fs, split
 from .cancel import Cancelled
 from .copier import (CLOUD_ONLY, FAILED, MISMATCH, MISSING, PENDING_VERIFY, SKIPPED_SAME, VERIFIED, WOULD_COPY,
                      WOULD_OVERWRITE, FileResult, IoStats, Report, copy_verified, repair_file, sha256_file, verify_file)
@@ -660,7 +662,7 @@ def transfer(src: Path, dst: Path, *, dry_run: bool = False, include_cloud: bool
              verify_dest: bool | None = None, copy_mode: str = "restartable",
              retries: int | None = None, wait: int | None = None,
              clock: Callable[[], float] = time.monotonic, alive_fn: Callable[[], bool] | None = None,
-             min_report_interval: float = 1.0, copy_threads: int | None = None) -> Report:
+             min_report_interval: float = 1.0, copy_threads: int | None = None, split_large: bool = False) -> Report:
     """src 폴더를 dst 로 복사하고 SHA-256 으로 검사한다.
 
     - strict: 상태 파일을 믿지 않고 모든 파일을 다시 검사하고, 내용이 어긋난 파일은 원본에서 다시 복사(.bak 보존)한다.
@@ -671,6 +673,7 @@ def transfer(src: Path, dst: Path, *, dry_run: bool = False, include_cloud: bool
       대상이 네트워크 경로이고 목록을 만드는 경우 대상 검사를 미룬다(네트워크로 다시 읽지 않음).
     - use_manifest: 원본 해시를 이 목록에서 가져와 원본을 다시 읽지 않는다(외장 드라이브 2단계: 외장에서 새 PC 로 복사).
     - copy_mode: restartable(/Z) | normal | unbuffered(/J).
+    - split_large: 4GiB-1 바이트를 넘는 파일을 조각(.pcm001...)으로 나눠 저장한다(FAT32 대상 포함). 끄면 동작이 전과 같다.
     """
     src, dst = Path(src), Path(dst)
     if not src.is_dir():
@@ -721,6 +724,17 @@ def transfer(src: Path, dst: Path, *, dry_run: bool = False, include_cloud: bool
     skipped_cloud = [] if include_cloud else scan.cloud
     total_bytes = scan.total_bytes + (scan.cloud_bytes if include_cloud else 0)
     detail_ok = len(entries) <= MAX_DETAIL_RESULTS
+    sctx = SplitCtx(split.part_size()) if split_large else None
+    plain = entries  # robocopy 가 복사하는 파일(분할 대상 제외)
+    if sctx is not None:
+        big = [e for e in entries if split.needs_split(e[1])]
+        if big:
+            sctx.entries = big
+            plain = [e for e in entries if not split.needs_split(e[1])]
+            sctx.bytes = sum(e[1] for e in big)
+            sctx.parts_total = sum(len(split.part_sizes(e[1], sctx.psz)) for e in big)
+        report.meta.update(split_large=True, split_threshold=split.split_threshold(), split_part_size=sctx.psz,
+                           split_files=len(big), split_parts=sctx.parts_total, split_bytes=sctx.bytes)
     if scan.cloud:
         warn(f"OneDrive 클라우드 전용 파일 {len(scan.cloud)}개 감지: "
              + ("--include-cloud 로 포함됩니다(대량 다운로드 주의)." if include_cloud else "기본으로 건너뜁니다."))
@@ -739,22 +753,29 @@ def transfer(src: Path, dst: Path, *, dry_run: bool = False, include_cloud: bool
     say(f"원본 조사 완료: 파일 {len(entries):,}개, 총 {fmt_bytes(total_bytes)} (조사 {scan.seconds:.0f}초).")
 
     # ---- 파일 시스템/여유 공간 사전 검사(복사 전에 막는다). export 와 같은 fs.check_space 를 쓴다
-    sc0 = fs.check_space(dest, 0, scan.max_size)
+    biggest = scan.max_size if sctx is None or not sctx.entries else max([e[1] for e in plain] + [sctx.psz])
+    sc0 = fs.check_space(dest, 0, biggest)
     if sc0.fat32_blocked:
         big = sum(1 for _r, s, _m in entries if s > fs.FAT4G)
         report.meta.update(fat32_blocked=True, fat32_big_files=big)
         msg = (f"대상 드라이브가 FAT32 라서 4GB 보다 큰 파일 {big}개({fmt_bytes(scan.max_size)} 포함)를 저장할 수 없습니다. "
-               "NTFS 로 포맷하거나 NTFS 드라이브를 쓰세요.")
+               "NTFS 로 포맷하거나 NTFS 드라이브를 쓰세요. 포맷이 어려우면 --split-large 옵션으로 큰 파일을 조각(.pcm001 ...)으로 나눠 "
+               "저장하고, 새 PC 에서 pcmigrate join 으로 합칠 수도 있습니다.")
         if dry_run:
             warn(msg)
         else:
             raise TransferError(msg)
     elif sc0.exfat:
         warn("대상 드라이브가 exFAT 입니다. 4GB 이상 파일은 저장되지만 전원이 갑자기 꺼지면 손상되기 쉽습니다. 가능하면 NTFS 를 권장합니다.")
+    if sctx is not None and sctx.entries:
+        warn(f"--split-large: 4GB 넘는 파일 {len(sctx.entries)}개({fmt_bytes(sctx.bytes)})를 조각 {sctx.parts_total}개(조각 하나 최대 "
+             f"{fmt_bytes(sctx.psz)})로 나눠 저장합니다. 새 PC 에서 pcmigrate join 으로 합쳐야 원래 파일이 됩니다.")
     dscan: DestScan | None = None
     if not verify_only:
         say("대상에 이미 있는 파일을 확인하는 중입니다…")
-        dscan = _scan_dest(entries, dst, total_bytes, cancel)  # 복사 여부 판단 기준(_differs 와 같음)을 한 번만 훑는다
+        dscan = _scan_dest(plain, dst, total_bytes - (sctx.bytes if sctx else 0), cancel)  # 복사 여부 판단 기준(_differs 와 같음)을 한 번만 훑는다
+        if sctx is not None and sctx.entries:  # 조각은 이미 있는(크기가 맞는) 조각만큼 덜 쓴다
+            dscan.need += sum(e[1] - split.parts_bytes_present(_join(str(dst), e[0]), e[1], sctx.psz) for e in sctx.entries)
         required = dscan.need + int(total_bytes * SPACE_MARGIN)
         sc = fs.check_space(dest, required, scan.max_size)
         report.meta.update(dest_free_bytes=dest.free, required_bytes=required, space_blocked=sc.space_blocked,
@@ -775,7 +796,7 @@ def transfer(src: Path, dst: Path, *, dry_run: bool = False, include_cloud: bool
         if progress_info:
             progress_info(ProgressInfo("compare", 0, 0, 0, len(entries), message="복사될 파일을 비교하는 중입니다…",
                                        skipped=len(skipped_cloud)))
-        return _dry_run(report, entries, skipped_cloud, scan, dst, runner, copy_mode, network, warn, dscan)
+        return _dry_run(report, plain, skipped_cloud, scan, dst, runner, copy_mode, network, warn, dscan, sctx)
 
     # ---- 실제 실행
     _friendly_makedirs(dst)
@@ -800,7 +821,12 @@ def transfer(src: Path, dst: Path, *, dry_run: bool = False, include_cloud: bool
         mreader = ManifestReader(Path(use_manifest))
         report.meta["original_root"] = str(mreader.header.get("source_root", ""))
         for row in mreader.rows():
-            manifest_map[row["rel"]] = (row["size"], row["sha256"])
+            if row.get("parts"):  # 분할 파일(--split-large)은 조각 파일을 각각 일반 파일로 본다(외장 드라이브에는 조각으로 들어 있다)
+                folder = row["rel"].rpartition("/")[0]
+                for part in row["parts"]:
+                    manifest_map[f"{folder}/{part['name']}" if folder else part["name"]] = (part["size"], part["sha256"])
+            else:
+                manifest_map[row["rel"]] = (row["size"], row["sha256"])
         report.meta["use_manifest"] = str(use_manifest)
     writer = None
     if manifest_out:
@@ -815,20 +841,14 @@ def transfer(src: Path, dst: Path, *, dry_run: bool = False, include_cloud: bool
             journal = dst / PRESERVE_NAME
             report.meta.update(preserved_existing_count=0, preserved_existing=[], preserve_resumed=False)
             if mode == "copy":
-                n_pres, listed, resumed_run = _preserve_existing(entries, src, dst, journal, cancel, say, dscan, warn)
+                n_pres, listed, resumed_run = _preserve_existing(plain, src, dst, journal, cancel, say, dscan, warn)
                 report.meta.update(preserved_existing_count=n_pres, preserved_existing=listed, preserve_resumed=resumed_run)
                 if n_pres:
                     warn(f"대상에 있던 같은 이름의 다른 파일 {n_pres}개를 .bak 으로 보존했습니다(덮어쓰지 않았습니다).")
                 t0 = clock()
                 tracker = ProgressTracker("copy", total_bytes, len(entries), clock=clock, slow_bps=kind_bps, slow_hint=kind_hint)
 
-                def on_line(line: str) -> None:
-                    size = parse_copy_line(line)
-                    if size is None:
-                        return
-                    tracker.add(size, 1)
-                    tracker.set_current(parse_copy_path(line) or "")
-                    tracker.note(OK)
+                def emit_copy() -> None:
                     now = clock()
                     with emit_lock:
                         if now - last_emit[0] < min_report_interval:
@@ -839,8 +859,17 @@ def transfer(src: Path, dst: Path, *, dry_run: bool = False, include_cloud: bool
                         progress_info(snap)
                     say(format_info(snap))
 
+                def on_line(line: str) -> None:
+                    size = parse_copy_line(line)
+                    if size is None:
+                        return
+                    tracker.add(size, 1)
+                    tracker.set_current(parse_copy_path(line) or "")
+                    tracker.note(OK)
+                    emit_copy()
+
                 say("복사 도구로 복사하는 중입니다(파일이 크면 오래 걸립니다)…")
-                code, text, runs = _copy_with_robocopy(src, dst, log, skipped_cloud, runner, cancel, copy_mode,
+                code, text, runs = _copy_with_robocopy(src, dst, log, skipped_cloud + (sctx.entries if sctx else []), runner, cancel, copy_mode,
                                                        retries if retries is not None else (10 if network else 3),
                                                        wait if wait is not None else (30 if network else 5), on_line, scan, alive, threads)
                 ok, notes = interpret_exit(code)
@@ -857,6 +886,16 @@ def transfer(src: Path, dst: Path, *, dry_run: bool = False, include_cloud: bool
                     why = " ".join(f.label for f in found)
                     report.results.append(FileResult(str(src), str(dst), FAILED, reason=found[0].code if found else "robocopy",
                                                      error=f"복사 도구 종료 코드 {code}: {', '.join(notes)}" + (f" ({why})" if why else "")))
+                if sctx is not None and sctx.entries:
+                    say(f"4GB 넘는 파일 {len(sctx.entries)}개를 조각으로 나눠 복사하는 중입니다(파일이 크면 오래 걸립니다)…")
+                    for entry in sctx.entries:
+                        tracker.set_current(_join(str(dst), entry[0]))
+                        r = _split_copy_entry(entry, scan.root, dst, state, sctx, strict=strict, chunk=chunk, cancel=cancel,
+                                              stats=stats, on_bytes=lambda n: (tracker.add(n), emit_copy()), repair=False)
+                        if r is not None and not r.ok and r.reason == failure.DISCONNECTED and not alive():
+                            raise DriveDisconnected(DISCONNECTED_MESSAGE)
+                        tracker.add(0, 1)
+                        emit_copy()
                 copy_seconds = clock() - t0
                 if ok:  # 복사가 끝났다: 다음 실행은 새 복사로 보고 바뀐 파일을 .bak 으로 보존한다
                     try:
@@ -871,7 +910,9 @@ def transfer(src: Path, dst: Path, *, dry_run: bool = False, include_cloud: bool
             _verify_phase(report, entries, scan, dst, state, stats, writer, manifest_map, strict=strict, mode=mode,
                           check_dest=check_dest, workers=workers, chunk=chunk, cancel=cancel, progress=progress,
                           progress_info=progress_info, clock=clock, min_interval=min_report_interval, alive=alive,
-                          detail_ok=detail_ok, kind_bps=kind_bps, kind_hint=kind_hint, warn=warn)
+                          detail_ok=detail_ok, kind_bps=kind_bps, kind_hint=kind_hint, warn=warn, sctx=sctx)
+            if sctx is not None:
+                _note_split_backups(report, sctx, warn)
             verify_seconds = clock() - t1
         report.meta.update(keep_awake=awake.status, copy_seconds=round(copy_seconds, 1), verify_seconds=round(verify_seconds, 1),
                            total_seconds=round(clock() - t_start, 1), io=stats.as_dict())
@@ -915,10 +956,12 @@ def _first(path: Path):
 
 
 def _dry_run(report: Report, entries, skipped_cloud, scan: ScanInfo, dst: Path, runner, copy_mode: str, network: bool,
-             warn: Callable[[str], None] = lambda m: None, dscan: DestScan | None = None) -> Report:
-    """robocopy /L 은 목록 확인용, 리포트는 크기 비교로 만든다. 아무것도 쓰지 않는다."""
+             warn: Callable[[str], None] = lambda m: None, dscan: DestScan | None = None,
+             sctx: "SplitCtx | None" = None) -> Report:
+    """robocopy /L 은 목록 확인용, 리포트는 크기 비교로 만든다. 아무것도 쓰지 않는다. entries 는 분할 대상을 뺀 파일 목록이다."""
     args = base_args(Path(scan.root), dst, None, True, copy_mode)
-    xf = sorted({os.path.basename(scan.abs_path(r)) for r, _s, _m in skipped_cloud})
+    skipped_names = list(skipped_cloud) + (sctx.entries if sctx else [])
+    xf = sorted({os.path.basename(scan.abs_path(r)) for r, _s, _m in skipped_names})
     if xf and sum(len(n) + 3 for n in xf) <= MAX_XF_CHARS:
         args += xf  # 너무 길면 생략: 목록 확인용일 뿐 리포트는 별도로 만든다
     code, _ = _call_runner(runner, args, None)
@@ -939,6 +982,17 @@ def _dry_run(report: Report, entries, skipped_cloud, scan: ScanInfo, dst: Path, 
         if status in (WOULD_COPY, SKIPPED_SAME) and not detail_ok:
             report.counts[status] = report.counts.get(status, 0) + 1
         else:
+            report.results.append(res)
+    if sctx is not None:  # 분할 대상: 조각 이름으로 새로 만든다(같은 이름의 조각이 있으면 실제 복사 때 .bak 으로 보존)
+        for rel, size, mtime in sctx.entries:
+            target = _join(str(dst), rel)
+            n_parts = len(split.part_sizes(size, sctx.psz))
+            same = sum(1 for i in range(1, n_parts + 1) if os.path.lexists(long_path(target + split.part_suffix(i))))
+            res = FileResult(scan.abs_path(rel), target + split.part_suffix(1) + (f" 외 {n_parts - 1}개" if n_parts > 1 else ""),
+                             WOULD_OVERWRITE if same else WOULD_COPY, size)
+            if same:
+                over += 1
+                res.backup = f"같은 이름의 조각 {same}개는 덮어쓰기 전에 .bak 으로 보존됩니다(내용이 같으면 건너뜁니다)"
             report.results.append(res)
     report.meta["would_overwrite_count"] = over
     if over:
@@ -983,13 +1037,14 @@ def _copy_with_robocopy(src: Path, dst: Path, log: Path, cloud: list, runner: Ru
 def _verify_phase(report: Report, entries, scan: ScanInfo, dst: Path, state: State, stats: IoStats, writer,
                   manifest_map, *, strict: bool, mode: str, check_dest: bool, workers: int, chunk: int, cancel,
                   progress, progress_info, clock, min_interval: float, alive, detail_ok: bool, kind_bps: float,
-                  kind_hint: str, warn) -> None:
+                  kind_hint: str, warn, sctx: "SplitCtx | None" = None) -> None:
     """모든 파일을 검사한다(파일 단위 병렬). 상태 파일/해시 목록의 원본 해시는 다시 읽지 않고 재사용한다."""
     dst_root = str(dst)
     retry = mode == "retry-failed"
     verify_only = mode == "verify-only"
     resumed = [0]
     unmatched_manifest = dict(manifest_map) if manifest_map is not None else None
+    split_rels = {e[0] for e in sctx.entries} if sctx is not None and sctx.entries else frozenset()
 
     def reuse_hash(rel: str, size: int, mtime: int) -> str | None:
         if strict:
@@ -1023,10 +1078,22 @@ def _verify_phase(report: Report, entries, scan: ScanInfo, dst: Path, state: Sta
         if progress:
             progress(format_info(snap))
 
+    def count_src(n: int) -> None:
+        stats.add("src", n)
+        on_bytes(n)
+
+    def count_dst(n: int) -> None:
+        stats.add("dst", n)
+        on_bytes(n)
+
     def task(entry):
         rel, size, mtime = entry
         s_path, d_path = _join(scan.root, rel), _join(dst_root, rel)
         tracker.set_current(d_path)
+        if rel in split_rels:
+            return _verify_split_entry(entry, scan.root, dst_root, state, sctx, stats, strict=strict, retry=retry,
+                                       verify_only=verify_only, check_dest=check_dest, chunk=chunk, cancel=cancel,
+                                       reuse_hash=reuse_hash, count_src=count_src, count_dst=count_dst)
         if not strict and not verify_only:
             digest = state.is_verified(rel, size, mtime, d_path)
             if digest is not None:
@@ -1077,7 +1144,8 @@ def _verify_phase(report: Report, entries, scan: ScanInfo, dst: Path, state: Sta
                 state.record(rel, size, mtime, res.sha256, False, res.reason or res.status)
         if writer is not None:
             if res.sha256:
-                writer.write_row(rel, size, mtime, res.sha256)
+                parts = sctx.parts.get(rel) if sctx is not None and res.status in (VERIFIED, PENDING_VERIFY) else None
+                writer.write_row(rel, size, mtime, res.sha256, parts)
             else:
                 writer.note_error()
         if res.status == FAILED and res.reason in ("disconnected",) and not alive():
@@ -1104,3 +1172,198 @@ def _state_conflict(state: State, rel: str, size: int, mtime: int, sha256: str) 
     """상태 파일이 '검사 완료'로 기록한 해시가 지금 원본 해시와 다른데 크기/수정시각은 같은 경우."""
     e = state.files.get(rel)
     return bool(e and e[3] and e[2] != sha256 and e[0] == size and e[1] == mtime)
+
+
+# --------------------------------------------------------------------------- 4GB 분할 파일(--split-large)
+
+@dataclass
+class SplitCtx:
+    """이번 실행의 분할 정보. entries 는 조각으로 나눌 (상대 경로, 크기, 수정시각) 목록."""
+    psz: int
+    entries: list = field(default_factory=list)
+    bytes: int = 0
+    parts_total: int = 0
+    copy_errors: dict[str, FileResult] = field(default_factory=dict)
+    parts: dict[str, list[dict]] = field(default_factory=dict)  # rel -> [{name,size,sha256}]
+    backups: list[tuple[str, str]] = field(default_factory=list)
+    written: int = 0
+    kept: int = 0
+
+
+def _split_copy_entry(entry, src_root: str, dst, state: State, sctx: SplitCtx, *, strict: bool, chunk: int | None, cancel,
+                      stats: IoStats, on_bytes, repair: bool) -> split.SplitCopy:
+    """분할 파일 하나를 조각으로 복사한다(원본은 읽기만). 끝난 조각마다 상태 파일에 '복사 끝, 검사 전'으로 기록한다.
+
+    repair=False(기본): 상태 파일이 '검사 끝'으로 적은 조각, 또는 크기+수정시각이 같은 조각은 건너뛴다(내용 검사는 검사 단계에서).
+    repair=True/strict: 대상 조각을 읽어 해시를 원본과 비교하고 다른 조각만 다시 쓴다(옛 조각은 .bak)."""
+    rel, size, mtime = entry
+    s_path, d_path = _join(src_root, rel), _join(str(dst), rel)
+    deep = strict or repair
+
+    def probe(idx: int, plen: int, target: str):
+        if deep:
+            try:
+                if os.stat(long_path(target)).st_size != plen:
+                    return None, False
+                return sha256_file(Path(target), chunk, cancel, lambda n: stats.add("dst", n)), False
+            except Cancelled:
+                raise
+            except OSError:
+                return None, False
+        h = state.is_verified(split.state_key(rel, idx), plen, mtime, target)
+        if h:
+            return h, False
+        try:
+            st = os.stat(long_path(target))
+        except OSError:
+            return None, False
+        return None, st.st_size == plen and abs(st.st_mtime_ns - mtime) <= MTIME_TOLERANCE_NS
+
+    def on_part(idx: int, plen: int, digest: str, written: bool) -> None:
+        state.record(split.state_key(rel, idx), plen, mtime, digest, False, "pending")
+
+    try:
+        os.makedirs(long_path(os.path.dirname(d_path)), exist_ok=True)
+    except OSError as e:
+        f = failure.classify(e, d_path)
+        r = split.SplitCopy(error=f"{f.text} ({os.path.dirname(d_path)})", reason=f.code)
+    else:
+        r = split.copy_split(s_path, d_path, size, mtime, psz=sctx.psz, chunk=chunk, cancel=cancel, on_bytes=on_bytes,
+                             stats=stats, probe=probe, on_part=on_part)
+    if r.ok:
+        sctx.parts[rel] = r.parts
+        sctx.copy_errors.pop(rel, None)
+        state.record(rel, size, mtime, r.sha256, False, "pending")
+        sctx.written += r.written
+        sctx.kept += r.kept
+    else:
+        sctx.copy_errors[rel] = FileResult(s_path, d_path, FAILED, size, reason=r.reason, error=r.error)
+    sctx.backups += r.backups
+    return r
+
+
+def _verify_split_entry(entry, src_root: str, dst_root: str, state: State, sctx: SplitCtx, stats: IoStats, *, strict: bool,
+                        retry: bool, verify_only: bool, check_dest: bool, chunk: int | None, cancel, reuse_hash, count_src,
+                        count_dst) -> tuple[FileResult, bool]:
+    """분할 파일 하나의 검사: 대상 조각이 모두 있고(크기), 조각별 해시와(이어 읽은) 전체 해시가 원본과 같은지 본다.
+    원본 해시는 상태 파일/해시 목록/방금 복사하며 구한 값을 쓰고, 없으면 원본을 한 번 읽어 구한다."""
+    rel, size, mtime = entry
+    s_path, d_path = _join(src_root, rel), _join(dst_root, rel)
+    err = sctx.copy_errors.get(rel)
+    if err is not None:
+        return err, False
+    sizes = split.part_sizes(size, sctx.psz)
+    names = [(d_path + split.part_suffix(i), n) for i, n in enumerate(sizes, 1)]
+    keys = [split.state_key(rel, i) for i in range(1, len(sizes) + 1)]
+    prior = state.files.get(rel)
+    res = FileResult(s_path, d_path, FAILED, size)
+
+    def parts_from(per: list[str]) -> list[dict]:
+        return [{"name": os.path.basename(p), "size": n, "sha256": h} for (p, n), h in zip(names, per)]
+
+    if not strict and not verify_only and prior and prior[3] and prior[0] == size and prior[1] == mtime:
+        hs = [state.is_verified(k, n, mtime, p) for k, (p, n) in zip(keys, names)]
+        if all(hs):  # 이전 실행에서 검사가 끝난 파일: 대상은 크기/수정시각만 가볍게 확인
+            sctx.parts[rel] = parts_from(hs)
+            res.status, res.sha256 = VERIFIED, prior[2]
+            return res, True
+    if retry and not (prior and (prior[3] or prior[4] == "pending")):
+        r = _split_copy_entry(entry, src_root, dst_root, state, sctx, strict=strict, chunk=chunk, cancel=cancel, stats=stats,
+                              on_bytes=count_src, repair=True)
+        if not r.ok:
+            return sctx.copy_errors[rel], False
+
+    def expected() -> tuple[str, list[str]] | FileResult:
+        whole = reuse_hash(rel, size, mtime)
+        recs = [state.files.get(k) for k in keys]
+        if whole and not strict and all(r and r[0] == n and r[1] == mtime for r, n in zip(recs, sizes)):
+            return whole, [r[2] for r in recs]
+        try:
+            out = split.hash_ranges(s_path, sizes, chunk=chunk, cancel=cancel, on_bytes=count_src)
+            stats.file_read("src")
+            return out
+        except Cancelled:
+            raise
+        except split.SourceChangedError:
+            res.reason, res.error = "source_changed", "원본 파일의 크기가 조사한 뒤 바뀌었습니다. 원본을 쓰는 프로그램을 닫고 다시 실행하세요"
+            return res
+        except OSError as e:
+            f = failure.classify(e, s_path)
+            res.reason, res.error = f.code, f"{f.text} ({s_path})"
+            return res
+
+    def check(whole: str, per: list[str]) -> FileResult:
+        out = FileResult(s_path, d_path, FAILED, size, whole)
+        where = d_path
+        try:
+            for i, (p, n) in enumerate(names, 1):
+                where = p
+                try:
+                    st = os.stat(long_path(p))
+                except FileNotFoundError:
+                    out.status, out.reason = MISSING, failure.MISSING_DEST
+                    out.error = (f"조각 {i:03d}/{len(names):03d}({os.path.basename(p)})이 대상에 없습니다. "
+                                 "같은 명령을 다시 실행하면 이어받습니다(--retry-failed 도 가능)")
+                    return out
+                if not os.path.isfile(long_path(p)) or st.st_size != n:
+                    out.status, out.reason = MISMATCH, failure.SIZE_MISMATCH
+                    out.error = f"조각 {i:03d}({os.path.basename(p)})의 크기가 원본과 다릅니다(원본 {n}바이트, 여기 {st.st_size}바이트)"
+                    return out
+            if not check_dest:
+                out.status = PENDING_VERIFY
+                return out
+            whole_d, per_d = split.hash_parts([p for p, _n in names], chunk=chunk, cancel=cancel, on_bytes=count_dst)
+            stats.file_read("dst")
+            for i, (h_d, h_s) in enumerate(zip(per_d, per), 1):
+                if h_d != h_s:
+                    out.status, out.reason = MISMATCH, failure.MISMATCH
+                    out.error = (f"조각 {i:03d}({os.path.basename(names[i - 1][0])})의 내용이 원본과 다릅니다(SHA-256 불일치). "
+                                 "--strict 로 다시 실행하면 어긋난 조각만 원본에서 다시 복사합니다")
+                    return out
+            if whole_d != whole:
+                out.status, out.reason = MISMATCH, failure.MISMATCH
+                out.error = failure.REASONS[failure.MISMATCH].text + " (조각을 이어 붙인 전체 SHA-256 불일치)"
+                return out
+            out.status = VERIFIED
+        except Cancelled:
+            raise
+        except OSError as e:
+            bad = getattr(e, "filename", None) or where
+            f = failure.classify(e, bad)
+            out.status, out.reason, out.error = FAILED, f.code, f"{f.text} ({bad})"
+        return out
+
+    got = expected()
+    if isinstance(got, FileResult):
+        return got, False
+    whole, per = got
+    res = check(whole, per)
+    if res.status in (MISMATCH, MISSING) and ((strict and res.status == MISMATCH) or retry):
+        r = _split_copy_entry(entry, src_root, dst_root, state, sctx, strict=strict, chunk=chunk, cancel=cancel, stats=stats,
+                              on_bytes=count_src, repair=True)
+        if not r.ok:
+            return sctx.copy_errors[rel], False
+        whole, per = r.sha256, [p["sha256"] for p in r.parts]
+        res = check(whole, per)
+        if res.status == VERIFIED:
+            res.backup = r.backups[0][1] if r.backups else ""
+    sctx.parts[rel] = parts_from(per)
+    for k, (_p, n), h in zip(keys, names, per):
+        if res.status == VERIFIED:
+            state.record(k, n, mtime, h, True)
+        elif res.status == PENDING_VERIFY:
+            state.record(k, n, mtime, h, False, "pending")
+    return res, False
+
+
+def _note_split_backups(report: Report, sctx: SplitCtx, warn: Callable[[str], None]) -> None:
+    """조각 덮어쓰기 전 .bak 보존과 조각 개수/크기 요약을 리포트 meta 에 남긴다."""
+    if sctx.backups:
+        n = report.meta.get("preserved_existing_count", 0) + len(sctx.backups)
+        listed = list(report.meta.get("preserved_existing", []))
+        for target, bak in sctx.backups:
+            if len(listed) < MAX_PRESERVED_LISTED:
+                listed.append({"file": target, "backup": bak})
+        report.meta.update(preserved_existing_count=n, preserved_existing=listed)
+        warn(f"대상에 있던 같은 이름의 다른 조각 {len(sctx.backups)}개를 .bak 으로 보존했습니다(덮어쓰지 않았습니다).")
+    report.meta.update(split_written_parts=sctx.written, split_kept_parts=sctx.kept)

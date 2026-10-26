@@ -61,6 +61,8 @@ def import_lines(r, package: str, report=None) -> list[str]:
         lines += [f"    · {fs.plain_path_text(it['target'])}" for it in denied[:5]]
         if len(denied) > 5:
             lines.append(f"    … 외 {len(denied) - 5}개")
+    if r.git_config_warning:
+        lines.append(f"- [주의] {r.git_config_warning}")
     if report is not None:
         bad = report.failures
         if bad:
@@ -92,6 +94,48 @@ def verify_lines(d: dict, rep) -> list[str]:
     return lines
 
 
+def split_line(d: dict, done: bool) -> list[str]:
+    """--split-large 로 나눈(나눌) 파일 요약(조각 개수/크기). 나눈 파일이 없으면 빈 목록."""
+    n = d.get("split_files") or 0
+    if not n:
+        return []
+    verb = "나눠 저장했습니다" if done else "나눠 저장합니다"
+    line = (f"- 4GB 넘는 파일 {n}개({fmt_bytes(d.get('split_bytes') or 0)})를 조각 {d.get('split_parts', 0)}개"
+            f"(조각 하나 최대 {fmt_bytes(d.get('split_part_size') or 0)}, 이름은 <원래 이름>.pcm001 ...)로 {verb}")
+    if done and d.get("split_kept_parts"):
+        line += f" — 이미 있던 조각 {d['split_kept_parts']}개는 건너뜀"
+    return [line, "  새 PC 에서 pcmigrate join <조각 폴더> --output <합칠 폴더> 로 합쳐야 원래 파일이 됩니다(NTFS 드라이브에 합치세요)."]
+
+
+def join_lines(d: dict, rep, src: str, output: str) -> list[str]:
+    """pcmigrate join 의 사람이 읽는 요약."""
+    counts = d.get("summary", {})
+    bad = len(rep.failures)
+    out = fs.plain_path_text(str(output))
+    if d.get("dry_run"):
+        return [f"미리보기입니다(아무것도 합치지 않았습니다): {fs.plain_path_text(str(src))} → {out}",
+                f"- 합칠 파일 {d.get('groups', 0)}개(조각 {d.get('joined_parts') or 0}개, {fmt_bytes(d.get('join_bytes') or 0)}): "
+                f"새로 만듦 {counts.get('would_copy', 0)}개, 덮어씀(.bak 으로 백업) {counts.get('would_overwrite', 0)}개"
+                + (f", 문제 {bad}개" if bad else ""),
+                "다음 할 일: 이상 없으면 같은 명령에서 --dry-run 만 빼고 실행하세요."]
+    ok = d.get("joined_files", 0)
+    head = "합치기를 마쳤습니다" if not bad else "합치기에서 문제가 있습니다"
+    lines = [f"{head}: {fs.plain_path_text(str(src))} → {out}",
+             f"- 합친 파일 {ok}개(조각 {d.get('joined_parts', 0)}개, {fmt_bytes(d.get('join_bytes') or 0)}), 문제 {bad}개"
+             + (f", 이미 같은 파일이 있어 건너뜀 {counts.get('skipped_identical', 0)}개" if counts.get("skipped_identical") else "")]
+    src_kind = {"manifest": "해시 목록(전체/조각 해시)", "state": "전송 상태 파일의 조각 해시", "none": "없음"}.get(d.get("hash_source", "none"), "없음")
+    lines.append(f"- 내용 대조 기준: {src_kind}"
+                 + (f" — 대조하지 못한 파일 {d['unverified_files']}개(이어 붙인 뒤 다시 읽어 확인만 함)" if d.get("unverified_files") else ""))
+    for n in d.get("notes", []):
+        lines.append(f"- 안내: {n}")
+    if bad:
+        lines.append("다음 할 일: 원인을 해결하고(빠진 조각은 다시 복사) 같은 명령을 다시 실행하세요. 조각은 지우지 않았습니다.")
+    else:
+        lines.append("다음 할 일: 합친 파일을 확인한 뒤 조각 파일(.pcmNNN)은 직접 지워 공간을 확보하세요(도구는 지우지 않습니다). "
+                     "목록이 있으면 pcmigrate verify --manifest <목록> --target <합친 폴더> 로 한 번 더 확인할 수 있습니다.")
+    return lines
+
+
 def transfer_lines(d: dict, rep, src: str, dst: str) -> list[str]:
     counts = d.get("summary", {})
     total, tb = d.get("total_files"), d.get("total_bytes")
@@ -101,6 +145,7 @@ def transfer_lines(d: dict, rep, src: str, dst: str) -> list[str]:
                 f"- 전체 {total if total is not None else '?'}개{size}: 새로 복사 {counts.get('would_copy', 0)}개, "
                 f"덮어쓰기 전 .bak 보존 {counts.get('would_overwrite', 0)}개, 이미 같음 {counts.get('skipped_identical', 0)}개",
                 *( [f"- OneDrive 클라우드 전용(건너뜀) {d['cloud_only_count']}개"] if d.get("cloud_only_count") else []),
+                *split_line(d, False),
                 "다음 할 일: 이상 없으면 같은 명령에서 --dry-run 만 빼고 실행하세요."]
     mode = d.get("mode")
     verb = {"verify-only": "검사를 마쳤습니다", "retry-failed": "실패한 파일을 다시 처리했습니다"}.get(mode, "전송을 마쳤습니다")
@@ -110,6 +155,7 @@ def transfer_lines(d: dict, rep, src: str, dst: str) -> list[str]:
              + (f", 검사 보류 {counts.get('pending_verify', 0)}개" if counts.get("pending_verify") else "")
              + f", 실패 {bad}개"
              + (f", 클라우드 전용 건너뜀 {counts.get('cloud_only', 0)}개" if counts.get("cloud_only") else "")]
+    lines += split_line(d, True)
     trusted = d.get("trusted_state_files")
     if trusted and not d.get("strict"):
         lines.append(f"- 이전 검사 기록을 믿고 다시 읽지 않은 파일 {trusted}개(크기·수정시각이 같음). "

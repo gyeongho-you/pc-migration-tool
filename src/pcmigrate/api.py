@@ -34,6 +34,7 @@ from .package import (COMPRESS_MODES, ImportPlan, PackageError, apply_import, ex
 from .rules import Rule, RuleError, load_rules
 from . import fs
 from .manifest import build_manifest, verify_against_manifest
+from . import split
 from .progress import ProgressInfo
 from .transfer import transfer
 
@@ -267,7 +268,8 @@ def run_transfer(src: str | Path, dst: str | Path, *, dry_run: bool = False, inc
                  verify_only: bool = False, retry_failed: bool = False, workers: int | None = None,
                  chunk: int | None = None, keep_awake: bool = True, manifest_out: str | Path | None = None,
                  use_manifest: str | Path | None = None, verify_dest: bool | None = None,
-                 copy_mode: str = "restartable", copy_threads: int | None = None) -> Report:
+                 copy_mode: str = "restartable", copy_threads: int | None = None,
+                 split_large: bool = False) -> Report:
     """대용량 전송. TransferError/OSError 는 그대로 전파한다. 취소하면 Cancelled(진행 상태는 저장됨).
 
     기본값이 아닌 인자만 하위 함수로 넘기므로 이전 호출 형태가 그대로 동작한다.
@@ -295,6 +297,8 @@ def run_transfer(src: str | Path, dst: str | Path, *, dry_run: bool = False, inc
         kw["copy_mode"] = copy_mode
     if copy_threads:
         kw["copy_threads"] = copy_threads
+    if split_large:  # 4GB 넘는 파일을 조각(.pcm001...)으로 나눠 저장(켠 경우에만 넘긴다)
+        kw["split_large"] = True
     return deps.transfer(Path(src), Path(dst), **kw)
 
 
@@ -316,6 +320,20 @@ def run_verify(manifest: str | Path, target: str | Path, *, workers: int | None 
     deps = deps or Deps()
     return deps.verify(Path(manifest), Path(target), workers=workers, chunk=chunk, cancel=cancel, progress=progress,
                        progress_info=progress_info, find_extras=find_extras)
+
+
+def run_join(src: str | Path, output: str | Path, *, manifest: str | Path | None = None, dry_run: bool = False,
+             chunk: int | None = None, cancel: Callable[[], bool] | None = None,
+             progress: Callable[[str], None] | None = None,
+             dest_info_fn: Callable[[str], fs.DestInfo] | None = None) -> Report:
+    """분할 저장된 조각(.pcm001 ...)을 output 아래에 원래 파일로 합친다. 조각은 읽기만 하고 지우지 않는다.
+
+    src 는 조각이 있는 폴더(하위 폴더 포함) 또는 첫 조각 파일. SplitError 는 ApiError 로 바뀐다."""
+    try:
+        return split.join_all(str(src), str(output), manifest=str(manifest) if manifest else None, dry_run=dry_run,
+                              chunk=chunk, cancel=cancel, progress=progress, dest_info_fn=dest_info_fn)
+    except split.SplitError as e:
+        raise ApiError(str(e)) from e
 
 
 def destination_info(dst: str | Path, deps: Deps | None = None) -> fs.DestInfo:
@@ -491,11 +509,13 @@ def run_export(rules_dir: str | Path, output: str | Path, *, extra: str | Path |
                extra_items: list[ExtraItem] | None = None,
                progress_info: Callable[[ProgressInfo], None] | None = None,
                resume: bool = True, compress: str = "auto",
-               notice: Callable[[str], None] | None = None) -> ExportResult:
+               notice: Callable[[str], None] | None = None,
+               stage_dir: str | Path | None = None) -> ExportResult:
     """설정 패키지 내보내기. OSError(출력 경로 문제)는 전파, 나머지 실패는 ApiError.
 
     resume=True 면 같은 출력 경로의 이전 저장점(.part)을 이어받고, False 면 이전 임시물을 지우고 처음부터 만든다.
     compress 는 auto/always/never. notice 는 '이어서 하는 중' 같은 안내 문장을 받는다.
+    stage_dir 는 64MB 넘는 파일을 담기 전에 임시로 읽어 두는 폴더의 위치(기본: 출력 폴더). 원본 폴더 안은 거부한다.
     """
     deps = deps or Deps()
     if compress not in COMPRESS_MODES:
@@ -515,8 +535,8 @@ def run_export(rules_dir: str | Path, output: str | Path, *, extra: str | Path |
     try:
         kw = {"progress_info": progress_info} if progress_info else {}
         # 기본값이 아닌 선택만 넘기고, 받지 못하는(예전/가짜) export 구현에는 넘기지 않는다
-        want = {"resume": resume, "compress": compress, "notice": notice}
-        defaults = {"resume": True, "compress": "auto", "notice": None}
+        want = {"resume": resume, "compress": compress, "notice": notice, "stage_dir": str(stage_dir) if stage_dir else None}
+        defaults = {"resume": True, "compress": "auto", "notice": None, "stage_dir": None}
         try:
             params = inspect.signature(deps.export).parameters
             varkw = any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
@@ -551,6 +571,11 @@ class ImportResult:
         """보안상 복원하지 않는(항목별 '복원 안 함') 계획 항목."""
         return [it for it in self.plan.items if it.get("status") == "denied"]
 
+    @property
+    def git_config_warning(self) -> str:
+        """복원 대상에 Git 설정 파일(.gitconfig)이 있을 때의 경고 한 줄(없으면 빈 문자열). 복원은 허용하되 내용 확인을 권한다."""
+        return self.plan.git_config_warning
+
     def summary(self) -> dict[str, int]:
         out: dict[str, int] = {}
         for it in self.plan.items:
@@ -559,8 +584,11 @@ class ImportResult:
 
     def preview_dict(self) -> dict:
         """미리보기 JSON. 쓰기가 없었으면 dry_run 은 true(실제 상태)로 표시한다."""
-        return {"dry_run": not self.written, "mode": self.mode, "written": self.written,
-                "summary": self.summary(), "problems": self.plan.problems, "items": self.plan.items}
+        d = {"dry_run": not self.written, "mode": self.mode, "written": self.written,
+             "summary": self.summary(), "problems": self.plan.problems, "items": self.plan.items}
+        if self.git_config_warning:
+            d["git_config_warning"] = self.git_config_warning
+        return d
 
 
 def run_import(package: str | Path, rules_dir: str | Path, *, dry_run: bool = False, yes: bool = False,

@@ -12,7 +12,7 @@ from pathlib import Path
 from . import __version__, envpaths, errorlog, failure, fs, summary
 from .api import (NEEDS_CONFIRM, ApiError, Deps, check_outputs_outside, check_path_forms, check_unexpanded, clean_path_arg,
                   clean_state_files, format_write_error, load_rules_checked, report_inside, run_checklist, run_copy,
-                  run_discover, run_export, run_import, run_manifest, run_scan, run_transfer, run_verify,
+                  run_discover, run_export, run_import, run_join, run_manifest, run_scan, run_transfer, run_verify,
                   run_winget_extract, same_file, selection_json)
 from .checklist import write_output
 from .detect import read_registry_programs, winget_export_raw, winget_list_raw
@@ -249,7 +249,7 @@ def _cmd_transfer(args: argparse.Namespace) -> int:
                               chunk=_chunk_bytes(args.chunk_mb), keep_awake=not args.no_keep_awake,
                               manifest_out=args.manifest_out, use_manifest=args.use_manifest,
                               verify_dest=args.verify_dest, copy_mode=args.copy_mode,
-                              copy_threads=args.copy_threads)
+                              copy_threads=args.copy_threads, split_large=args.split_large)
     except ApiError as e:
         return _fail(e)
     except TransferError as e:
@@ -272,7 +272,8 @@ def _cmd_transfer(args: argparse.Namespace) -> int:
                    "total_files": d.get("total_files"), "total_bytes": d.get("total_bytes"),
                    "verification_complete": d.get("verification_complete"), "success": d.get("success"),
                    "failed_count": d.get("failed_count"), "skipped_links": d.get("skipped_links", 0),
-                   "trusted_state_files": d.get("trusted_state_files", 0)})
+                   "trusted_state_files": d.get("trusted_state_files", 0),
+                   **({"split_files": d["split_files"], "split_parts": d.get("split_parts", 0)} if d.get("split_files") else {})})
     else:
         _print_lines(summary.transfer_lines(d, report, args.src, args.dst))
     if d.get("preserved_existing_count"):
@@ -306,6 +307,37 @@ def _cmd_transfer(args: argparse.Namespace) -> int:
     elif args.clean_state:
         _err("[정리] 검사가 끝나지 않았거나 실패가 있어 기록 파일을 지우지 않았습니다.")
     return 1 if report.failures else 0
+
+
+def _cmd_join(args: argparse.Namespace) -> int:
+    if _unexpanded(src=args.src, output=args.output, manifest=args.manifest, report=args.report):
+        return 1
+    try:
+        rep = run_join(args.src, args.output, manifest=args.manifest, dry_run=args.dry_run, chunk=_chunk_bytes(args.chunk_mb),
+                       progress=_cli_progress())
+    except ApiError as e:
+        return _fail(e)
+    except ManifestError as e:
+        _err(f"해시 목록 오류: {e}")
+        return 1
+    except OSError as e:
+        return _write_failed(args.output, e)
+    if args.report:
+        try:
+            rep.write(Path(args.report))
+        except OSError as e:
+            return _write_failed(args.report, e)
+    d = rep.to_dict()
+    if args.json:
+        _json_out({"dry_run": d["dry_run"], "summary": d["summary"], "joined_files": d.get("joined_files", 0),
+                   "joined_parts": d.get("joined_parts", 0), "hash_source": d.get("hash_source"),
+                   "unverified_files": d.get("unverified_files", 0), "failed_count": d.get("failed_count"),
+                   "success": not rep.failures})
+    else:
+        _print_lines(summary.join_lines(d, rep, args.src, args.output))
+    for r in rep.failures[:50]:
+        _err(f"실패: {r.src} -> {r.error}")
+    return 1 if rep.failures else 0
 
 
 def _cmd_manifest(args: argparse.Namespace) -> int:
@@ -437,7 +469,7 @@ def _export_output(output: str) -> str:
 
 
 def _cmd_export(args: argparse.Namespace) -> int:
-    if _unexpanded(output=args.output, extra=args.extra) or _output_is_dir(output=args.output):
+    if _unexpanded(output=args.output, extra=args.extra, stage_dir=args.stage_dir) or _output_is_dir(output=args.output):
         return 1
     args.output = _export_output(args.output)
     if _output_is_dir(output=args.output):
@@ -445,7 +477,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
     try:
         r = run_export(args.rules, args.output, extra=args.extra, allow_secrets=args.allow_secrets,
                        deps=_deps(), progress_info=_cli_info_progress(), resume=args.resume and not args.restart,
-                       compress=args.compress, notice=lambda m: _err(f"[이어받기] {m}"))
+                       compress=args.compress, notice=lambda m: _err(f"[이어받기] {m}"), stage_dir=args.stage_dir)
     except ApiError as e:
         return _fail(e)
     except OSError as e:
@@ -526,7 +558,8 @@ def _cmd_import(args: argparse.Namespace) -> int:
     rd = report.to_dict()
     if args.json:
         _json_out({"dry_run": False, "summary": rd["summary"], "failed_count": rd["failed_count"],
-                   "success": not report.failures})
+                   "success": not report.failures,
+                   **({"git_config_warning": rd["git_config_warning"]} if rd.get("git_config_warning") else {})})
     else:
         _print_lines(summary.import_lines(r, args.package, report))
     n_rej = sum(1 for f in report.failures if f.status == "rejected")
@@ -633,6 +666,9 @@ def build_parser() -> argparse.ArgumentParser:
     e.add_argument("--restart", action="store_true", help="--no-resume 과 같음: 처음부터 다시 만들기")
     e.add_argument("--compress", choices=("auto", "always", "never"), default="auto",
                    help="압축 방식. auto(기본): 사진/영상/zip/pdf 등 이미 압축된 형식은 압축 생략, always: 모두 압축, never: 모두 생략")
+    e.add_argument("--stage-dir", type=_path_arg,
+                   help="64MB 넘는 파일을 담기 전에 임시로 읽어 두는 폴더의 위치(기본: 출력 파일이 있는 폴더). 출력이 느린 외장/네트워크 드라이브일 때 "
+                        "로컬 디스크 폴더를 지정. 원본 폴더 안은 거부, 끝나면 임시 폴더는 항상 지움")
     e.add_argument("--json", action="store_true", help="사람이 읽는 요약 대신 JSON 으로 출력")
     e.set_defaults(func=_cmd_export)
 
@@ -678,10 +714,23 @@ def build_parser() -> argparse.ArgumentParser:
     t.add_argument("--copy-threads", type=_int_range(1, 16), help="복사 도구가 동시에 복사할 파일 수(기본 4, 1~16). 작은 파일이 많을 때 빠르며, 느린 HDD/USB 에서는 1 을 권장")
     t.add_argument("--copy-mode", choices=("restartable", "normal", "unbuffered"), default="restartable",
                    help="복사 방식: restartable(기본, 끊겨도 이어받음) / normal / unbuffered(아주 큰 파일에 유리)")
+    t.add_argument("--split-large", action="store_true",
+                   help="4GB 넘는 파일(FAT32 한도 초과)을 robocopy 에서 빼고 조각(<이름>.pcm001, .pcm002 ...)으로 나눠 저장. "
+                        "FAT32 외장 드라이브에 큰 파일을 담거나 NTFS/exFAT 에서도 분할하고 싶을 때. 조각별 해시/이어받기 지원, 새 PC 에서 pcmigrate join 으로 합침")
     t.add_argument("--json", action="store_true", help="사람이 읽는 요약 대신 JSON 으로 출력")
     t.add_argument("--clean-state", action="store_true",
                    help="전송 성공 + 검사 통과 뒤에 대상 폴더의 기록 파일(.pcmigrate-*)을 자동으로 지운다(복사한 데이터는 그대로)")
     t.set_defaults(func=_cmd_transfer)
+
+    j = sub.add_parser("join", help="--split-large 로 나눠 저장된 조각(.pcm001 ...)을 원래 파일로 합친다(조각은 읽기만 함)")
+    j.add_argument("src", type=_path_arg, help="조각이 있는 폴더(하위 폴더 포함) 또는 첫 조각 파일(.pcm001)")
+    j.add_argument("--output", type=_path_arg, required=True, help="합친 파일을 만들 폴더(NTFS). 조각 폴더의 하위 구조를 그대로 만든다. 같은 이름의 기존 파일은 .bak 보존")
+    j.add_argument("--manifest", type=_path_arg, help="해시 목록(.jsonl). 없으면 조각 폴더의 .pcmigrate-manifest.jsonl, 그것도 없으면 .pcmigrate-state.json 의 조각 해시를 씀")
+    j.add_argument("--dry-run", action="store_true", help="합치지 않고 조각 점검과 공간 점검만(쓰기 없음)")
+    j.add_argument("--report", type=_path_arg, help="결과 리포트(JSON) 저장 경로")
+    j.add_argument("--chunk-mb", type=_chunk_mb, help="읽기 청크 크기(MB, 0.25~1024, 기본 4)")
+    j.add_argument("--json", action="store_true", help="사람이 읽는 요약 대신 JSON 으로 출력")
+    j.set_defaults(func=_cmd_join)
 
     m = sub.add_parser("manifest", help="원본(로컬)을 읽어 해시 목록 파일을 만든다(읽기 전용)")
     m.add_argument("src", type=_path_arg, help="원본 폴더(읽기만 함)")

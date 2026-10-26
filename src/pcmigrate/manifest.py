@@ -6,6 +6,8 @@
 
 파일 형식(.jsonl, UTF-8): 첫 줄 헤더 {"format","version","created","source_root","total_files","total_bytes","layout"},
 파일마다 한 줄 {"rel","size","mtime_ns","sha256"}, 마지막 줄 {"end":true,"files","bytes","errors"}.
+버전 2 부터 4GB 분할 파일(--split-large)은 줄에 "parts":[{"name","size","sha256"}] 가 더 붙는다. sha256 은 원본 전체의 해시이고,
+parts 는 같은 폴더에 있는 조각 파일(<이름>.pcm001 ...)의 이름/크기/해시다. 버전 1 목록도 읽을 수 있다.
 마지막 줄이 없으면(중간에 끊김) verify 가 불완전한 목록으로 알려 준다. 쓰는 동안은 .part 이름이고 끝나면 이름을 바꾼다.
 """
 from __future__ import annotations
@@ -19,7 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Callable, Iterator
 
-from . import __version__, failure
+from . import __version__, failure, split
 from .cancel import Cancelled
 from .copier import (EXTRA, FAILED, MISMATCH, MISSING, VERIFIED, FileResult, IoStats, Report, missing_dest, sha256_file)
 from .engine import clamp_workers, run_ordered
@@ -28,7 +30,8 @@ from .progress import OK, ProgressInfo, ProgressTracker, categorize, format_info
 from .scan import ScanInfo, scan_source_info
 
 MANIFEST_FORMAT = "pcmigrate-manifest"
-MANIFEST_VERSION = 1
+MANIFEST_VERSION = 2
+SUPPORTED_VERSIONS = (1, 2)  # 1: 분할 파일 없음. 2: 줄에 parts 가 있을 수 있음
 DEFAULT_NAME = ".pcmigrate-manifest.jsonl"
 OWN_PREFIX = ".pcmigrate-"  # 이 도구가 대상 폴더에 만드는 기록 파일(상태, 로그, 목록)은 '추가 파일'로 세지 않는다
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
@@ -57,6 +60,26 @@ def _safe_rel(rel: object) -> str:
     return rel
 
 
+def _check_parts(row: dict, n: int) -> None:
+    """분할 파일 줄의 parts 검사: 조각 이름은 원래 파일 이름 + .pcmNNN(경로 구분자 없음), 크기 합 == 원본 크기, 해시는 64자리 16진수."""
+    parts = row["parts"]
+    bad = ManifestError(f"{n}번째 줄의 조각 목록(parts)이 올바르지 않습니다")
+    if not isinstance(parts, list) or not parts:
+        raise bad
+    base = row["rel"].rsplit("/", 1)[-1]
+    total = 0
+    for i, p in enumerate(parts, 1):
+        if not isinstance(p, dict):
+            raise bad
+        name, size, sha = p.get("name"), p.get("size"), p.get("sha256")
+        if (not isinstance(name, str) or name != f"{base}.pcm{i:03d}" or isinstance(size, bool) or not isinstance(size, int)
+                or size < 0 or not isinstance(sha, str) or not _HEX64.match(sha)):
+            raise bad
+        total += size
+    if total != row["size"]:
+        raise bad
+
+
 class ManifestWriter:
     """JSONL 스트리밍 쓰기. close() 가 끝줄을 쓰고 이름을 바꾼다. 중간에 끊기면 .part 만 남아 불완전 목록이 완성본으로 오해되지 않는다."""
 
@@ -73,9 +96,11 @@ class ManifestWriter:
                   "total_files": total_files, "total_bytes": total_bytes, "layout": layout or {}}
         self._f.write(json.dumps(header, ensure_ascii=False, separators=(",", ":")) + "\n")
 
-    def write_row(self, rel: str, size: int, mtime_ns: int, sha256: str) -> None:
-        self._f.write(json.dumps({"rel": rel, "size": size, "mtime_ns": mtime_ns, "sha256": sha256},
-                                 ensure_ascii=False, separators=(",", ":")) + "\n")
+    def write_row(self, rel: str, size: int, mtime_ns: int, sha256: str, parts: list[dict] | None = None) -> None:
+        row = {"rel": rel, "size": size, "mtime_ns": mtime_ns, "sha256": sha256}
+        if parts:
+            row["parts"] = parts
+        self._f.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
         self.files += 1
         self.bytes += size
         if self.files % self.flush_every == 0:
@@ -122,7 +147,7 @@ class ManifestReader:
             raise ManifestError("목록 파일의 첫 줄이 올바르지 않습니다") from e
         if not isinstance(self.header, dict):
             raise ManifestError("목록 파일의 첫 줄이 올바르지 않습니다(목록 파일이 아닌 JSON 입니다)")
-        if self.header.get("format") != MANIFEST_FORMAT or self.header.get("version") != MANIFEST_VERSION:
+        if self.header.get("format") != MANIFEST_FORMAT or self.header.get("version") not in SUPPORTED_VERSIONS:
             raise ManifestError("지원하지 않는 목록 파일입니다(형식 또는 버전이 다름)")
 
     def rows(self) -> Iterator[dict]:
@@ -153,6 +178,8 @@ class ManifestReader:
                 _safe_rel(row.get("rel"))
                 if not (isinstance(row.get("size"), int) and isinstance(row.get("sha256"), str) and _HEX64.match(row["sha256"])):
                     raise ManifestError(f"{n}번째 줄의 항목이 올바르지 않습니다")
+                if "parts" in row:
+                    _check_parts(row, n)
                 yield row
 
 
@@ -238,11 +265,56 @@ def build_manifest(src: Path | str, out: Path | str, *, workers: int | None = No
     return ManifestResult(path, writer.files, writer.bytes, errors, clock() - t0, stats.as_dict(), info)
 
 
+def _check_split_row(row: dict, dst: str, res: FileResult, chunk: int | None, cancel, on_bytes, stats: IoStats) -> FileResult | None:
+    """분할 파일 줄: 대상에 조각(<이름>.pcm001 ...)이 있으면 조각을 순서대로 이어 읽어 조각별/전체 해시를 목록과 비교한다.
+    첫 조각이 없으면 None(합쳐진 파일로 보고 일반 검사로 넘어간다)."""
+    folder = os.path.dirname(dst)
+    paths = [os.path.join(folder, p["name"]) for p in row["parts"]]
+    if not os.path.lexists(long_path(paths[0])):
+        return None
+    where = paths[0]
+    try:
+        for i, (p, path) in enumerate(zip(row["parts"], paths), 1):
+            where = path
+            try:
+                size = os.stat(long_path(path)).st_size
+            except FileNotFoundError:
+                res.status, res.reason = MISSING, failure.MISSING_DEST
+                res.error = f"조각 {i:03d}/{len(paths):03d}({p['name']})이 없습니다. 복사가 덜 됐을 수 있습니다(같은 명령을 다시 실행하면 이어받습니다)"
+                return res
+            if not os.path.isfile(long_path(path)) or size != p["size"]:
+                res.status, res.reason = MISMATCH, failure.SIZE_MISMATCH
+                res.error = f"조각 {i:03d}({p['name']})의 크기가 원본과 다릅니다(원본 {p['size']}바이트, 여기 {size}바이트)"
+                return res
+        whole, per = split.hash_parts(paths, chunk=chunk, cancel=cancel, on_bytes=lambda n: (stats.add("dst", n), on_bytes(n)))
+        stats.file_read("dst")
+        for i, (p, h) in enumerate(zip(row["parts"], per), 1):
+            if h != p["sha256"]:
+                res.status, res.reason = MISMATCH, failure.MISMATCH
+                res.error = f"조각 {i:03d}({p['name']})의 내용이 원본과 다릅니다(SHA-256 불일치). 그 조각만 다시 복사하세요"
+                return res
+        if whole != row["sha256"]:
+            res.status, res.reason = MISMATCH, failure.MISMATCH
+            res.error = failure.REASONS[failure.MISMATCH].text + " (조각을 이어 붙인 전체 SHA-256 불일치)"
+            return res
+        res.status = VERIFIED
+    except Cancelled:
+        raise
+    except OSError as e:
+        f = failure.classify(e, where)
+        res.status, res.reason, res.error = FAILED, f.code, f"{f.text} ({where})"
+    return res
+
+
 def _check_row(row: dict, target: str, chunk: int | None, cancel, on_bytes, stats: IoStats) -> FileResult:
     rel = row["rel"]
     dst = os.path.join(target, *rel.split("/"))
     res = FileResult(f"[목록] {rel}", dst, FAILED, row["size"], row["sha256"])
     where = dst
+    if row.get("parts"):
+        done = _check_split_row(row, dst, res, chunk, cancel, on_bytes, stats)
+        if done is not None:
+            return done
     try:
         try:
             size = os.stat(long_path(dst)).st_size
@@ -309,6 +381,8 @@ def verify_against_manifest(manifest: Path | str, target: Path | str, *, workers
 
     def handle(row, res):
         expected.add(row["rel"].casefold())
+        for p in row.get("parts") or ():  # 조각 파일도 '목록에 있는 파일'이다(추가 파일로 세지 않는다)
+            expected.add((row["rel"].rpartition("/")[0] + "/" + p["name"] if "/" in row["rel"] else p["name"]).casefold())
         report.results.append(res)
         tracker.add(0, 1)
         tracker.note(categorize(res.status, res.reason), res.dst or res.src)

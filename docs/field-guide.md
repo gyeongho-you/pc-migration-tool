@@ -111,7 +111,7 @@ powercfg /change monitor-timeout-ac 0
 
 ## 5. 외장 드라이브 준비
 - **NTFS로 포맷하세요.** FAT32는 파일당 4GiB 제한이고 NTFS와 exFAT는 사실상 제한이 없습니다. ACL과 소유자는 NTFS만 지원합니다. [확인됨]
-- 이 도구는 대상이 FAT32이고 4GB 초과 파일이 있으면 복사 전에 막습니다(분할 저장은 지원하지 않음).
+- 이 도구는 대상이 FAT32이고 4GB 초과 파일이 있으면 복사 전에 막습니다. 포맷이 어려우면 transfer에 --split-large를 붙여 큰 파일을 조각(이름.pcm001, .pcm002 …)으로 나눠 저장하고, 새 PC에서 join으로 합칩니다.
 - **포맷은 데이터를 모두 지웁니다.** 포맷 명령의 -WhatIf는 미리보기로 동작하지 않는다고 문서에 있습니다. 드라이브 문자만 보고 지우지 말고 크기와 모델을 먼저 확인하세요.
 포맷 전에 먼저 (관리자 PowerShell)
 ```
@@ -176,6 +176,14 @@ pcmigrate.exe verify --manifest C:\이전기록\목록.jsonl --target D:\Migrate
 ```
 pcmigrate.exe transfer D:\프로젝트 E:\이전\프로젝트 --retry-failed
 ```
+FAT32 외장에 4GB 넘는 파일이 있을 때: 조각으로 나눠 복사 (--split-large)
+```
+pcmigrate.exe transfer D:\프로젝트 E:\이전\프로젝트 --split-large --manifest-out C:\이전기록\목록.jsonl
+```
+새 PC: 나눠 저장된 조각을 NTFS 드라이브에서 원래 파일로 합치기 (조각은 지우지 않고, 해시 목록과 대조)
+```
+pcmigrate.exe join E:\이전\프로젝트 --output D:\Migrate\프로젝트 --manifest C:\이전기록\목록.jsonl
+```
 원본을 건드리는 robocopy 옵션(/MIR, /PURGE, /MOV)은 이 도구가 쓰지 않습니다. 복사가 끝나면 대상 폴더에 .pcmigrate-state.json과 로그 파일이 남습니다. 외장 2단계(--use-manifest)와 랜선 1단계(--manifest-out)는 화면의 단계 안내를 따르는 편이 안전합니다.
 **이 도구의 exe는 서명이 없습니다.** 처음 실행하면 "Windows의 PC 보호" 창이 뜰 수 있습니다. 받은 빌드와 함께 전달받은 SHA-256 값이 아래 명령 결과와 같은지 확인한 뒤 "추가 정보, 실행"을 누르세요.
 ```
@@ -190,7 +198,7 @@ Get-FileHash .\pcmigrate-gui.exe -Algorithm SHA256
 | 종료 코드가 1 또는 3 | 실패가 아닙니다. robocopy는 **8 이상일 때만** 실패입니다. [확인됨] |
 | 공유 폴더에 접속이 안 됨 | 비밀번호 없는 계정인지, 네트워크 프로필이 공용인지, 방화벽의 파일 및 프린터 공유가 켜졌는지, 두 PC의 IP 대역이 같은지, ping과 포트 445를 확인하세요. 이미 다른 계정으로 연결돼 있으면 net use * /delete. |
 | 속도가 너무 느림 | USB 2.0 포트(실사용 약 35~40MB/s 이하)이거나 링크 속도가 100Mbps일 수 있습니다. 케이블과 포트를 바꿔 보세요. 느린 HDD/USB는 --workers 1 --copy-threads 1이 나을 수 있습니다. |
-| 4GB 넘는 파일이 복사 안 됨 | 대상이 FAT32입니다. NTFS로 포맷하거나 다른 드라이브를 쓰세요. |
+| 4GB 넘는 파일이 복사 안 됨 | 대상이 FAT32입니다. NTFS로 포맷하거나 다른 드라이브를 쓰세요. 포맷이 어려우면 --split-large로 조각을 나눠 저장하고 새 PC에서 join으로 합치세요. |
 | "경로가 너무 깁니다" | 260자 제한입니다. 이 도구는 읽기와 검사에 긴 경로 접두를 쓰지만, 그래도 읽지 못하면 폴더를 짧은 경로로 옮기세요. [확인됨] |
 | OneDrive 파일이 건너뛰어짐 | 클라우드 전용 파일은 기본으로 건너뛰고 cloud_only로 기록됩니다. 복사 전에 폴더를 우클릭해 "이 디바이스에 항상 유지"로 내려받은 뒤 복사하거나 --include-cloud를 쓰세요(대량 다운로드가 생깁니다). 실제 OneDrive PC에서의 동작은 아직 시험하지 못했습니다. |
 | 드라이브 문자가 바뀜 | 도면의 외부 참조가 끊길 수 있습니다. 디스크 관리에서 "드라이브 문자 및 경로 변경"으로 구 PC와 맞추세요. C:는 바꾸지 마세요. |
