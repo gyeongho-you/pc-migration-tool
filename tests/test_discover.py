@@ -13,7 +13,7 @@ from pcmigrate.discover import (CERTAIN, PROBABLE, SelectionError, build_selecti
                                 link_candidate, load_selection, render, summarize)
 from pcmigrate.discover_data import (DOT_HINTS, EXTRA_ROOTS, RESTORE_DENY_SUBSTRINGS, ROOTS, SECRET_PATTERNS,
                                      SKIP_NAMES)
-from pcmigrate.package import EXTRA_ID, export_package, plan_import
+from pcmigrate.package import EXTRA_ID, export_package, plan_import, verify_package
 from pcmigrate.rules import load_rules
 
 from test_stage4 import WINGET, patch_detection
@@ -363,7 +363,6 @@ def test_extra_import_rejects_forged_manifest(env, rules, tmp_path):
         (lambda m: m["files"][0].update(base="C:\\Windows\\System32"), "허용되지 않은"),
         (lambda m: m["files"][0].update(rel="../../evil.txt"), None),
         (lambda m: m["files"][0].update(base="%USERPROFILE%", rel="Documents/x.txt"), "점으로"),
-        (lambda m: m["files"][0].update(rel="Microsoft/Windows/Start Menu/Programs/Startup/run.bat"), "금지"),
         (lambda m: m["files"][0].update(rel="Foo Bar/license.lic"), "제외"),
     ]
     for mut, word in cases:
@@ -372,6 +371,10 @@ def test_extra_import_rejects_forged_manifest(env, rules, tmp_path):
         if word:
             assert any(word in p for p in plan.problems), (word, plan.problems)
     assert not any(new.appdata.rglob("*.bat"))
+    # 시작 프로그램 위치로 위조한 항목은 패키지를 막지 않고 그 항목만 '복원 안 함'(대상에 쓰지 않는다)
+    plan = plan_import(forge(out, lambda m: m["files"][0].update(rel="Microsoft/Windows/Start Menu/Programs/Startup/run.bat")),
+                       rules, new.expand)
+    assert plan.problems == [] and [i["status"] for i in plan.items] == ["denied"]
 
 
 def test_deny_list_blocks_startup_and_authorized_keys(env, rules, tmp_path):
@@ -381,7 +384,11 @@ def test_deny_list_blocks_startup_and_authorized_keys(env, rules, tmp_path):
     out = tmp_path / "pkg.zip"
     export_package([], out, [], None, expand=env.expand, extras=items)
     plan = plan_import(out, rules, Env(tmp_path / "n2").expand)
-    assert sum("금지" in p for p in plan.problems) == 2
+    # 19a: 내보내기 단계에서 같은 판정으로 걸러지고(skipped), 가져오기에서도 항목별 '복원 안 함'
+    assert plan.problems == []
+    m = verify_package(out)[0]
+    assert sum(1 for s in m["skipped"] if s.get("denied")) == 2
+    assert sum(1 for s in m["files"] if "authorized_keys" in s["rel"] or "run.bat" in s["rel"]) == 0
 
 
 # --------------------------------------------------------------------- CLI

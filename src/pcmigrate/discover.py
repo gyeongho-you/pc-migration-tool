@@ -513,8 +513,9 @@ def render(d: Discovery, fmt: str = "text", show_all: bool = False) -> str:
         lines.append("(없음)")
     for e in d.programs:
         p = e.program
+        shown = p.display
         lines.append(f"{'- **' + p.name + '**' if md else '* ' + p.name}"
-                     + (f" {p.version}" if p.version else "") + (f" — {p.publisher}" if p.publisher else ""))
+                     + shown[len(p.name):] + (f" — {p.publisher}" if p.publisher else ""))
         if not e.candidates:
             lines.append(f"{bullet}설정 폴더 후보 없음(자동으로 찾지 못함). 이 프로그램의 설정은 직접 확인하세요.")
         for c in e.candidates:

@@ -152,7 +152,7 @@ def test_corrupt_journal_middle_restarts_with_reason(env, monkeypatch):
 def test_part_without_journal_restarts(env, monkeypatch):
     part, jr = part_paths(env.out)
     env.out.parent.mkdir(parents=True)
-    part.write_bytes(b"PK junk from somewhere")
+    part.write_bytes(bytes([80, 75, 3, 4]) + b" junk from an interrupted run")
     m, _ = run(env)
     assert not m["resume"]["resumed"] and "기록이 없" in m["resume"]["reason"]
     assert verify_package(env.out)[1] == [] and not part.exists()
@@ -498,7 +498,7 @@ def test_cli_flags_parse_and_pass_through(env, monkeypatch, capsys):
                     "resume": {"resumed": True, "kept_files": 3}}
         return api.ExportResult(manifest, api.ExtraPrep([], 0), [], [], api.build_checklist([], [], [], None), None)
     monkeypatch.setattr(cli, "run_export", fake_run_export)
-    assert cli.main(["export", "--output", str(env.out), "--no-resume", "--compress", "always"]) == 0
+    assert cli.main(["export", "--output", str(env.out), "--no-resume", "--compress", "always", "--json"]) == 0
     cap = capsys.readouterr()
     assert seen["resume"] is False and seen["compress"] == "always"
     assert "[이어받기] 이어서 하는 중" in cap.err and '"resumed_files": 3' in cap.out

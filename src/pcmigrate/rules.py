@@ -85,6 +85,17 @@ def _check_dest(dest: str, where: str) -> None:
         raise RuleError(f"{where}: dest '{dest}' 는 안전한 상대 경로여야 합니다")
 
 
+def _check_rule_path(path: str, where: str) -> None:
+    """규칙 path 는 %환경변수% 로 시작하는 사용자 폴더 기준 경로여야 한다: 상위 폴더(..), 드라이브 절대 경로, 네트워크(UNC), 루트 상대 경로는 거부(R1-15)."""
+    win = PureWindowsPath(path.replace("/", "\\"))
+    if ".." in win.parts:
+        raise RuleError(f"{where}: path '{path}' 에 상위 폴더(..)가 있습니다. 규칙 경로는 사용자 폴더 안이어야 합니다")
+    if path.startswith(("\\\\", "//")):
+        raise RuleError(f"{where}: path '{path}' 는 네트워크(UNC) 경로입니다. 규칙 경로는 %환경변수% 로 시작해야 합니다")
+    if win.drive or win.root or path.startswith(("\\", "/")):
+        raise RuleError(f"{where}: path '{path}' 는 절대 경로입니다. 규칙 경로는 %환경변수% 로 시작해야 합니다")
+
+
 def parse_rule(data: object, source: str = "<rule>") -> Rule:
     if not isinstance(data, dict):
         raise RuleError(f"{source}: 최상위는 객체여야 합니다")
@@ -115,6 +126,7 @@ def parse_rule(data: object, source: str = "<rule>") -> Rule:
         kind = p.get("kind", "dir")
         if kind not in ("dir", "file"):
             raise RuleError(f"{where}: kind 는 'dir' 또는 'file' 이어야 합니다")
+        _check_rule_path(p["path"], where)
         _check_dest(p["dest"], where)
         paths.append(PathRule(p["path"], p["dest"], kind, str(p.get("description", ""))))
 

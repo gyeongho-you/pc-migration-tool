@@ -245,12 +245,12 @@ def test_cli_import_dry_run_and_apply(env, monkeypatch, capsys):
                   {"path": "%ROAM%\\Vendor\\prefs.json", "dest": "demo/prefs.json", "kind": "file"}],
         "exclude": ["*.tmp"]}), encoding="utf-8")
     monkeypatch.setattr(cli, "plan_import", lambda p, r: plan_import(p, r, expand_for(new)))
-    assert cli.main(["import", str(out), "--dry-run", "--rules", str(rules_dir)]) == 0
+    assert cli.main(["import", str(out), "--dry-run", "--rules", str(rules_dir), "--json"]) == 0
     assert not (new / "Vendor").exists()
     captured = capsys.readouterr()
     assert "would_copy" in captured.out and "수동 작업 필요" in captured.err
     # --yes 없이: 아무것도 쓰지 않고 미리보기 + 안내, 종료 코드 2
-    assert cli.main(["import", str(out), "--rules", str(rules_dir)]) == 2
+    assert cli.main(["import", str(out), "--rules", str(rules_dir), "--json"]) == 2
     captured = capsys.readouterr()
     assert "would_copy" in captured.out and "--yes" in captured.err
     assert not (new / "Vendor").exists()

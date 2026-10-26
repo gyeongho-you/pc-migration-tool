@@ -38,6 +38,7 @@ CLOUD_ONLY = "cloud_only"  # OneDrive 온디맨드 파일: 기본 건너뜀(실�
 PENDING_VERIFY = "pending_verify"  # 복사는 끝났고 대상 검사는 새 PC 에서 verify 로 하기로 미룸(실패 아님)
 EXTRA = "extra"  # verify: 목록에 없는 추가 파일(실패 아님, 알림)
 REJECTED = "rejected"  # 복원 안전 규칙(링크를 거치는 위치 등) 때문에 일부러 복원하지 않은 파일(실패와 같이 센다)
+DENIED = "denied"  # 보안상 복원하지 않는 형식(실행/스크립트 등): 실패가 아니라 항목별 '복원 안 함'. 나머지 파일은 정상 복원한다
 FAIL_STATUSES = (FAILED, MISMATCH, MISSING, REJECTED)
 
 
@@ -142,8 +143,15 @@ class Report:
         d = {"dry_run": self.dry_run, "summary": counts,
              "failed_count": len(self.failures), **self.meta,
              "results": [asdict(r) for r in self.results]}
-        if "verification_complete" in self.meta:  # 검증이 끝나지 않았으면(대상 검사를 미룸, 미리보기) 성공이라고 하지 않는다
+        if "verification_complete" in self.meta:  # 검증이 끝나지 않았으면(대상 검사를 미룸) 성공이라고 하지 않는다
             d["success"] = bool(self.meta["verification_complete"]) and not self.failures
+            if self.dry_run:  # 미리보기는 아무것도 복사하지 않으므로 '검증 미완료'가 아니라 미리보기 자체의 성공 여부를 쓴다
+                d["success"] = not self.failures
+                d["preview"] = True
+        for r in d["results"]:  # 긴 경로 접두는 사용자가 입력한 모양의 경로로 보여 준다(R2-8)
+            for k in ("src", "dst", "error", "backup"):
+                if r.get(k):
+                    r[k] = fs.plain_path_text(r[k])
         return d
 
     def write(self, path: Path) -> None:

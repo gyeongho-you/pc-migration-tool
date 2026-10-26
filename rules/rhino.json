@@ -1,19 +1,13 @@
 {
   "id": "rhino",
   "name": "Rhinoceros / Grasshopper",
-  "version": "3",
+  "version": "4",
   "detect": {
     "display_name_patterns": [
       "Rhinoceros",
       "Rhino 6",
       "Rhino 7",
       "Rhino 8"
-    ],
-    "exclude_display_name_patterns": [
-      "V-Ray",
-      "Enscape",
-      "Lumion",
-      "for Rhino"
     ],
     "install_paths": [
       "%ProgramFiles%\\Rhino 6",
@@ -22,6 +16,13 @@
     ],
     "registry_keys": [
       "HKLM\\SOFTWARE\\McNeel\\Rhinoceros"
+    ],
+    "exclude_display_name_patterns": [
+      "V-Ray",
+      "Enscape",
+      "Lumion",
+      "for Rhino",
+      "Mocks Library"
     ]
   },
   "paths": [

@@ -14,6 +14,7 @@ def _isolated_error_log(tmp_path_factory, monkeypatch):
     """오류 로그가 사용자의 실제 %LOCALAPPDATA% 폴더에 쌓이지 않게 한다(테스트가 일부러 일으킨 오류도 기록되므로)."""
     from pcmigrate import errorlog
     monkeypatch.setattr(errorlog, "PRIMARY_DIR", str(tmp_path_factory.mktemp("errlog")))
+    errorlog.reset_throttle()  # 중복 제거/속도 제한/쓰기 확인 캐시는 시험끼리 공유하지 않는다
 
 
 def make_rules_dir(path):

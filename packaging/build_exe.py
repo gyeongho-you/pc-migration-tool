@@ -168,6 +168,15 @@ def smoke_test(cli_exe: Path, run=subprocess.run) -> tuple[bool, str]:
     return True, msg + f", 번들 규칙 {n}개 확인"
 
 
+def smoke_test_gui(gui_exe: Path, run=subprocess.run) -> tuple[bool, str]:
+    """창 모드 exe 는 --version 을 메시지 상자로 알리므로, 상자를 띄우지 않는 PCMIGRATE_NO_DIALOG=1 로 실행해 곧바로 끝나는지만 본다."""
+    env = dict(os.environ, PCMIGRATE_NO_DIALOG="1")
+    r = run([str(gui_exe), "--version"], capture_output=True, text=True, timeout=120, env=env)
+    if r.returncode:
+        return False, f"{gui_exe.name} --version 실패(rc={r.returncode})"
+    return True, f"{gui_exe.name} --version 정상 종료(창을 열지 않음)"
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="PyInstaller 로 pcmigrate exe 만들기")
     ap.add_argument("--mode", choices=("onedir", "onefile"), default="onedir",
@@ -205,6 +214,12 @@ def main(argv: list[str] | None = None) -> int:
             print(f"smoke: {msg}")
             if not ok:
                 return 1
+            gui = [e for e in exes if e.name.startswith("pcmigrate-gui.")]
+            if gui:
+                ok, msg = smoke_test_gui(gui[0])
+                print(f"smoke: {msg}")
+                if not ok:
+                    return 1
         if args.zip and args.mode == "onedir":
             zpath = Path(args.out) / "pcmigrate-win.zip"
             with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as z:

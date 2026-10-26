@@ -210,9 +210,10 @@ def test_qgis_collects_default_profile_only_and_excludes_cache_and_auth_db(rules
     touch(prof / "other" / "QGIS" / "QGIS3.ini")
     items, skipped = collect_items(rules["qgis"], env.expand)
     got = arcs(items)
-    assert got == ["data/qgis/profile-default/default/QGIS/QGIS3.ini",
-                   "data/qgis/profile-default/default/python/plugins/myplugin/__init__.py"]
+    # 19a: .py 는 복원 때 거부되는 형식이라 내보낼 때도 같은 판정으로 빼고(denied) 경고한다(플러그인은 QGIS 에서 다시 설치)
+    assert got == ["data/qgis/profile-default/default/QGIS/QGIS3.ini"]
     assert sum("제외" in s["reason"] for s in skipped) >= 4  # auth.db, tmp, cache, pyc
+    assert any(s.get("denied") and s["path"].endswith("__init__.py") for s in skipped)
     text = " ".join(rules["qgis"].manual_warnings)
     assert "플러그인" in text and "용량" in text and "qgis-auth.db" in text
 

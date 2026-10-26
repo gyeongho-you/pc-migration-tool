@@ -164,3 +164,10 @@ def robocopy_failures(output: str) -> list[Failure]:
         if f is not None:
             seen.setdefault(f.code, f)
     return list(seen.values())
+
+
+def cli_text(text: str) -> str:
+    """GUI 버튼 이름('실패한 것만 다시 시도')을 명령행 옵션(--retry-failed)으로 바꾼 문구와 긴 경로 접두 제거(CLI 출력 전용)."""
+    from .fs import plain_path_text
+    text = text.replace("'실패한 것만 다시 시도'", "--retry-failed(실패한 것만 다시 시도)")
+    return plain_path_text(text)

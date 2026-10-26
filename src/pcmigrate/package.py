@@ -33,7 +33,7 @@ from typing import Callable
 
 from .envpaths import expand_env
 from . import __version__, failure, fs
-from .copier import (COPIED, FAILED, REJECTED, SKIPPED_SAME, WOULD_COPY, WOULD_OVERWRITE,
+from .copier import (COPIED, DENIED, FAILED, REJECTED, SKIPPED_SAME, WOULD_COPY, WOULD_OVERWRITE,
                      FileResult, Report, _backup_path, copy_file, sha256_file)
 from .detect import Program
 from .discover_data import EXTRA_ROOTS, RESTORE_DENY_SUBSTRINGS, ROOTS
@@ -60,13 +60,24 @@ ALLOWED_COMPRESSION = (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED)
 # 복원 거부 목록(B-1/B-7/F-1): 규칙/extra 모두에 적용한다. 다음 로그인/실행 때 코드가 실행될 수 있는 파일들이다.
 # 확장자는 규칙 path 의 마지막 패턴이 그 확장자를 직접 적어 둔 경우(예: "*.exe")에만 그 규칙에서 허용한다.
 DENY_EXTENSIONS = frozenset({".exe", ".scr", ".com", ".pif", ".bat", ".cmd", ".ps1", ".psm1", ".psd1", ".ps1xml", ".vbs",
-                             ".vbe", ".js", ".jse", ".wsf", ".wsh", ".hta", ".lnk", ".url", ".reg", ".msi", ".msp", ".cpl"})
+                             ".vbe", ".js", ".jse", ".wsf", ".wsh", ".hta", ".lnk", ".url", ".reg", ".msi", ".msp", ".cpl",
+                             # 19a: 로드/실행되는 라이브러리·스크립트·도움말·설정 조각(R1-9)
+                             ".dll", ".ocx", ".sys", ".jar", ".py", ".pyw", ".cjs", ".mjs", ".xll", ".wll", ".xlam", ".dotm",
+                             ".sct", ".wsc", ".msc", ".gadget", ".appref-ms", ".application", ".mof", ".inf", ".chm",
+                             ".settingcontent-ms"})
+# 폴더 이름(소문자)이 경로 어디에 있어도 막는다: Excel 이 시작할 때 자동으로 여는 폴더
+DENY_DIR_NAMES = frozenset({"xlstart"})
+# 사용자 홈 바로 아래(%USERPROFILE%)에서 도구가 읽어 명령을 실행하거나 비밀을 담는 점 파일(소문자 이름). .gitconfig 는 흔히 쓰므로 허용한다.
+HOME_DENY_FILES = frozenset({".npmrc", ".yarnrc", ".yarnrc.yml", ".wslconfig", ".condarc", ".netrc", ".git-credentials", ".pypirc"})
+HOME_DENY_SUBFILES = frozenset({(".kube", "config"), (".docker", "config.json")})
 # 셸/SSH 가 시작할 때 읽어 실행하는 설정(소문자 파일 이름 / 폴더 이름)
 DENY_FILE_NAMES = frozenset({".bashrc", ".bash_profile", ".bash_login", ".bash_logout", ".profile", ".zshrc", ".zprofile",
                              ".zshenv", ".zlogin", ".cshrc", ".kshrc", "authorized_keys"})
 # .ssh 아래에서는 개인키가 아니라 접속 때 명령을 실행시킬 수 있는 파일(ProxyCommand 등)만 막는다
 SSH_DENY_FILES = frozenset({"config", "rc", "environment", "authorized_keys2"})
-_DEVICE_NAMES = frozenset({"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))})
+_DEVICE_NAMES = frozenset({"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$",
+                           *(f"COM{i}" for i in range(0, 10)), *(f"LPT{i}" for i in range(0, 10))})
+_SUPERSCRIPT = str.maketrans("¹²³", "123")  # COM¹ COM² COM³ LPT¹ ... 도 장치 이름으로 취급된다
 _BAD_CHARS = set('<>"|?*')
 
 Expand = Callable[[str], str]
@@ -117,7 +128,7 @@ def _bad_component(part: str) -> bool:
     """Windows 에서 그 이름 그대로 만들 수 없거나 다른 파일로 바뀌는 경로 요소(예약 장치 이름, 끝의 점/공백, 제어/금지 문자)."""
     if part != part.rstrip(" .") or any(ord(c) < 32 or c in _BAD_CHARS for c in part):
         return True
-    return part.split(".", 1)[0].rstrip(" ").upper() in _DEVICE_NAMES
+    return part.split(".", 1)[0].rstrip(" ").translate(_SUPERSCRIPT).upper() in _DEVICE_NAMES
 
 
 def unsafe_name(rel: str) -> bool:
@@ -167,25 +178,51 @@ class Item:
     rel: str   # base 기준 상대 경로(posix)
 
 
-def _walk_files_no_links(top: Path, files: list[Path], skipped: list[dict], rule_id: str) -> None:
-    """top 아래 파일을 모은다. 정션/심볼릭 링크 폴더(reparse point)는 들어가지 않고 건너뛴 기록을 남긴다."""
-    for root, dirs, names in os.walk(top, followlinks=False):
+def _walk_files_no_links(top: Path, files: list[Path], skipped: list[dict], rule_id: str,
+                         failed: list[dict] | None = None) -> None:
+    """top 아래 파일을 모은다. 정션/심볼릭 링크 폴더(reparse point)는 들어가지 않고 건너뛴 기록을 남긴다.
+
+    260자를 넘는 경로도 긴 경로 접두로 순회하고(반환 경로는 접두 없는 사용자 표기), 읽지 못한 폴더는 조용히 넘기지 않고
+    failed 에 기록한다(R2-1: 빼먹고 '실패 0' 으로 보고하지 않는다)."""
+    top_s = str(top)
+    lp = fs.long_path(top_s)
+
+    def on_error(e: OSError) -> None:
+        if failed is not None:
+            f = failure.classify(e, str(e.filename or top_s))
+            where = str(e.filename or top_s)
+            if where.startswith("\\\\?\\"):
+                where = where[4:]
+            failed.append({"src": where, "error": f"폴더를 읽지 못함: {f.label}", "reason": f.code})
+
+    for root, dirs, names in os.walk(lp, followlinks=False, onerror=on_error):
         dirs.sort()
+        plain = top_s + root[len(lp):]
         keep = []
         for d in dirs:
-            dp = Path(root) / d
+            dp = Path(plain) / d
             if fs.is_reparse(dp):
                 skipped.append({"rule": rule_id, "path": str(dp), "reason": "심볼릭 링크/정션은 따라가지 않음"})
             else:
                 keep.append(d)
         dirs[:] = keep
         for n in sorted(names):
-            files.append(Path(root) / n)
+            files.append(Path(plain) / n)
 
 
-def collect_items(rule: Rule, expand: Expand = expand_env
+def _denied_skip(rule_id: str, path: Path | str, why: str) -> dict:
+    return {"rule": rule_id, "path": str(path), "denied": True,
+            "reason": f"복원하지 않는 형식이라 패키지에 넣지 않음(보안): {why}"}
+
+
+def collect_items(rule: Rule, expand: Expand = expand_env, *, avoid: Callable[[Path], bool] | None = None,
+                  roots: list[Path] | None = None, failed: list[dict] | None = None
                   ) -> tuple[list[Item], list[dict]]:
-    """규칙에 따라 백업할 파일 목록과 건너뛴 항목(사유 포함)을 만든다. 읽기 전용."""
+    """규칙에 따라 백업할 파일 목록과 건너뛴 항목(사유 포함)을 만든다. 읽기 전용.
+
+    복원 때 거부될 파일(실행/스크립트 형식 등)은 내보낼 때도 같은 판정(restore_denied)으로 skipped 에 넣는다(denied=True).
+    avoid(path)가 True 인 파일(출력 파일 자신/임시물 등)은 조용히 뺀다. roots 에는 찾은 최상위 경로를 모은다(출력이 그 안인지 검사용).
+    """
     items: list[Item] = []
     skipped: list[dict] = []
     for pr in rule.paths:
@@ -208,19 +245,27 @@ def collect_items(rule: Rule, expand: Expand = expand_env
             if link:
                 skipped.append({"rule": rule.id, "path": link, "reason": "심볼릭 링크/정션은 따라가지 않음"})
                 continue
+            if roots is not None:
+                roots.append(m)
             files: list[Path] = []
             if m.is_file():
                 files = [m]
             else:
-                _walk_files_no_links(m, files, skipped, rule.id)
+                _walk_files_no_links(m, files, skipped, rule.id, failed)
             for f in files:
-                if f.is_symlink() or _excluded(f.name, rule):
+                if avoid is not None and avoid(f):
+                    continue
+                if os.path.islink(fs.long_path(f)) or _excluded(f.name, rule):
                     skipped.append({"rule": rule.id, "path": str(f),
                                     "reason": "제외 대상(라이선스/임시/링크)"})
                     continue
                 rel = f.relative_to(base_path).as_posix()
                 if unsafe_name(rel):
                     skipped.append({"rule": rule.id, "path": str(f), "reason": "Windows 에서 쓸 수 없는 이름(예약 이름, 끝의 점/공백 등)"})
+                    continue
+                why = restore_denied(rel, base_path / rel, rule, base)
+                if why:
+                    skipped.append(_denied_skip(rule.id, f, why))
                     continue
                 if pr.kind == "file" and not has_glob:
                     arc = f"data/{pr.dest}"
@@ -230,8 +275,10 @@ def collect_items(rule: Rule, expand: Expand = expand_env
     return items, skipped
 
 
-def collect_extra_items(extras: list, expand: Expand = expand_env) -> tuple[list[Item], list[dict]]:
-    """discover 선택 파일로 고른 항목(ExtraItem)의 파일 목록. 읽기 전용, 라이선스/임시/링크 제외."""
+def collect_extra_items(extras: list, expand: Expand = expand_env, *, avoid: Callable[[Path], bool] | None = None,
+                        roots: list[Path] | None = None, failed: list[dict] | None = None
+                        ) -> tuple[list[Item], list[dict]]:
+    """discover 선택 파일로 고른 항목(ExtraItem)의 파일 목록. 읽기 전용, 라이선스/임시/링크 제외, 복원 거부 형식은 skipped(denied)."""
     keys = {r.template: r.key for r in ROOTS}
     items: list[Item] = []
     skipped: list[dict] = []
@@ -244,14 +291,22 @@ def collect_extra_items(extras: list, expand: Expand = expand_env) -> tuple[list
         if top.is_file():
             files = [top]
         else:
-            _walk_files_no_links(top, files, skipped, EXTRA_ID)
+            _walk_files_no_links(top, files, skipped, EXTRA_ID, failed)
+        if roots is not None:
+            roots.append(top)
         for f in files:
-            if f.is_symlink() or _excluded(f.name, None):
+            if avoid is not None and avoid(f):
+                continue
+            if os.path.islink(fs.long_path(f)) or _excluded(f.name, None):
                 skipped.append({"rule": EXTRA_ID, "path": str(f), "reason": "제외 대상(라이선스/임시/링크)"})
                 continue
             rel = ex.rel if f == top else f"{ex.rel}/{f.relative_to(top).as_posix()}"
             if unsafe_name(rel):
                 skipped.append({"rule": EXTRA_ID, "path": str(f), "reason": "Windows 에서 쓸 수 없는 이름(예약 이름, 끝의 점/공백 등)"})
+                continue
+            why = restore_denied(rel, Path(expand(ex.root)) / rel, None, ex.root)
+            if why:
+                skipped.append(_denied_skip(EXTRA_ID, f, why))
                 continue
             items.append(Item(f"data/{EXTRA_ID}/{keys[ex.root]}/{rel}", f, EXTRA_ID, ex.root, rel))
     return items, skipped
@@ -341,10 +396,10 @@ def _write_entry(zf: zipfile.ZipFile, arc: str, src: Path, stage_dir: str | None
     n = 0
     compress = getattr(zf, "compress", "auto")
     try:
-        st = src.stat()
+        st = os.stat(fs.long_path(src))
         size = st.st_size
         mtime = _zip_time_st(st)
-        fin = open(src, "rb")
+        fin = open(fs.long_path(src), "rb")
     except OSError as e:
         raise SourceUnreadable(src, e) from e
     with fin, tempfile.SpooledTemporaryFile(max_size=SPOOL_MAX, dir=stage_dir) as spool:
@@ -375,7 +430,7 @@ def _zip_time_st(st: os.stat_result) -> tuple:
 
 
 def _zip_time(path: Path) -> tuple:
-    return _zip_time_st(path.stat())
+    return _zip_time_st(os.stat(fs.long_path(path)))
 
 
 # --------------------------------------------------------------------------- 저장점(이어받기)
@@ -527,12 +582,146 @@ def inspect_savepoint(out: Path | str) -> dict | None:
         return None
 
 
-def discard_partial(out: Path | str) -> None:
-    """이 도구가 만든 임시물(.part, .part.journal, 정리 중 남은 .new)만 지운다. 완성본은 건드리지 않는다."""
-    part, jpath = part_paths(Path(out))
-    for p in (part, jpath, part.with_name(part.name + ".new"), jpath.with_name(jpath.name + ".new")):
-        if p.is_file() or p.is_symlink():
-            p.unlink()
+LOCK_SUFFIX = ".part.lock"
+FAILED_SUFFIX = ".part.failed"  # 최종 검사에서 문제가 난 임시 패키지(진단용으로 보존)
+
+
+def _is_ours(path: Path, kind: str) -> bool:
+    """지워도 되는, 이 도구가 만든 임시물인지 '머리'로 확인한다(이름만 같은 다른 파일을 지우지 않는다).
+
+    zip 류(.part/.part.new/.part.failed)는 빈 파일이거나 zip 지역 헤더(PK\x03\x04)로 시작해야 하고,
+    journal 류는 첫 줄이 {"t":"head",...} JSON 이어야 한다."""
+    try:
+        with open(fs.long_path(path), "rb") as f:
+            head = f.read(4096)
+    except OSError:
+        return False
+    if kind == "zip":
+        return head == b"" or head[:4] == b"PK" + bytes((3, 4))
+    if not head:
+        return True
+    first = head.split(bytes((10,)), 1)[0]
+    try:
+        obj = json.loads(first.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return False
+    return isinstance(obj, dict) and obj.get("t") == "head"
+
+
+def _partial_files(out: Path) -> list[tuple[Path, str]]:
+    part, jpath = part_paths(out)
+    return [(part, "zip"), (jpath, "journal"), (part.with_name(part.name + ".new"), "zip"),
+            (jpath.with_name(jpath.name + ".new"), "journal"), (out.with_name(out.name + FAILED_SUFFIX), "zip")]
+
+
+def discard_partial(out: Path | str, *, keep_failed: bool = False) -> None:
+    """이 도구가 만든 임시물(.part, .part.journal, 정리 중 남은 .new, 보존해 둔 .part.failed)만 지운다. 완성본은 건드리지 않는다.
+
+    지우기 전에 파일 머리를 확인한다. 이 도구가 만든 것이 아니거나 확인할 수 없으면 아무것도 지우지 않고
+    PackageError('다른 출력 이름을 쓰세요')로 멈춘다(R1-5)."""
+    out = Path(out)
+    todo = [(p, k) for p, k in _partial_files(out)
+            if (p.is_file() or p.is_symlink()) and not (keep_failed and p.name.endswith(FAILED_SUFFIX))]
+    for p, kind in todo:
+        if p.is_symlink() or not _is_ours(p, kind):
+            raise PackageError(f"출력 이름과 겹치는 파일이 이 도구가 만든 임시 파일이 아닌 것 같아 지우지 않았습니다: {p}. "
+                               "다른 출력 이름(또는 다른 폴더)을 쓰세요.")
+    for p, _ in todo:
+        p.unlink()
+
+
+def _pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        try:
+            import ctypes
+            k32 = ctypes.windll.kernel32
+            k32.OpenProcess.restype = ctypes.c_void_p
+            h = k32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+            if not h:
+                return ctypes.get_last_error() == 5 or k32.GetLastError() == 5  # 접근 거부 = 살아 있음
+            try:
+                code = ctypes.c_ulong(0)
+                ok = k32.GetExitCodeProcess(ctypes.c_void_p(h), ctypes.byref(code))
+                return bool(ok) and code.value == 259  # STILL_ACTIVE
+            finally:
+                k32.CloseHandle(ctypes.c_void_p(h))
+        except (AttributeError, OSError):
+            return True  # 판단할 수 없으면 살아 있다고 보고 막는다(안전 쪽)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
+class _OutputLock:
+    """<out>.part.lock: 같은 출력 이름으로 동시에 내보내기를 못 하게 하는 배타 락(PID 기록). 끝나면 지운다."""
+
+    def __init__(self, out: Path) -> None:
+        self.path = out.with_name(out.name + LOCK_SUFFIX)
+        self.held = False
+
+    def acquire(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        for _ in range(2):
+            try:
+                fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            except FileExistsError:
+                pid = self._owner()
+                if pid and _pid_alive(pid) and pid != os.getpid():
+                    raise PackageError(f"같은 출력 파일({self.path.name[:-len(LOCK_SUFFIX)]})로 내보내기가 이미 실행 중입니다(PID {pid}). "
+                                       "끝나길 기다리거나 다른 출력 이름을 쓰세요.") from None
+                try:  # 주인이 없는(비정상 종료로 남은) 락은 치우고 다시 시도한다
+                    os.unlink(self.path)
+                except OSError:
+                    raise PackageError(f"이전 실행이 남긴 잠금 파일을 지우지 못했습니다: {self.path}. 다른 출력 이름을 쓰세요.") from None
+                continue
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(json.dumps({"pid": os.getpid(), "started": datetime.now(timezone.utc).isoformat(timespec="seconds")}))
+            self.held = True
+            return
+        raise PackageError(f"잠금 파일을 만들지 못했습니다: {self.path}. 다른 출력 이름을 쓰세요.")
+
+    def _owner(self) -> int:
+        try:
+            return int(json.loads(self.path.read_text(encoding="utf-8")).get("pid") or 0)
+        except (OSError, ValueError, AttributeError, TypeError):
+            return 0
+
+    def release(self) -> None:
+        if self.held:
+            try:
+                os.unlink(self.path)
+            except OSError:
+                pass
+            self.held = False
+
+
+def _cleanup_stale_stages(folder: Path) -> int:
+    """이전 실행이 남긴 .pcmigrate-stage-* 임시 폴더 중 주인(PID)이 살아 있지 않은 것을 지운다(R1-7). 지운 개수 반환."""
+    n = 0
+    try:
+        entries = [e for e in os.scandir(folder) if e.name.startswith(STAGE_PREFIX) and e.is_dir(follow_symlinks=False)]
+    except OSError:
+        return 0
+    for e in entries:
+        rest = e.name[len(STAGE_PREFIX):]
+        head = rest.split("-", 1)[0]
+        try:
+            if head.isdigit() and "-" in rest:
+                alive = _pid_alive(int(head))
+            else:  # 옛 이름(PID 없음): 하루 넘게 손대지 않은 것만 정리
+                alive = time.time() - e.stat().st_mtime < 24 * 3600
+        except OSError:
+            alive = True
+        if not alive:
+            shutil.rmtree(e.path, ignore_errors=True)
+            n += 0 if os.path.exists(e.path) else 1
+    return n
 
 
 def _headers_ok(part: Path, entries: list[dict]) -> bool:
@@ -609,7 +798,7 @@ def _source_unchanged(e: dict, item: "Item | None") -> bool:
     if item is None or str(item.src) != e["src"] or item.rule_id != e["rule"] or item.base != e["base"] or item.rel != e["rel"]:
         return False
     try:
-        st = item.src.stat()
+        st = os.stat(fs.long_path(item.src))
     except OSError:
         return False
     return st.st_size == e["ssize"] and st.st_mtime_ns == e["mtime_ns"]
@@ -669,7 +858,8 @@ def export_package(rules: list[Rule], out: Path, programs: list[Program],
                    resume: bool = True, compress: str = "auto",
                    savepoint_bytes: int = SAVEPOINT_BYTES, savepoint_seconds: float = SAVEPOINT_SECONDS,
                    notice: Callable[[str], None] | None = None,
-                   clock: Callable[[], float] = time.monotonic) -> dict:
+                   clock: Callable[[], float] = time.monotonic,
+                   dest_info_fn: Callable[[str], fs.DestInfo] | None = None) -> dict:
     """감지된 프로그램의 규칙(rules)으로 설정 패키지를 만든다. manifest dict 반환.
 
     progress_info 가 있으면 파일 찾기 -> 담기 -> 검사 단계의 진행(파일 수, 현재 파일, 분류별 개수)을 알린다(GUI 현황 카드용).
@@ -689,19 +879,24 @@ def export_package(rules: list[Rule], out: Path, programs: list[Program],
         raise IsADirectoryError(errno.EISDIR, "대상이 폴더입니다", str(out))
     args = (rules, out, programs, winget_text, expand, winget_list_text, extras, now, progress_info)
     kw = dict(compress=compress, savepoint_bytes=savepoint_bytes, savepoint_seconds=savepoint_seconds,
-              notice=notice, clock=clock)
+              notice=notice, clock=clock, dest_info_fn=dest_info_fn)
+    lock = _OutputLock(out)
+    lock.acquire()  # 같은 출력 이름으로 동시에 내보내면 .part 를 서로 망가뜨린다(R1-6)
     try:
-        return _export_once(*args, resume=resume, **kw)
-    except _ResumeVerifyFailed:
-        if notice:
-            notice("이어받은 내용이 최종 검사를 통과하지 못해 처음부터 다시 만듭니다.")
-        m = _export_once(*args, resume=False, **kw)
-        m["resume"]["reason"] = "이어받은 내용이 최종 검사를 통과하지 못해 처음부터 다시 만들었습니다"
-        return m
+        try:
+            return _export_once(*args, resume=resume, **kw)
+        except _ResumeVerifyFailed:
+            if notice:
+                notice("이어받은 내용이 최종 검사를 통과하지 못해 처음부터 다시 만듭니다.")
+            m = _export_once(*args, resume=False, **kw)
+            m["resume"]["reason"] = "이어받은 내용이 최종 검사를 통과하지 못해 처음부터 다시 만들었습니다"
+            return m
+    finally:
+        lock.release()
 
 
 def _export_once(rules, out, programs, winget_text, expand, winget_list_text, extras, now, progress_info, *,
-                 resume, compress, savepoint_bytes, savepoint_seconds, notice, clock) -> dict:
+                 resume, compress, savepoint_bytes, savepoint_seconds, notice, clock, dest_info_fn=None) -> dict:
     part, jpath = part_paths(out)
     manifest: dict = {
         "format": FORMAT_VERSION,
@@ -715,7 +910,8 @@ def _export_once(rules, out, programs, winget_text, expand, winget_list_text, ex
         "manual_warnings": [],
     }
     out.parent.mkdir(parents=True, exist_ok=True)
-    stage = tempfile.mkdtemp(prefix=STAGE_PREFIX, dir=out.parent)  # 큰 파일을 읽어 두는 전용 임시 폴더(항상 삭제)
+    _cleanup_stale_stages(out.parent)  # 강제 종료로 남은 이전 임시 폴더 정리(R1-7)
+    stage = tempfile.mkdtemp(prefix=f"{STAGE_PREFIX}{os.getpid()}-", dir=out.parent)  # 큰 파일을 읽어 두는 전용 임시 폴더(항상 삭제)
     zf: _PartZip | None = None
     fobj = None
     journal: _Journal | None = None
@@ -725,14 +921,25 @@ def _export_once(rules, out, programs, winget_text, expand, winget_list_text, ex
         if progress_info:
             progress_info(ProgressInfo("find", 0, 0, 0, 0, message="패키지에 담을 파일을 찾는 중입니다…"))
         groups: list[list[Item]] = []
+        mine = {os.path.normcase(os.path.abspath(p)) for p in
+                (out, part, jpath, part.with_name(part.name + ".new"), jpath.with_name(jpath.name + ".new"),
+                 out.with_name(out.name + FAILED_SUFFIX), out.with_name(out.name + LOCK_SUFFIX))}
+        stage_root = os.path.normcase(os.path.abspath(stage))
+        out_prefix = os.path.normcase(os.path.abspath(out))
+
+        def avoid(p: Path) -> bool:
+            """내보내기 중 이 도구가 만드는 파일(출력, 임시물, .bak, 임시 폴더)은 백업 대상에서 뺀다(R1-8)."""
+            q = os.path.normcase(os.path.abspath(p))
+            return q in mine or q.startswith(stage_root + os.sep) or (q.startswith(out_prefix + ".bak"))
+        roots: list[Path] = []
         for rule in rules:  # 1) 파일 찾기(읽기 전용)
-            items, skipped = collect_items(rule, expand)
+            items, skipped = collect_items(rule, expand, avoid=avoid, roots=roots, failed=manifest["failed"])
             manifest["skipped"] += skipped
             manifest["rules"].append({"id": rule.id, "name": rule.name, "version": rule.version, "notes": rule.notes})
             manifest["manual_warnings"].append({"rule": rule.id, "name": rule.name, "items": list(rule.manual_warnings)})
             groups.append(items)
         if extras:
-            items, skipped = collect_extra_items(extras, expand)
+            items, skipped = collect_extra_items(extras, expand, avoid=avoid, roots=roots, failed=manifest["failed"])
             manifest["skipped"] += skipped
             manifest["extras"] = [{"root": e.root, "rel": e.rel} for e in extras]
             manifest["manual_warnings"].append({
@@ -740,15 +947,19 @@ def _export_once(rules, out, programs, winget_text, expand, winget_list_text, ex
                 "items": ["규칙 없이 사용자가 직접 골라 포함한 폴더입니다. 신 PC 에서 같은 버전의 프로그램을 설치한 뒤 "
                           "복원하고, 라이선스/로그인은 직접 처리하세요."]})
             groups.append(items)
+        for r in roots:  # 출력이 백업 대상 폴더 안이면 자기 자신을 담게 되므로 시작하지 않는다
+            if _within(out, r) and Path(os.path.realpath(r)).is_dir():
+                raise PackageError(f"출력 파일이 백업할 폴더 안에 있습니다: {out} (폴더: {r}). 백업 대상 밖(예: 다른 드라이브나 문서 폴더)에 저장하세요.")
         total_files = sum(len(g) for g in groups)
-        total_bytes = 0
-        if progress_info:
-            for g in groups:
-                for it in g:
-                    try:
-                        total_bytes += it.src.stat().st_size
-                    except OSError:
-                        pass
+        total_bytes = biggest = 0
+        for g in groups:
+            for it in g:
+                try:
+                    sz = os.stat(fs.long_path(it.src)).st_size
+                except OSError:
+                    continue
+                total_bytes += sz
+                biggest = max(biggest, sz)
         tracker = ProgressTracker("pack", total_bytes, total_files)
         tracker.counts[SKIPPED] = len(manifest["skipped"])
         tracker.resumed = 0
@@ -770,6 +981,12 @@ def _export_once(rules, out, programs, winget_text, expand, winget_list_text, ex
                 by_arc.setdefault(it.arc, it)
         rs = _prepare_part(part, jpath, head, fp_info, by_arc, resume)
         kept_bytes = sum(e["size"] for e in rs.kept.values())
+        try:
+            _check_export_space(out, total_bytes - kept_bytes, biggest, compress, dest_info_fn, notice)
+        except PackageError:
+            if rs.journal is not None:
+                rs.journal.close()
+            raise
         resume_info = {"resumed": bool(rs.kept), "kept_files": len(rs.kept), "kept_bytes": kept_bytes,
                        "dropped": rs.dropped, "reason": rs.reason}
         if rs.kept:
@@ -883,16 +1100,19 @@ def _export_once(rules, out, programs, winget_text, expand, winget_list_text, ex
         problems = verify_package(part)[1]
         if problems:
             finished = True
-            discard_partial(out)  # 검사를 통과하지 못한 임시물은 다시 쓸 수 없다
             if resume_info["resumed"]:
+                discard_partial(out)  # 이어받은 내용이 의심되므로 처음부터 다시 만든다(자동)
                 raise _ResumeVerifyFailed()
+            kept = _keep_failed_part(out, part, jpath)
             raise PackageError("만든 패키지를 다시 검사했더니 문제가 있어 저장하지 않았습니다(원본은 그대로입니다). "
-                               "문제: " + "; ".join(problems[:3]))
+                               + (f"문제 확인용으로 임시 파일을 {kept} 로 보존했습니다. " if kept else "")
+                               + "같은 설정으로 다시 내보내면 처음부터 다시 만듭니다. 문제: " + "; ".join(problems[:3]))
         if out.exists():
             os.replace(out, _backup_path(out))
         os.replace(part, out)
         finished = True
         jpath.unlink(missing_ok=True)
+        out.with_name(out.name + FAILED_SUFFIX).unlink(missing_ok=True)  # 이전에 검사 실패로 보존해 둔 임시 파일은 더 필요 없다
         manifest["resume"] = resume_info
     except BaseException:
         if not finished:
@@ -903,6 +1123,45 @@ def _export_once(rules, out, programs, winget_text, expand, winget_list_text, ex
             journal.close()
         shutil.rmtree(stage, ignore_errors=True)
     return manifest
+
+
+SPACE_FACTOR_DEFLATE = 0.5  # 압축하는 경우 필요한 공간의 하한 추정(원본 총량의 절반 미만이면 막는다). 정확한 값은 알 수 없다
+
+
+def _check_export_space(out: Path, need_bytes: int, biggest: int, compress: str,
+                        dest_info_fn: Callable[[str], fs.DestInfo] | None, notice: Callable[[str], None] | None) -> None:
+    """출력 위치의 여유 공간/FAT32 4GB 한계를 만들기 전에 점검한다(transfer 와 같은 fs.check_space 사용, R1-10).
+
+    zip 으로 얼마나 줄지는 알 수 없으므로, 압축하지 않는 설정이면 원본 총량을, 압축하면 그 절반을 최소 필요량으로 본다.
+    큰 파일 하나를 임시 폴더에 읽어 두므로 가장 큰 파일 하나 분량도 더한다."""
+    if need_bytes <= 0:
+        return
+    dest = (dest_info_fn or fs.describe_destination)(str(out.parent))
+    factor = 1.0 if compress == "never" else SPACE_FACTOR_DEFLATE
+    required = int(need_bytes * factor) + (biggest if biggest > SPOOL_MAX else 0)
+    sc = fs.check_space(dest, required, need_bytes)
+    if sc.fat32_blocked:
+        raise PackageError(f"저장할 드라이브가 FAT32 라 4GB 가 넘는 패키지를 만들 수 없습니다(담을 파일 약 {fmt_bytes(need_bytes)}). "
+                           "NTFS 드라이브를 쓰거나 담을 항목을 줄이세요.")
+    if sc.space_blocked:
+        raise PackageError(f"저장할 드라이브의 여유 공간이 부족합니다. 최소 약 {fmt_bytes(required)} 필요(담을 파일 {fmt_bytes(need_bytes)}), "
+                           f"현재 여유 {fmt_bytes(sc.free or 0)}. 다른 드라이브를 쓰거나 정리한 뒤 다시 하세요(만들던 임시 파일은 보존되어 이어받습니다).")
+    if sc.free_unknown and notice:
+        notice("저장할 위치의 여유 공간을 조회하지 못해 공간 사전 검사를 건너뜁니다.")
+
+
+def _keep_failed_part(out: Path, part: Path, jpath: Path) -> str:
+    """검사에 실패한 .part 를 <out>.part.failed 로 보존하고(기존 것은 덮어씀) 진행 기록은 지운다. 보존 경로(실패하면 빈 문자열)."""
+    failed = out.with_name(out.name + FAILED_SUFFIX)
+    try:
+        os.replace(part, failed)
+    except OSError:
+        return ""
+    try:
+        jpath.unlink(missing_ok=True)
+    except OSError:
+        pass
+    return str(failed)
 
 
 def _abandon(zf, fobj, journal, end: int) -> None:
@@ -1080,6 +1339,11 @@ def restore_denied(rel: str, target: Path, rule: Rule | None, base: str) -> str 
     if any(d in low for d in RESTORE_DENY_SUBSTRINGS):
         return "복원이 금지된 위치(시작 프로그램/authorized_keys 등)"
     parts = [x.lower() for x in PurePosixPath(rel).parts]
+    if any(x in DENY_DIR_NAMES for x in parts[:-1]) or parts[-1] in DENY_DIR_NAMES:
+        return "복원이 금지된 위치(Excel 시작 폴더 XLSTART)"
+    if base == "%USERPROFILE%" and (parts[0] in HOME_DENY_FILES and len(parts) == 1
+                                    or len(parts) == 2 and (parts[0], parts[1]) in HOME_DENY_SUBFILES):
+        return "복원이 금지된 설정 파일(도구가 실행할 명령이나 토큰이 들어갈 수 있는 홈 설정)"
     if parts[-1] in DENY_FILE_NAMES or (len(parts) >= 2 and parts[-2] == ".ssh" and parts[-1] in SSH_DENY_FILES):
         return "복원이 금지된 설정 파일(쉘 시작 파일/SSH 설정)"
     ext = os.path.splitext(parts[-1])[1]
@@ -1117,6 +1381,12 @@ def _rejected_item(f: dict, target: Path, link: str, is_extra: bool, base_path: 
             "base_dir": str(base_path),
             "sha256": f["sha256"], "extra": is_extra, "reason": failure.LINK_IN_PATH,
             "error": f"{failure.REASONS[failure.LINK_IN_PATH].text} ({link})"}
+
+
+def _denied_item(f: dict, target: Path, why: str, is_extra: bool, base_path: Path) -> dict:
+    return {"entry": f["arc"], "target": str(target), "status": DENIED, "backup": "", "size": f["size"],
+            "base_dir": str(base_path), "sha256": f["sha256"], "extra": is_extra, "reason": DENIED,
+            "error": f"복원 안 함: {why}"}
 
 
 def _plan_import(path: Path, rules: list[Rule], expand: Expand) -> ImportPlan:
@@ -1167,15 +1437,15 @@ def _plan_import(path: Path, rules: list[Rule], expand: Expand) -> ImportPlan:
         if _excluded(target.name, None if is_extra else by_id[rid], RESTORE_EXCLUDE):
             plan.problems.append(f"복원 제외 대상(라이선스 등): {f['rel']}")
             continue
-        why = restore_denied(f["rel"], target, None if is_extra else by_id[rid], base)
-        if why:
-            plan.problems.append(f"{why}: {target}")
-            continue
         key = os.path.normcase(str(target))
         if key in seen_targets:  # 대소문자만 다른 경로 등 같은 파일로 가는 두 항목: 뒤 항목이 앞 항목을 .bak 으로 밀어낸다(B-6)
             plan.problems.append(f"같은 대상으로 복원되는 중복 항목: {target}")
             continue
         seen_targets.add(key)
+        why = restore_denied(f["rel"], target, None if is_extra else by_id[rid], base)
+        if why:  # 패키지 전체를 막지 않고 이 파일만 '복원 안 함'(쓰지 않는다). 나머지는 정상 복원(R1-1)
+            plan.items.append(_denied_item(f, target, why, is_extra, base_path))
+            continue
         backup = ""
         if target.is_file() and target.stat().st_size == f["size"] and sha256_file(target) == f["sha256"]:
             status = SKIPPED_SAME
@@ -1220,6 +1490,9 @@ def apply_import(path: Path, plan: ImportPlan,
                 done(FileResult(it["entry"], it["target"], SKIPPED_SAME, it["size"], it["sha256"]))
                 continue
             target = Path(it["target"])
+            if it["status"] == DENIED:  # 거부 항목은 패키지에서 꺼내지도, 대상에 쓰지도 않는다
+                done(FileResult(it["entry"], it["target"], DENIED, it["size"], it["sha256"], error=it["error"], reason=DENIED))
+                continue
             link = it["error"] if it["status"] == REJECTED else ""
             if not link and it.get("base_dir"):  # 계획 이후에 링크가 생겼을 수도 있으니 쓰기 직전에 다시 확인한다
                 found = fs.reparse_in_chain(it["base_dir"], target)
@@ -1274,3 +1547,58 @@ def _stage_entry(zf: zipfile.ZipFile, it: dict, staged: Path, tmp: str) -> FileR
         return FileResult(it["entry"], it["target"], FAILED, error="manifest 해시와 불일치(패키지가 검사 뒤에 바뀌었을 수 있음, 대상은 바꾸지 않음)",
                           reason=failure.MISMATCH)
     return None
+
+
+# --------------------------------------------------------------------------- winget-extract
+
+WINGET_ENTRY = "programs/winget.json"
+MAX_WINGET_BYTES = 64 * 1024 * 1024
+
+
+def extract_winget(path: Path, out_dir: Path) -> tuple[Path, Path | None]:
+    """패키지(.zip)의 programs/winget.json 을 <out_dir>/winget.json 으로 꺼낸다(신 PC 에서 winget import 에 쓰기 위해).
+
+    패키지를 먼저 검증한다. 같은 이름의 파일이 이미 있으면 덮어쓰지 않고 .bak 으로 옮긴 뒤 새로 쓴다.
+    폴더가 같은 이름 자리에 있거나 출력 위치가 파일이면 아무것도 바꾸지 않고 PackageError.
+    반환: (새 파일 경로, .bak 으로 옮긴 이전 파일 경로 또는 None)."""
+    path, out_dir = Path(path), Path(out_dir)
+    if is_unfinished_part(path):
+        raise PackageError("이 파일(.part)은 아직 완성되지 않은 임시 파일입니다. 완성된 .zip 파일을 선택하세요.")
+    manifest, problems = verify_package(path)
+    if manifest is None or problems:
+        raise PackageError("패키지 검증 실패: " + "; ".join(problems[:3]))
+    with zipfile.ZipFile(path) as zf:
+        try:
+            info = zf.getinfo(WINGET_ENTRY)
+        except KeyError:
+            raise PackageError("이 패키지에는 winget 목록이 없습니다(구 PC 에서 winget export 가 실패했거나 winget 이 없었습니다). "
+                               "pcmigrate checklist --package 로 수동 설치 목록을 확인하세요.") from None
+        if info.file_size > MAX_WINGET_BYTES:
+            raise PackageError("패키지의 winget 목록이 비정상적으로 큽니다. 안전하지 않은 패키지일 수 있습니다.")
+        raw = zf.read(WINGET_ENTRY)
+    try:
+        json.loads(raw.decode("utf-8-sig"))
+    except (ValueError, RecursionError):
+        raise PackageError("패키지의 winget 목록이 올바른 JSON 이 아닙니다. 쓰지 않았습니다.") from None
+    if out_dir.exists() and not out_dir.is_dir():
+        raise PackageError(f"출력 위치가 폴더가 아닙니다: {out_dir}. 폴더 경로를 지정하세요(없으면 만들어 줍니다).")
+    target = out_dir / "winget.json"
+    if target.is_dir():
+        raise PackageError(f"같은 이름의 폴더가 있어 쓰지 않았습니다: {target}")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(target.name + ".pcmigrate-part")
+    tmp.write_bytes(raw)
+    bak: Path | None = None
+    try:
+        if target.exists():
+            bak = _backup_path(target)
+            os.replace(target, bak)
+        try:
+            os.replace(tmp, target)
+        except OSError:
+            if bak is not None:
+                os.replace(bak, target)  # 되돌린다
+            raise
+    finally:
+        tmp.unlink(missing_ok=True)
+    return target, bak

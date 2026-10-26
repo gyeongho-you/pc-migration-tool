@@ -29,8 +29,8 @@ from .discover import (Discovery, ExtraItem, SelectionError, build_selection, di
                        load_selection,
                        program_has_rule, secret_names, summarize)
 import inspect
-from .package import (COMPRESS_MODES, ImportPlan, PackageError, apply_import, export_package, plan_import,
-                      verify_package)
+from .package import (COMPRESS_MODES, ImportPlan, PackageError, apply_import, export_package, extract_winget,
+                      plan_import, verify_package)
 from .rules import Rule, RuleError, load_rules
 from . import fs
 from .manifest import build_manifest, verify_against_manifest
@@ -107,6 +107,32 @@ def check_unexpanded(**paths: str | None) -> list[str]:
         if value and UNEXPANDED.search(value):
             return [f"출력 경로를 만들 수 없습니다: {value} (환경변수가 확장되지 않았습니다: --{label})", SHELL_HINT]
     return []
+
+
+def clean_path_arg(value: str) -> str:
+    """경로 인자 양끝의 공백과 따옴표(" ')를 지운다(탐색기에서 '경로로 복사' 한 값 등). 빈 값은 그대로 두어 호출자가 거부한다."""
+    return value.strip(" \t\r\n\"'")
+
+
+def check_path_forms(**paths: str | None) -> tuple[list[str], list[str]]:
+    """경로 인자의 모양 검사(R2-9). (오류 문장들, 안내 문장들).
+
+    - 드라이브 문자 없이 역슬래시 하나로 시작하는 경로(\\x\\y)는 '현재 드라이브의 루트'로 해석되어 뜻밖의 곳이 되므로 거부한다.
+      네트워크 경로는 역슬래시 두 개(\\\\서버\\공유)로 시작해야 한다.
+    - 상대 경로는 현재 폴더 기준으로 풀어 보여 준다(안내)."""
+    errors: list[str] = []
+    notes: list[str] = []
+    for label, value in paths.items():
+        if not value or UNEXPANDED.search(value):
+            continue
+        v = fs.plain_path_text(value)
+        if v.startswith(("\\", "/")) and not v.startswith(("\\\\", "//")):
+            errors.append(f"경로가 드라이브 문자 없이 역슬래시(\\)로 시작합니다: {value} (--{label}). 현재 드라이브의 맨 위 폴더로 해석되어 "
+                          "뜻하지 않은 곳이 됩니다. D:\\폴더\\이름 처럼 드라이브 문자부터 쓰세요. 네트워크 경로는 역슬래시 두 개로 "
+                          "시작해야 합니다(\\\\서버\\공유\\폴더).")
+        elif not os.path.isabs(v) and not v.startswith("\\\\"):
+            notes.append(f"[안내] 상대 경로를 현재 폴더 기준으로 풀어서 씁니다: {value} → {os.path.abspath(v)} (--{label})")
+    return errors, notes
 
 
 def load_rules_checked(rules_dir: str | Path) -> list[Rule]:
@@ -433,6 +459,11 @@ class ExportResult:
         return [f for f in self.manifest["failed"] if f.get("reason")]
 
     @property
+    def denied(self) -> list[dict]:
+        """보안상 복원하지 않는 형식이라 패키지에 넣지 않은 파일(skipped 의 denied 항목)."""
+        return [s for s in self.manifest["skipped"] if s.get("denied")]
+
+    @property
     def hard_failures(self) -> list[dict]:
         """읽기 실패가 아닌 실패(중복 경로 등). 이것이 있으면 CLI 는 실패 코드로 끝낸다."""
         return [f for f in self.manifest["failed"] if not f.get("reason")]
@@ -445,7 +476,8 @@ class ExportResult:
     def summary_dict(self, output: str) -> dict:
         m = self.manifest
         d = {"output": output, "rules": [r["id"] for r in m["rules"]], "files": len(m["files"]),
-             "skipped": len(m["skipped"]), "failed": len(m["failed"]), "unreadable": len(self.unreadable)}
+             "skipped": len(m["skipped"]), "failed": len(m["failed"]), "unreadable": len(self.unreadable),
+             "denied": len(self.denied)}
         if self.resume.get("resumed"):
             d["resumed_files"] = self.resume["kept_files"]
         return d
@@ -514,6 +546,11 @@ class ImportResult:
     def written(self) -> bool:
         return self.mode == "applied"
 
+    @property
+    def denied(self) -> list[dict]:
+        """보안상 복원하지 않는(항목별 '복원 안 함') 계획 항목."""
+        return [it for it in self.plan.items if it.get("status") == "denied"]
+
     def summary(self) -> dict[str, int]:
         out: dict[str, int] = {}
         for it in self.plan.items:
@@ -544,3 +581,32 @@ def run_import(package: str | Path, rules_dir: str | Path, *, dry_run: bool = Fa
         return ImportResult(plan, "needs-allow-extra", n_extra)
     report = apply_import(Path(package), plan, progress_info) if progress_info else apply_import(Path(package), plan)
     return ImportResult(plan, "applied", n_extra, report)
+
+
+# --------------------------------------------------------------------------- winget-extract
+
+def run_winget_extract(package: str | Path, output: str | Path) -> tuple[Path, Path | None]:
+    """패키지의 programs/winget.json 을 <output>/winget.json 으로 꺼낸다. (새 파일, .bak 으로 옮긴 이전 파일 또는 None)."""
+    try:
+        return extract_winget(Path(package), Path(output))
+    except PackageError as e:
+        raise ApiError(str(e)) from e
+
+
+# --------------------------------------------------------------------------- 전송 기록 파일 정리
+
+def clean_state_files(dst: str | Path) -> list[str]:
+    """전송 성공 + 검사 통과 뒤에 대상 폴더 맨 위의 이 도구 기록 파일(.pcmigrate-state.json, -preserve.json, -robocopy.log)을 지운다.
+
+    복사한 데이터 파일은 건드리지 않는다. 지운 파일 이름 목록을 돌려준다. 지우지 못한 것은 조용히 남긴다."""
+    from .transfer import LOG_NAME, PRESERVE_NAME, STATE_NAME
+    removed = []
+    for name in (STATE_NAME, PRESERVE_NAME, LOG_NAME):
+        p = Path(dst) / name
+        try:
+            if p.is_file():
+                p.unlink()
+                removed.append(name)
+        except OSError:
+            pass
+    return removed

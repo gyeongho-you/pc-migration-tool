@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ntpath
+import re
 import os
 import shutil
 from dataclasses import dataclass
@@ -145,3 +146,29 @@ def reparse_in_chain(base: str | os.PathLike, target: str | os.PathLike) -> str 
         if os.path.islink(cur) or (os.path.isdir(cur) and is_reparse(cur)):  # 파일은 심볼릭 링크만(클라우드 자리표시 파일 제외)
             return cur
     return None
+
+
+@dataclass(frozen=True)
+class SpaceCheck:
+    """대상 드라이브에 쓰기 전 사전 점검 결과(transfer 와 export 가 같이 쓴다)."""
+    fat32_blocked: bool   # FAT32 인데 4GB 를 넘는 파일(또는 패키지)을 써야 함
+    space_blocked: bool   # 여유 공간이 필요량보다 적음
+    free_unknown: bool    # 여유 공간을 조회하지 못함(사전 검사 건너뜀)
+    exfat: bool           # exFAT: 큰 파일은 되지만 전원이 꺼지면 손상되기 쉬움
+    free: int | None
+    required: int
+
+
+def check_space(dest: DestInfo, required: int, biggest: int) -> SpaceCheck:
+    """dest 에 required 바이트를 쓸 수 있는지, 가장 큰 파일(biggest)이 FAT32 의 4GB 한계를 넘는지 본다(읽기 전용)."""
+    return SpaceCheck(fat32_blocked=biggest > FAT4G and dest.fs == "FAT32",
+                      space_blocked=dest.free is not None and dest.free < required,
+                      free_unknown=dest.free is None, exfat=dest.fs == "EXFAT", free=dest.free, required=required)
+
+
+_LONG_PREFIX = re.compile(r"\\\\\?\\(UNC\\)?")
+
+
+def plain_path_text(text: str) -> str:
+    """문구 안의 긴 경로 접두(역슬래시 2개 + ? + 역슬래시, UNC 는 UNC 포함)를 지워 사용자가 입력한 모양의 경로로 보여 준다(표시 전용)."""
+    return _LONG_PREFIX.sub(lambda m: "\\\\" if m.group(1) else "", text)

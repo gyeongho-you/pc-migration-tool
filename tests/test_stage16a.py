@@ -202,7 +202,11 @@ def test_dangerous_names_rejected_even_inside_pattern(env, tmp_path):
                 "x/a.lnk", "x/a.exe", "Start Menu/Programs/Startup/a.txt", ".ssh/config", "x/.bashrc"):
         bad = forge_pkg(tmp_path / "bad.zip", [("demo", "%ROAM%\\Docs", rel, b"x")], rules=[rule])
         plan = plan_import(bad, [rule], expand_for(new))
-        assert plan.items == [] and plan.problems, rel
+        # 19a: 패키지 전체를 막지 않고 그 파일만 '복원 안 함'(denied). 대상에는 쓰지 않는다
+        assert plan.problems == [] and [i["status"] for i in plan.items] == ["denied"], rel
+        report = apply_import(bad, plan)
+        assert [r.status for r in report.results] == ["denied"] and not report.failures
+        assert not (new / "Docs").exists(), rel
 
 
 def test_rule_that_names_extension_explicitly_may_restore_it(env, tmp_path):
@@ -218,7 +222,7 @@ def test_extra_items_use_same_danger_list(env, tmp_path):
                                             ("extra", "%APPDATA%", "Tool/run.cmd", b"x")], rules=[make_rule()])
     new_env = lambda s: s.replace("%USERPROFILE%", str(new)).replace("%APPDATA%", str(new))  # noqa: E731
     plan = plan_import(bad, [make_rule()], new_env)
-    assert plan.items == [] and len(plan.problems) == 2
+    assert plan.problems == [] and [i["status"] for i in plan.items] == ["denied", "denied"]
 
 
 def test_shipped_rules_roundtrip_paths_match_their_patterns(tmp_path):

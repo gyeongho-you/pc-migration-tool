@@ -335,7 +335,7 @@ def test_import_json_reflects_real_state(tmp_path, monkeypatch, capsys):
 
     def preview(*extra):
         capsys.readouterr()
-        rc = cli.main(["import", str(pkg), "--rules", str(rd), *extra])
+        rc = cli.main(["import", str(pkg), "--rules", str(rd), "--json", *extra])
         return rc, json.loads(capsys.readouterr().out)
 
     rc, j = preview()  # --yes 없음: 아무것도 쓰지 않음
@@ -346,7 +346,7 @@ def test_import_json_reflects_real_state(tmp_path, monkeypatch, capsys):
     assert rc == 0 and j["dry_run"] is True and j["written"] is False
     assert not (new.appdata / "Foo Bar").exists()
     capsys.readouterr()
-    assert cli.main(["import", str(pkg), "--rules", str(rd), "--yes", "--allow-extra"]) == 0
+    assert cli.main(["import", str(pkg), "--rules", str(rd), "--yes", "--allow-extra", "--json"]) == 0
     assert json.loads(capsys.readouterr().out.strip().splitlines()[-1])["dry_run"] is False
     assert (new.appdata / "Foo Bar" / "data.db").exists()
 

@@ -40,6 +40,11 @@ COMMON_ITEMS: tuple[CommonItem, ...] = (
         "Revit 로컬 캐시 — 복원하지 않습니다. 신 PC에서 중앙 모델을 열어 로컬 사본을 다시 동기화하세요.",
         "data", patterns=("revit",), rule_ids=("revit",), covers=("revit 로컬 캐시",)),
     CommonItem(
+        "dongle_check", "동글(하드웨어 락) 사용 여부 확인",
+        "동글(하드웨어 락) 확인 — USB 동글이 꽂혀 있어야 실행되는 프로그램이 있는지 먼저 확인하세요(이 도구가 알아낼 수 없습니다). "
+        "있으면 새 PC 로 옮기기 전에 동글과 제조사 설치 파일을 챙기세요.",
+        "login", always=True),
+    CommonItem(
         "dongle", "동글(하드웨어 락)",
         "동글(하드웨어 락) 프로그램 — 동글을 신 PC의 USB에 연결하고 제조사 드라이버(Sentinel/HASP/CodeMeter 등)를 설치한 뒤 "
         "인식되는지 확인하세요.",

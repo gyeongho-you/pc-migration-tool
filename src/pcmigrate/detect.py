@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -27,6 +28,21 @@ class Program:
     source: str = "registry"  # "registry" | "winget"
     winget_id: str = ""
     install_location: str = ""  # 레지스트리 InstallLocation(없으면 빈 문자열). discover 의 연결 근거
+
+    @property
+    def display(self) -> str:
+        """사람에게 보여 줄 이름. 표시 이름에 이미 버전(연도/점 숫자)이 있으면 버전을 또 붙이지 않는다(R2-11)."""
+        return display_with_version(self.name, self.version)
+
+
+_NAME_HAS_VERSION = re.compile(r"\d+(?:\.\d+)+|\b(?:19|20)\d\d\b|\bv\d+\b", re.I)
+
+
+def display_with_version(name: str, version: str) -> str:
+    """'이름 버전'. 이름에 같은 버전이 들어 있거나 이름이 이미 버전처럼 보이는 숫자(2024, 1.2.3, v5)를 가지면 이름만 쓴다."""
+    if not version or version.lower() in name.lower() or _NAME_HAS_VERSION.search(name):
+        return name
+    return f"{name} {version}"
 
 
 # reader() -> Program 목록. 기본 구현은 winreg 사용(Windows 전용).

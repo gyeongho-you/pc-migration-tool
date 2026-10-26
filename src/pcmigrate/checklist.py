@@ -21,8 +21,10 @@ from .detect import Program, parse_winget_export
 from .rules import Rule
 
 WINGET_IMPORT_GUIDE: tuple[str, ...] = (
-    "신 PC에서 패키지(.zip) 안의 programs/winget.json 을 꺼낸 뒤 다음 명령을 직접 실행하세요:",
-    "winget import -i winget.json --ignore-unavailable --accept-package-agreements --accept-source-agreements",
+    "신 PC에서 먼저 패키지(.zip) 안의 winget 목록을 꺼내세요(폴더는 아무 곳이나 됩니다. 예: 바탕 화면의 새 폴더):",
+    "pcmigrate winget-extract 패키지.zip --output 폴더경로",
+    "그런 다음 꺼낸 winget.json 으로 다음 명령을 직접 실행하세요:",
+    "winget import -i 폴더경로\\winget.json --ignore-unavailable --accept-package-agreements --accept-source-agreements",
     "--ignore-unavailable 은 신 PC 의 winget 에서 찾을 수 없는 패키지를 건너뜁니다. "
     "이 도구는 winget import 를 자동 실행하지 않습니다.",
 )
@@ -237,7 +239,7 @@ def find_manual_installs(registry: list[Program], winget: list[Program],
 
 
 def describe_manual(p: Program, m: Match | None) -> str:
-    head = p.name + (f" {p.version}" if p.version else "")
+    head = p.display
     if m is None:
         return f"{head} — 매칭 근거: {NONE}"
     return f"{head} — 매칭 근거: {m.grade}({m.reason}: {m.winget_id}) → 실제 설치 여부 확인"
@@ -382,7 +384,7 @@ def render(cl: Checklist, fmt: str = "text") -> str:
         lines.extend(f"- [ ] {i}" for i in items)
 
     lines.append(h1("1. 새 PC 에서 먼저 설치"))
-    lines += [("    " + g) if g.startswith("winget ") else g for g in WINGET_IMPORT_GUIDE]
+    lines += [("    " + g) if g.startswith(("winget ", "pcmigrate ")) else g for g in WINGET_IMPORT_GUIDE]
     if cl.winget_auto:
         lines.append(f"→ winget import 로 자동 설치되는 앱 {len(cl.winget_auto)}건"
                      + ("" if cl.show_all else " (목록은 --all)"))

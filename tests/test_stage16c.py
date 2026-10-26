@@ -31,7 +31,7 @@ def _deferred_report(links=()):
 
 def test_cli_transfer_deferred_is_not_called_success(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(cli, "run_transfer", lambda *a, **k: _deferred_report())
-    code, out, err = _run_cli(["transfer", str(tmp_path / "a"), str(tmp_path / "b")], capsys)
+    code, out, err = _run_cli(["transfer", str(tmp_path / "a"), str(tmp_path / "b"), "--json"], capsys)
     j = json.loads(out)
     assert code == 0 and j["success"] is False and j["verification_complete"] is False
     assert "복사 완료" in err and "verify" in err and "새 PC" in err
@@ -42,7 +42,7 @@ def test_cli_transfer_immediate_is_success(tmp_path, monkeypatch, capsys):
     rep = Report(dry_run=False, results=[FileResult("s", "d", "verified", 1, "x")],
                  meta=dict(mode="copy", dest_verification="now", verification_complete=True, cloud_only_count=0))
     monkeypatch.setattr(cli, "run_transfer", lambda *a, **k: rep)
-    code, out, err = _run_cli(["transfer", str(tmp_path / "a"), str(tmp_path / "b")], capsys)
+    code, out, err = _run_cli(["transfer", str(tmp_path / "a"), str(tmp_path / "b"), "--json"], capsys)
     j = json.loads(out)
     assert code == 0 and j["success"] is True and j["verification_complete"] is True
     assert "새 PC 에서 verify" not in err
@@ -111,7 +111,7 @@ def test_cli_import_apply_reports_rejected(tmp_path, monkeypatch, capsys):
     rep = Report(dry_run=False, results=[FileResult("e2", "C:\b", "rejected", 1, "x", error="링크", reason="link_in_path")])
     res = real_api.ImportResult(plan([item("rejected")]), "applied", 0, rep)
     monkeypatch.setattr(cli, "run_import", lambda *a, **k: res)
-    code, out, err = _run_cli(["import", str(tmp_path / "p.zip"), "--yes"], capsys)
+    code, out, err = _run_cli(["import", str(tmp_path / "p.zip"), "--yes", "--json"], capsys)
     j = json.loads(out)
     assert code == 1 and j["success"] is False and j["summary"] == {"rejected": 1}
     assert "복원하지 않았습니다" in err and "바로가기" in err
@@ -129,7 +129,7 @@ def test_verify_manifest_errors_surface_in_cli_and_gui(tmp_path, monkeypatch, ca
                  meta=dict(mode="verify", manifest_errors=3, manifest_complete=True, extra_files=0, seconds=1))
     monkeypatch.setattr(cli, "run_verify", lambda *a, **k: rep)
     (tmp_path / "t").mkdir()
-    code, out, err = _run_cli(["verify", "--manifest", str(tmp_path / "m"), "--target", str(tmp_path / "t")], capsys)
+    code, out, err = _run_cli(["verify", "--manifest", str(tmp_path / "m"), "--target", str(tmp_path / "t"), "--json"], capsys)
     j = json.loads(out)
     assert code == 1 and j["manifest_errors"] == 3 and j["success"] is False
     assert "구 PC 에서 읽지 못해 목록에서 빠진 파일 3개" in err
@@ -354,7 +354,8 @@ class _PartialThenCancel(FakeRobocopy):
         self.calls.append(list(args))
         dst = Path(args[2])
         (dst / "sub").mkdir(parents=True, exist_ok=True)
-        (dst / "sub" / "f0.dwg").write_bytes(b"partial")
+        # 실제 robocopy /Z 는 원본의 앞부분을 그대로 쓰다 끊긴다(19a: 앞부분이 아닌 다른 내용은 이어받기로 보지 않는다)
+        (dst / "sub" / "f0.dwg").write_bytes((Path(args[1]) / "sub" / "f0.dwg").read_bytes()[:3])
         raise Cancelled()
 
 

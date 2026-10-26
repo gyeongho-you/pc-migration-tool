@@ -117,7 +117,7 @@ def test_classification_buckets_for_mixed_list():
 
 # --------------------------------------------------------------------- A. 공통 경고 필터
 
-ALWAYS = {"gpu", "browser", "kakao_cert_finance", "onedrive"}
+ALWAYS = {"gpu", "browser", "kakao_cert_finance", "onedrive", "dongle_check"}  # 19a: 동글 확인은 항상 한 줄(R2-12)
 
 
 def test_common_items_data_is_consistent():
@@ -136,9 +136,9 @@ def texts(cl):
 def test_only_always_items_when_nothing_relevant_installed():
     cl = build_checklist([], [P("Google Chrome"), P("Microsoft Visual Studio Code")], wg("a.b"))
     t = texts(cl)
-    for kw in ("브라우저", "GPU", "카카오톡", "OneDrive"):
+    for kw in ("브라우저", "GPU", "카카오톡", "OneDrive", "동글(하드웨어 락) 확인"):  # 동글 확인 한 줄은 항상(19a R2-12)
         assert kw in t
-    for kw in ("Autodesk", "동글", "Rhino", "Office", "Adobe", "Revit"):
+    for kw in ("Autodesk", "Sentinel", "Rhino", "Office", "Adobe", "Revit"):
         assert kw not in t
     assert len(cl.omitted) == len(COMMON_ITEMS) - len(ALWAYS)
 

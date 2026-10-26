@@ -218,7 +218,7 @@ def _cli_export(monkeypatch, tmp_path, manifest):
     monkeypatch.setattr(cli, "winget_list_raw", lambda: None)
     monkeypatch.setattr(cli, "export_package", lambda *a, **k: manifest)
     rules = make_rules_dir(tmp_path / "rules")
-    return cli.main(["export", "--output", str(tmp_path / "o.zip"), "--rules", str(rules)])
+    return cli.main(["export", "--output", str(tmp_path / "o.zip"), "--rules", str(rules), "--json"])
 
 
 def test_cli_export_unreadable_is_prominent_success_with_five_examples(tmp_path, monkeypatch, capsys):

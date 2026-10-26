@@ -8,6 +8,10 @@
     "install_paths": [],
     "registry_keys": [
       "HKLM\\SOFTWARE\\Autodesk\\Revit"
+    ],
+    "exclude_display_name_patterns": [
+      "Viewer",
+      "Mocks Library"
     ]
   },
   "paths": [
@@ -24,7 +28,7 @@
     "Revit 로컬 캐시(%LOCALAPPDATA%\\Autodesk\\Revit, 중앙 모델 로컬 사본)는 복원하지 않습니다. 중앙 모델에서 새로 동기화하세요."
   ],
   "notes": "확인 필요: 프로젝트 템플릿/패밀리 라이브러리 경로(ProgramData\\Autodesk\\RVT 20xx, 사용자 지정 공유 경로)는 설치/조직마다 달라 규칙에서 제외함. 애드인 DLL 본체 위치도 확인 필요. 레지스트리 키 HKLM\\SOFTWARE\\Autodesk\\Revit 존재 여부 확인 필요.",
-  "version": "2",
+  "version": "3",
   "exclude": [
     "*.lic"
   ]

@@ -1,7 +1,7 @@
 {
   "id": "sketchup",
   "name": "SketchUp",
-  "version": "1",
+  "version": "2",
   "detect": {
     "display_name_patterns": [
       "SketchUp Pro",
@@ -12,7 +12,10 @@
     "install_paths": [
       "%ProgramFiles%\\SketchUp"
     ],
-    "registry_keys": []
+    "registry_keys": [],
+    "exclude_display_name_patterns": [
+      "Viewer"
+    ]
   },
   "paths": [
     {

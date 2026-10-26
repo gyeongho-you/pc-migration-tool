@@ -20,6 +20,8 @@ import subprocess
 import threading
 import time
 from datetime import datetime, timezone
+import stat as _stat
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
@@ -260,8 +262,8 @@ class State:
                 head = json.loads(first)
                 if not isinstance(head, dict):
                     raise ValueError("형식 오류")
-                if head.get("state_version") != STATE_VERSION or head.get("src") != self.src:
-                    raise ValueError("버전/원본 경로 불일치")
+                if head.get("state_version") != STATE_VERSION or not _same_path(head.get("src"), self.src):
+                    raise ValueError(f"버전/원본 경로 불일치(이전 원본: {head.get('src')}). 같은 원본이어도 드라이브 문자가 바뀌었으면 안전하게 전체를 다시 검사합니다")
                 self.prev_dest_path = str(head.get("dest_path") or "")
                 self.prev_dest_serial = head.get("dest_serial") if isinstance(head.get("dest_serial"), int) else None
                 files: dict[str, tuple] = {}
@@ -434,7 +436,7 @@ def _differs(target: str, size: int, mtime_ns: int) -> bool:
         st = os.stat(long_path(target))
     except OSError:
         return False
-    if not os.path.isfile(long_path(target)):
+    if not _stat.S_ISREG(st.st_mode):  # stat 한 번으로 일반 파일 여부까지 본다(R1-12)
         return False
     return not (st.st_size == size and abs(st.st_mtime_ns - mtime_ns) <= MTIME_TOLERANCE_NS)
 
@@ -447,56 +449,198 @@ def _bak_name(target: str) -> str:
     return cand
 
 
+def _same_path(a, b) -> bool:
+    """두 경로가 같은 곳인지(대소문자/상대 경로/링크 무시). 비교할 수 없으면 False(안전한 쪽: 같다고 보지 않는다)."""
+    if not a or not b:
+        return False
+    try:
+        return os.path.normcase(os.path.realpath(str(a))) == os.path.normcase(os.path.realpath(str(b)))
+    except (OSError, ValueError):
+        return False
+
+
 def _read_journal(path: Path, src: Path) -> dict | None:
+    j = _read_journal_raw(path)
+    if j is None or not _same_path(j.get("src"), src):
+        return None
+    return j
+
+
+def _read_journal_raw(path: Path) -> dict | None:
     try:
         with open(long_path(path), "r", encoding="utf-8") as f:
             j = json.load(f)
     except (OSError, ValueError):
         return None
-    if not isinstance(j, dict) or j.get("src") != str(src) or j.get("phase") not in ("copying", "done"):
+    if not isinstance(j, dict) or j.get("phase") not in ("copying", "done"):
         return None
     return j
 
 
-def _write_journal(path: Path, src: Path, phase: str, count: int, listed: list[dict]) -> None:
+def _write_journal(path: Path, src: Path, phase: str, count: int, listed: list[dict], started_ns: int | None = None) -> None:
     tmp = path.with_name(path.name + ".part")
     with open(long_path(tmp), "w", encoding="utf-8", newline="\n") as f:
-        json.dump({"journal_version": 1, "src": str(src), "phase": phase, "preserved_count": count, "preserved": listed},
-                  f, ensure_ascii=False)
+        json.dump({"journal_version": 1, "src": str(src), "phase": phase, "preserved_count": count, "preserved": listed,
+                   "started_ns": started_ns if started_ns is not None else time.time_ns()}, f, ensure_ascii=False)
         f.flush()
         os.fsync(f.fileno())
     os.replace(long_path(tmp), long_path(path))
 
 
-def _preserve_existing(entries, src: Path, dst: Path, journal: Path, cancel, say) -> tuple[int, list[dict], bool]:
+@dataclass
+class DestScan:
+    """대상 폴더를 한 번 훑은 결과(stat 중복 제거, R1-12). states 는 entries 와 같은 순서: n=없음, s=같음, d=같은 이름의 다른 파일."""
+    states: list[str] = field(default_factory=list)
+    old_sizes: dict[str, int] = field(default_factory=dict)  # 'd' 인 파일의 기존 크기(rel -> 크기). 덮어쓰기 전 .bak 으로 남는 양
+    need: int = 0       # 새로 써야 하는 바이트(없거나 다른 파일의 새 크기 합). 다른 파일의 기존 내용은 .bak 으로 남아 공간을 계속 쓴다
+    dst_empty: bool = True
+
+    @property
+    def bak_count(self) -> int:
+        return len(self.old_sizes)
+
+    @property
+    def bak_bytes(self) -> int:
+        return sum(self.old_sizes.values())
+
+
+def _scan_dest(entries, dst: Path, total_bytes: int, cancel: Callable[[], bool] | None = None) -> DestScan:
+    """_differs 와 같은 기준(크기 + 수정시각 2초)으로 각 파일이 대상에 '없음/같음/다름' 인지 한 번에 본다."""
+    out = DestScan(states=["n"] * len(entries), need=total_bytes)
+    if not dst.is_dir() or not any(True for _ in _first(dst)):
+        return out
+    out.dst_empty = False
+    need = 0
+    for i, (rel, size, mtime) in enumerate(entries):
+        if cancel is not None and i % 2000 == 0 and cancel():
+            raise Cancelled()
+        try:
+            st = os.stat(long_path(_join(str(dst), rel)))
+        except OSError:
+            need += size
+            continue
+        if not _stat.S_ISREG(st.st_mode):
+            need += size  # 폴더 등은 .bak 대상이 아님(복사 단계에서 문제로 드러난다)
+            continue
+        if st.st_size == size and abs(st.st_mtime_ns - mtime) <= MTIME_TOLERANCE_NS:
+            out.states[i] = "s"
+        else:
+            out.states[i] = "d"
+            out.old_sizes[rel] = st.st_size
+            need += size
+    out.need = need
+    return out
+
+
+def _is_partial_prefix(src_file: str, dst_file: str, dst_size: int, cancel: Callable[[], bool] | None = None) -> bool:
+    """대상 파일이 원본의 '앞부분 그대로'(robocopy 가 쓰다 끊긴 이어받기용 사본)인지 바이트로 확인한다.
+    원본보다 작고 내용이 같은 앞부분이어야 True. 크기 0 이면 잃을 내용이 없으므로 True."""
+    if dst_size == 0:
+        return True
+    try:
+        if os.stat(long_path(src_file)).st_size <= dst_size:
+            return False
+        left = dst_size
+        with open(long_path(src_file), "rb") as fs_, open(long_path(dst_file), "rb") as fd_:
+            while left > 0:
+                if cancel is not None and cancel():
+                    raise Cancelled()
+                n = min(DEFAULT_CHUNK, left)
+                a, b = fs_.read(n), fd_.read(n)
+                if a != b or not a:
+                    return False
+                left -= len(a)
+    except OSError:
+        return False
+    return True
+
+
+class _PreserveFailed(Exception):
+    def __init__(self, target: str, cause: OSError) -> None:
+        super().__init__(str(cause))
+        self.target, self.cause = target, cause
+
+
+def _rollback(moved: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """이미 .bak 으로 옮긴 파일을 거꾸로 원래 이름으로 되돌린다. 되돌리지 못한 (원래 이름, .bak 이름) 목록을 돌려준다."""
+    stuck = []
+    for target, bak in reversed(moved):
+        try:
+            if os.path.lexists(long_path(target)):
+                stuck.append((target, bak))  # 원래 이름 자리에 이미 다른 것이 있으면 덮어쓰지 않는다
+            else:
+                os.replace(long_path(bak), long_path(target))
+        except OSError:
+            stuck.append((target, bak))
+    return stuck
+
+
+def _preserve_existing(entries, src: Path, dst: Path, journal: Path, cancel, say,
+                       scan: DestScan | None = None, warn: Callable[[str], None] = lambda m: None
+                       ) -> tuple[int, list[dict], bool]:
     """복사(robocopy) 시작 전에, 대상에 있는 같은 이름의 다른 파일을 같은 폴더의 .bak 으로 이름만 바꿔 보존한다(데이터를 다시 쓰지 않아 빠름).
 
-    이어받기 구분: 이전 실행이 복사를 시작했다가 끝나지 못한 기록(journal phase=copying)이 있으면, 대상의 다른 파일은
-    우리가 쓰다 만 파일이므로 보존하지 않는다(보존하면 이어받기가 깨진다). 이전 실행이 끝났거나(done) 기록이 없으면 새 복사다.
-    보존할 수 없으면(사용 중 등) TransferError 로 복사를 시작하지 않는다. 반환: (보존한 개수, 앞쪽 목록, 이어받기 여부)."""
+    이어받기 구분: 이전 실행이 복사를 시작했다가 끝나지 못한 기록(journal phase=copying)이 있으면, 대상에서 원본의 '앞부분 그대로'인
+    파일(robocopy 가 쓰다 만 사본)은 이어받도록 두고, 그 밖의 다른 파일(그 사이 바뀐 파일 등, R1-13)은 .bak 으로 보존한다.
+    원본 경로가 이전 기록과 다르면(드라이브 문자 변경 등) 이어받기로 보지 않는다(R1-4).
+    보존 도중 실패하면 이미 옮긴 것을 원래 이름으로 되돌리고(롤백) TransferError 로 복사를 시작하지 않는다(R1-2).
+    반환: (보존한 개수, 앞쪽 목록, 이어받기 여부)."""
+    raw = _read_journal_raw(journal)
     prev = _read_journal(journal, src)
-    if prev is not None and prev["phase"] == "copying":
-        return int(prev.get("preserved_count") or 0), list(prev.get("preserved") or []), True
-    count, listed = 0, []
-    if any(True for _ in _first(dst)):
-        say("대상에 있는 같은 이름의 다른 파일을 .bak 으로 보존하는 중입니다…")
-        for rel, size, mtime in entries:
+    if raw is not None and raw["phase"] == "copying" and prev is None:
+        warn(f"이전 실행 기록의 원본 경로({raw.get('src')})가 지금({src})과 다릅니다(드라이브 문자가 바뀌었을 수 있습니다). "
+             "같은 원본이라도 안전하게 이어받기로 보지 않고, 대상에 있는 다른 파일은 .bak 으로 보존한 뒤 복사합니다.")
+    resumed = prev is not None and prev["phase"] == "copying"
+    count = int(prev.get("preserved_count") or 0) if resumed else 0
+    listed = list(prev.get("preserved") or []) if resumed else []
+    started = prev.get("started_ns") if resumed and isinstance(prev.get("started_ns"), int) else None
+    if scan is None:
+        scan = _scan_dest(entries, dst, sum(e[1] for e in entries), cancel)
+    todo = [e for i, e in enumerate(entries) if scan.states[i] == "d"]
+    moved: list[tuple[str, str]] = []
+    try:
+        if todo:
+            say("대상에 있는 같은 이름의 다른 파일을 확인하는 중입니다…" if resumed else
+                f"대상에 있는 같은 이름의 다른 파일 {len(todo):,}개를 .bak 으로 보존하는 중입니다…")
+        last_say = time.monotonic()
+        for n, (rel, _size, _mtime) in enumerate(todo, 1):
             if cancel is not None and cancel():
                 raise Cancelled()
             target = _join(str(dst), rel)
-            if not _differs(target, size, mtime):
-                continue
+            if resumed and _is_partial_prefix(_join(str(src), rel), target, scan.old_sizes.get(rel, -1), cancel):
+                continue  # 쓰다 끊긴 사본: 이어받는다
             bak = _bak_name(target)
             try:
                 os.replace(long_path(target), long_path(bak))
+            except FileNotFoundError:
+                continue  # 그 사이 사라진 파일은 보존할 것이 없다
             except OSError as e:
-                raise TransferError(f"대상에 있는 다른 파일을 .bak 으로 보존하지 못해 복사를 시작하지 않았습니다(덮어쓰지 않음): {target} "
-                                    f"({failure.classify(e, target).label}). 파일을 쓰는 프로그램을 닫고 다시 실행하세요.") from e
+                raise _PreserveFailed(target, e) from e
+            moved.append((target, bak))
             count += 1
             if len(listed) < MAX_PRESERVED_LISTED:
                 listed.append({"file": target, "backup": bak})
-    _write_journal(journal, src, "copying", count, listed)
-    return count, listed, False
+            if time.monotonic() - last_say >= 2.0:
+                last_say = time.monotonic()
+                say(f".bak 으로 보존하는 중입니다… {n:,}/{len(todo):,}개 확인, {len(moved):,}개 옮김")
+        _write_journal(journal, src, "copying", count, listed, started)
+    except BaseException as e:
+        stuck = _rollback(moved)
+        if isinstance(e, _PreserveFailed):
+            reason = failure.classify(e.cause, e.target).label
+            back = (f"이미 .bak 으로 옮긴 파일 {len(moved) - len(stuck)}개는 원래 이름으로 되돌렸습니다."
+                    if moved else "아직 옮긴 파일은 없습니다.")
+            left = ""
+            if stuck:
+                left = (f" 되돌리지 못한 {len(stuck)}개는 .bak 이름으로 남아 있습니다(이름만 원래대로 바꾸면 복구됩니다): "
+                        + ", ".join(b for _t, b in stuck[:3]) + (" …" if len(stuck) > 3 else ""))
+            raise TransferError(f"대상에 있는 다른 파일을 .bak 으로 보존하지 못해 복사를 시작하지 않았습니다(덮어쓰지 않음): {e.target} "
+                                f"({reason}). {back}{left} 파일을 쓰는 프로그램을 닫고 다시 실행하세요.") from e.cause
+        if stuck:
+            warn(f"중단되어 .bak 으로 옮긴 파일 {len(moved)}개를 되돌렸지만 {len(stuck)}개는 되돌리지 못했습니다: "
+                 + ", ".join(b for _t, b in stuck[:3]))
+        raise
+    return count, listed, resumed
 
 
 # --------------------------------------------------------------------------- 전송
@@ -594,8 +738,9 @@ def transfer(src: Path, dst: Path, *, dry_run: bool = False, include_cloud: bool
                        results_truncated=not detail_ok)
     say(f"원본 조사 완료: 파일 {len(entries):,}개, 총 {fmt_bytes(total_bytes)} (조사 {scan.seconds:.0f}초).")
 
-    # ---- 파일 시스템/여유 공간 사전 검사(복사 전에 막는다)
-    if scan.max_size > fs.FAT4G and dest.fs == "FAT32":
+    # ---- 파일 시스템/여유 공간 사전 검사(복사 전에 막는다). export 와 같은 fs.check_space 를 쓴다
+    sc0 = fs.check_space(dest, 0, scan.max_size)
+    if sc0.fat32_blocked:
         big = sum(1 for _r, s, _m in entries if s > fs.FAT4G)
         report.meta.update(fat32_blocked=True, fat32_big_files=big)
         msg = (f"대상 드라이브가 FAT32 라서 4GB 보다 큰 파일 {big}개({fmt_bytes(scan.max_size)} 포함)를 저장할 수 없습니다. "
@@ -604,18 +749,23 @@ def transfer(src: Path, dst: Path, *, dry_run: bool = False, include_cloud: bool
             warn(msg)
         else:
             raise TransferError(msg)
-    elif dest.fs == "EXFAT":
+    elif sc0.exfat:
         warn("대상 드라이브가 exFAT 입니다. 4GB 이상 파일은 저장되지만 전원이 갑자기 꺼지면 손상되기 쉽습니다. 가능하면 NTFS 를 권장합니다.")
+    dscan: DestScan | None = None
     if not verify_only:
-        need = _needed_bytes(entries, dst, total_bytes)
-        required = need + int(total_bytes * SPACE_MARGIN)
-        report.meta.update(dest_free_bytes=dest.free, required_bytes=required,
-                           space_blocked=dest.free is not None and dest.free < required)
-        if dest.free is None:
+        say("대상에 이미 있는 파일을 확인하는 중입니다…")
+        dscan = _scan_dest(entries, dst, total_bytes, cancel)  # 복사 여부 판단 기준(_differs 와 같음)을 한 번만 훑는다
+        required = dscan.need + int(total_bytes * SPACE_MARGIN)
+        sc = fs.check_space(dest, required, scan.max_size)
+        report.meta.update(dest_free_bytes=dest.free, required_bytes=required, space_blocked=sc.space_blocked,
+                           would_preserve_count=dscan.bak_count, would_preserve_bytes=dscan.bak_bytes)
+        if sc.free_unknown:
             warn("대상의 여유 공간을 조회하지 못해 사전 검사를 건너뜁니다. 복사 중 공간이 부족하면 멈출 수 있습니다.")
-        elif dest.free < required:
-            msg = (f"대상 드라이브의 여유 공간이 부족합니다. 필요 약 {fmt_bytes(required)}(원본 {fmt_bytes(total_bytes)} + 여유 5%), "
-                   f"현재 여유 {fmt_bytes(dest.free)}. 더 큰 드라이브를 쓰거나 정리한 뒤 다시 시작하세요.")
+        elif sc.space_blocked:
+            keep = (f" 이미 있는 다른 파일 {dscan.bak_count}개({fmt_bytes(dscan.bak_bytes)})는 .bak 으로 남아 공간을 계속 차지합니다."
+                    if dscan.bak_count else "")
+            msg = (f"대상 드라이브의 여유 공간이 부족합니다. 필요 약 {fmt_bytes(required)}(새로 쓸 {fmt_bytes(dscan.need)} + 여유 5%), "
+                   f"현재 여유 {fmt_bytes(dest.free or 0)}.{keep} 더 큰 드라이브를 쓰거나 정리한 뒤 다시 시작하세요.")
             if dry_run:
                 warn(msg)
             else:
@@ -625,7 +775,7 @@ def transfer(src: Path, dst: Path, *, dry_run: bool = False, include_cloud: bool
         if progress_info:
             progress_info(ProgressInfo("compare", 0, 0, 0, len(entries), message="복사될 파일을 비교하는 중입니다…",
                                        skipped=len(skipped_cloud)))
-        return _dry_run(report, entries, skipped_cloud, scan, dst, runner, copy_mode, network, warn)
+        return _dry_run(report, entries, skipped_cloud, scan, dst, runner, copy_mode, network, warn, dscan)
 
     # ---- 실제 실행
     _friendly_makedirs(dst)
@@ -665,7 +815,7 @@ def transfer(src: Path, dst: Path, *, dry_run: bool = False, include_cloud: bool
             journal = dst / PRESERVE_NAME
             report.meta.update(preserved_existing_count=0, preserved_existing=[], preserve_resumed=False)
             if mode == "copy":
-                n_pres, listed, resumed_run = _preserve_existing(entries, src, dst, journal, cancel, say)
+                n_pres, listed, resumed_run = _preserve_existing(entries, src, dst, journal, cancel, say, dscan, warn)
                 report.meta.update(preserved_existing_count=n_pres, preserved_existing=listed, preserve_resumed=resumed_run)
                 if n_pres:
                     warn(f"대상에 있던 같은 이름의 다른 파일 {n_pres}개를 .bak 으로 보존했습니다(덮어쓰지 않았습니다).")
@@ -748,18 +898,9 @@ def _alive_checker(dst: Path, network: bool) -> Callable[[], bool]:
 
 
 def _needed_bytes(entries, dst: Path, total_bytes: int) -> int:
-    """대상에 새로 필요한 용량. 대상이 비어 있으면 원본 총량, 이미 일부 있으면 없거나 크기가 다른 파일만 센다."""
-    if not dst.is_dir() or not any(True for _ in _first(dst)):
-        return total_bytes
-    need = 0
-    for rel, size, _m in entries:
-        try:
-            if os.stat(long_path(_join(str(dst), rel))).st_size == size:
-                continue
-        except OSError:
-            pass
-        need += size
-    return need
+    """대상에 새로 써야 하는 용량. _differs 와 같은 기준(크기 + 수정시각)으로 없거나 다른 파일의 새 크기만 센다(R1-3).
+    다른 파일의 기존 내용은 .bak 으로 남으므로 공간이 돌아오지 않는다."""
+    return _scan_dest(entries, dst, total_bytes).need
 
 
 def _first(path: Path):
@@ -774,7 +915,7 @@ def _first(path: Path):
 
 
 def _dry_run(report: Report, entries, skipped_cloud, scan: ScanInfo, dst: Path, runner, copy_mode: str, network: bool,
-             warn: Callable[[str], None] = lambda m: None) -> Report:
+             warn: Callable[[str], None] = lambda m: None, dscan: DestScan | None = None) -> Report:
     """robocopy /L 은 목록 확인용, 리포트는 크기 비교로 만든다. 아무것도 쓰지 않는다."""
     args = base_args(Path(scan.root), dst, None, True, copy_mode)
     xf = sorted({os.path.basename(scan.abs_path(r)) for r, _s, _m in skipped_cloud})
@@ -785,14 +926,11 @@ def _dry_run(report: Report, entries, skipped_cloud, scan: ScanInfo, dst: Path, 
     report.meta.update(robocopy_exit=code, robocopy_ok=ok, robocopy_notes=notes)
     detail_ok = len(entries) <= MAX_DETAIL_RESULTS
     over = 0
-    for rel, size, mtime in entries:
+    if dscan is None:
+        dscan = _scan_dest(entries, dst, sum(e[1] for e in entries))
+    for (rel, size, mtime), state in zip(entries, dscan.states):
         target = _join(str(dst), rel)
-        status = WOULD_COPY
-        try:
-            st = os.stat(long_path(target))
-            status = SKIPPED_SAME if st.st_size == size and abs(st.st_mtime_ns - mtime) <= MTIME_TOLERANCE_NS else WOULD_OVERWRITE
-        except OSError:
-            pass
+        status = {"n": WOULD_COPY, "s": SKIPPED_SAME, "d": WOULD_OVERWRITE}[state]
         res = FileResult(scan.abs_path(rel), target, status, size)
         if status == WOULD_OVERWRITE:
             over += 1
@@ -805,7 +943,9 @@ def _dry_run(report: Report, entries, skipped_cloud, scan: ScanInfo, dst: Path, 
     report.meta["would_overwrite_count"] = over
     if over:
         warn(f"대상에 같은 이름의 다른 파일 {over}개가 이미 있습니다. 실제 복사 때는 덮어쓰기 전에 각 파일을 같은 폴더의 .bak 으로 보존합니다"
-             "(이름만 바꾸므로 공간을 더 쓰지 않습니다). 확인하고 진행하세요.")
+             f"(이름만 바꾸므로 시간은 거의 안 들지만, 기존 파일 {dscan.bak_count}개({fmt_bytes(dscan.bak_bytes)})가 .bak 으로 남아 "
+             "공간을 계속 차지하고 새 파일 크기만큼 여유 공간이 더 필요합니다). 확인하고 진행하세요.")
+    report.meta["would_preserve_bytes"] = dscan.bak_bytes
     return report
 
 
@@ -956,6 +1096,7 @@ def _verify_phase(report: Report, entries, scan: ScanInfo, dst: Path, state: Sta
             report.results.append(FileResult(f"[목록] {rel}", _join(dst_root, rel), MISSING, size, sha, reason="missing_in_source",
                                              error="해시 목록에는 있지만 원본(외장 드라이브)에 이 파일이 없습니다. 복사가 덜 됐을 수 있습니다."))
     report.meta["resumed_skipped"] = resumed[0]
+    report.meta["trusted_state_files"] = resumed[0]  # 상태 파일의 이전 검사 결과를 믿고 다시 읽지 않은 파일 수(내용까지 다시 보려면 --strict)
     emit(True)
 
 
