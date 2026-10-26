@@ -74,6 +74,7 @@ def test_old_pc_to_new_pc_full_flow(tmp_path, monkeypatch):
     with pytest.raises(GuardError):
         c2.start_apply()
     c2.set_preview_checked(True)
+    c2.set_bak_understood(True)
     c2.confirm_final(True)
     assert not c2.can_apply()[0]  # 규칙 없이 선택 포함된 항목은 별도 동의 필요
     c2.set_extra_consent(True)

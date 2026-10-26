@@ -54,7 +54,7 @@ def test_gui_deferred_result_says_copy_done_verify_needed(env):
     c.state.transfer_was_dry_run = False
     sm = c.transfer_summary()
     assert sm["verification_complete"] is False and sm["success"] is False
-    assert "복사 완료" in T.TR_RESULT_PENDING and "성공" not in T.TR_RESULT_PENDING and "verify" in T.TR_DEFERRED_NOTE
+    assert "복사 완료" in T.TR_RESULT_PENDING and "성공" not in T.TR_RESULT_PENDING and "2단계" in T.TR_DEFERRED_NOTE  # 새 PC에서 2단계 확인이 필요하다고 안내
     assert T.TR_DEFERRED_NOTE in c.flow_notes()
 
 

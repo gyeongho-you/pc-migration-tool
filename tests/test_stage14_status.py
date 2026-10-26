@@ -78,7 +78,7 @@ def test_non_applicable_task_uses_its_own_steps(model):
     model.begin(T.TASK_VERIFY)
     assert [s.label for s in model.snapshot().steps] == ["검사", T.CARD_STEP_DONE]
     model.begin(T.TASK_SCAN)
-    assert [s.label for s in model.snapshot().steps] == ["목록 읽기", "규칙 맞추기", T.CARD_STEP_DONE]
+    assert [s.label for s in model.snapshot().steps] == ["목록 읽기", "목록 맞추기", T.CARD_STEP_DONE]
     model.begin("알 수 없는 작업")
     assert [s.label for s in model.snapshot().steps] == ["알 수 없는 작업", T.CARD_STEP_DONE]
 

@@ -25,7 +25,7 @@ def buttons(dlg):
     while stack:
         w = stack.pop()
         stack.extend(w.winfo_children())
-        if w.winfo_class() == "TButton":
+        if w.winfo_class() in ("TButton", "Button"):  # ttk 단추와 강조 단추(tk)
             out[w.cget("text")] = w
     return out
 

@@ -137,6 +137,7 @@ def _arm_apply(c, tmp_path):
     c.set_package(str(tmp_path / "p.zip"))
     c.start_preview()
     c.set_preview_checked(True)
+    c.set_bak_understood(True)
     c.confirm_final(True)
     assert c.can_apply()[0]
 
