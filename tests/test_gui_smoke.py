@@ -216,7 +216,7 @@ def test_discover_view_secret_rows_highlighted_gated_and_long_paths(ctx):
     assert c.state.selected == set() and ctx.shown[-1][0] == "warn" and ctx.shown[-1][1][1] == T.G_SECRET_SELECT
     click(False)
     assert len(c.state.selected) == 1 and v.tree.item(iid(False), "values")[0] == T.CHECKED
-    assert T.DISC_SELECTED.format(n=1) in v.count.cget("text")
+    assert T.DISC_SELECTED.format(n=1, m=2) in v.count.cget("text")
 
     ctx.answers["askyesno"] = False  # 동의 대화상자에서 '아니오'
     v.ack_var.set(True)
