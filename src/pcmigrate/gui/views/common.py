@@ -281,6 +281,11 @@ class BaseView(ttk.Frame):
     def on_event(self, kind: str, payload) -> None:
         """컨트롤러 이벤트(예: scan_done)를 받는다."""
 
+    def refresh_card(self) -> None:
+        card = getattr(self, "card", None)
+        if card is not None:
+            card.refresh()
+
     def guarded(self, fn: Callable, *args, **kw) -> bool:
         """GuardError 는 안전 안내 대화상자로 보여 준다."""
         try:
@@ -289,6 +294,14 @@ class BaseView(ttk.Frame):
         except GuardError as e:
             messagebox.showwarning(T.GUARD_TITLE, str(e), parent=self)
             return False
+
+    def add_status_card(self, tasks: set[str]):
+        """제목 바로 아래에 현황 카드를 둔다. 이 화면의 작업(tasks)이 진행 중이거나 막 끝났을 때만 보인다."""
+        from .status_card import StatusCard
+        self.card_slot = ttk.Frame(self)
+        self.card_slot.pack(fill="x")
+        self.card = StatusCard(self, self.c, tasks, slot=self.card_slot)
+        return self.card
 
     def header(self, title: str, sub: str = "") -> None:
         row = ttk.Frame(self)

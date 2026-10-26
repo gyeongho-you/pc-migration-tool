@@ -217,7 +217,7 @@ EXP_DONE = "패키지를 만들었습니다: {path}"
 EXP_RULES = "포함된 규칙: {rules}"
 EXP_NO_RULES = "(없음)"
 EXP_COUNTS = "파일 {files}개, 건너뜀 {skipped}개, 실패 {failed}개"
-EXP_FAILED_HEAD = f"{ICON_WARN} 일부 파일을 읽지 못했습니다(아래 목록). 해당 파일을 사용 중인 프로그램을 닫고 다시 만들어 보세요."
+EXP_FAILED_HEAD = f"{ICON_WARN} 읽지 못해 제외된 파일이 있습니다(아래 예시). Chrome 같은 프로그램이 실행 중이면 닫고 다시 만들어 보세요."
 EXP_TODO = "새 PC 에서 직접 해야 할 일(일부):"
 
 # --------------------------------------------------------------------------- 신 PC
@@ -416,6 +416,7 @@ G_NEED_MANIFEST = "목록 파일을 선택해 주세요."
 G_MANIFEST_MISSING = "목록 파일을 찾을 수 없습니다: {path}"
 G_NEED_TARGET = "검사할 폴더를 선택해 주세요."
 G_TARGET_MISSING = "검사할 폴더를 찾을 수 없습니다: {path}"
+G_REPORT_INSIDE_SOURCE = "결과 파일은 원본 폴더 밖에 저장해 주세요. 원본 폴더에는 아무것도 쓰지 않습니다."
 G_REPORT_INSIDE = "결과 파일은 검사할 폴더 밖에 저장해 주세요. 검사는 폴더를 읽기만 하고 아무것도 쓰지 않습니다."
 G_VERIFY_OK = "목록 파일과 검사할 폴더가 있습니다. 검사할 폴더는 읽기만 합니다."
 G_NEED_COPY_FIRST = "먼저 복사를 한 번 실행해 주세요."
@@ -488,6 +489,66 @@ HELP_COMPARE = """외장 드라이브와 랜선(네트워크) 비교 — 측정�
 RESULT_OK, RESULT_SKIPPED, RESULT_FAILED = "성공", "건너뜀", "실패"
 RESULT_LINE = "{ok_label} {ok}  /  {skip_label} {skipped}  /  {fail_label} {failed}"
 
+# --------------------------------------------------------------------------- 현황 카드(오래 걸리는 작업 화면 맨 위)
+ICON_SKIP = "↷"
+CARD_TITLE = "작업 현황"
+CARD_IDLE = "지금 진행 중인 작업이 없습니다."
+CARD_STEP_DONE = "완료"
+CARD_CIRCLED = "①②③④⑤⑥⑦⑧⑨"
+CARD_HEAD_RUNNING = "{no} {step} 중"
+CARD_HEAD_FILES = " — {done:,} / {total:,}개 파일 ({pct}%)"
+CARD_HEAD_COUNT = " — 파일 {done:,}개 확인함"
+CARD_HEAD_DONE = "{no} 완료"
+CARD_HEAD_DONE_SUMMARY = " — {summary}"
+CARD_HEAD_CANCELLED = "중단했습니다 — 같은 설정으로 다시 시작하면 이어서 합니다"
+CARD_HEAD_FAILED = f"{ICON_FAIL} 문제가 생겨 멈췄습니다"
+CARD_NO_NUMBERS = " — 잠시만 기다려 주세요"
+CARD_METRIC_FILES, CARD_METRIC_BYTES, CARD_METRIC_SPEED = "파일", "용량", "속도"
+CARD_METRIC_ELAPSED, CARD_METRIC_ETA = "경과 시간", "남은 시간"
+CARD_METRIC_FILES_VALUE = "{done:,} / {total:,}개"
+CARD_METRIC_FILES_NOTOTAL = "{done:,}개"
+CARD_METRIC_NONE = "—"
+CARD_ETA_ESTIMATE = "약 {eta}"
+CARD_ETA_COMPUTING = "계산 중"
+CARD_CURRENT = "지금 처리 중"
+CARD_CURRENT_NONE = "—"
+CARD_CHIP_LABELS = {"ok": "성공", "skipped": "건너뜀", "unreadable": "읽지 못함(사용 중)", "failed": "실패"}
+CARD_CHIP_ICONS = {"ok": ICON_OK, "skipped": ICON_SKIP, "unreadable": ICON_WARN, "failed": ICON_FAIL}
+CARD_CHIP_TIP_OPEN = "누르면 {label} 목록을 볼 수 있습니다."
+CARD_CHIP_TIP_NONE = "{label} 항목이 없습니다."
+CARD_CHIP_TIP_OK = "성공한 파일은 개수만 셉니다."
+CARD_PROBLEM_LABEL = "문제가 있나요?"
+CARD_PROBLEM_NONE = f"{ICON_OK} 지금까지 문제 없음"
+CARD_PROBLEM_SOME = f"{{icon}} {{parts}} — 위 칸을 누르면 목록을 볼 수 있습니다"
+CARD_PROBLEM_PART = "{label} {n:,}개"
+CARD_LAST = "마지막 메시지"
+CARD_LAST_NONE = "—"
+CARD_LIST_TITLE = "{label} 목록"
+CARD_LIST_NONE = "해당하는 항목이 없습니다."
+CARD_LIST_MORE = "… 외 {n:,}개는 이 창에 보관하지 않았습니다(작업이 끝난 뒤 결과 화면이나 결과 파일에서 확인하세요)."
+CARD_LIST_UNREADABLE_NOTE = "다른 프로그램(예: Chrome)이 파일을 사용 중이라 읽지 못한 파일입니다. 그 프로그램을 닫고 다시 시도하세요."
+CARD_SUMMARY_FILES = "파일 {n:,}개를 처리했습니다"
+CARD_SUMMARY_PROGRAMS = "프로그램 {n:,}개를 확인했습니다"
+CARD_SUMMARY_SIMPLE = "작업을 마쳤습니다"
+# 작업별 단계 이름(마지막에 '완료' 가 자동으로 붙는다). 진행 단계 이름과의 대응은 status.py 의 PHASE_MAP 에 있다.
+TASK_STEPS = {
+    TASK_SCAN: ("목록 읽기", "규칙 맞추기"),
+    TASK_DISCOVER: ("목록 읽기", "폴더 찾기", "크기 재기"),
+    TASK_CHECKLIST: ("목록 읽기", "정리"),
+    TASK_EXPORT: ("파일 찾기", "담기", "검사"),
+    TASK_PREVIEW: ("패키지 검사",),
+    TASK_APPLY: ("준비", "복원"),
+    TASK_TRANSFER: ("조사", "복사", "검사"),
+    TASK_TRANSFER_PREVIEW: ("조사", "비교"),
+    TASK_VERIFY: ("검사",),
+    TASK_VERIFY_AGAIN: ("조사", "검사"),
+    TASK_RETRY: ("조사", "복사·검사"),
+}
+# 마법사 맨 위의 전체 단계 표시
+OVERALL_FMT = "전체 단계 {n}/{total}"
+OVERALL_FLOWS = {"old": "구 PC — 설정 패키지 만들기", "new": "새 PC — 설정 패키지 복원", "transfer": "대용량 복사"}
+OVERALL_TRANSFER_STAGES = {1: "1단계(구 PC 에서 보내기)", 2: "2단계(새 PC 에서 받아 검사하기)"}
+
 # --------------------------------------------------------------------------- 오류 대화상자
 ERR_WHAT, ERR_HOW = "무엇이 잘못됐나요?", "어떻게 하면 되나요?"
 ERR_PATH_MISSING = ("지정한 폴더나 파일을 찾을 수 없습니다{path}.",
@@ -507,6 +568,12 @@ ERR_API_RULES = "프로그램 설치 폴더 안의 rules 폴더가 손상됐을 
 ERR_API_PACKAGE = "패키지가 손상됐거나 중간에 바뀐 것 같습니다. 구 PC 에서 다시 만들어 복사해 주세요."
 ERR_API_SECRET = "민감한 정보가 포함될 수 있는 항목의 선택을 해제하거나, 내용을 확인한 뒤 이해했다는 표시를 하고 다시 시도해 주세요."
 ERR_API_SELECTION = "고른 항목이 이 PC 에 없거나 바뀌었습니다. 규칙에 없는 프로그램 확인 화면에서 다시 골라 주세요."
+BTN_OPEN_LOG_FOLDER, BTN_COPY_ERROR = "로그 폴더 열기", "오류 내용 복사"
+BTN_OPEN_ERROR_LOG = "오류 로그 열기"
+ERROR_LOG_NOTE = "오류 내용은 로그 파일에도 기록했습니다. 로그에는 파일 경로가 들어 있으니 다른 사람에게 보내기 전에 확인하세요."
+ERROR_LOG_FAILED_NOTE = "오류 로그 파일은 만들지 못했습니다(로그 폴더에 쓸 수 없음). '오류 내용 복사'로 내용을 복사해 전달하세요."
+ERROR_COPIED = "오류 내용을 복사했습니다. 메모장 등에 붙여 넣어 전달하세요."
+TASK_UI = "화면 동작"
 ERR_UNEXPECTED = ("예상하지 못한 문제가 발생했습니다: {name}: {msg}",
                   "프로그램을 다시 실행해 보고, 같은 문제가 반복되면 '상세 보기' 내용을 담당자에게 전달해 주세요.")
 ERR_TITLES = {"os": "파일을 읽거나 쓸 수 없습니다", "api": "작업을 할 수 없습니다", "transfer": "복사를 시작할 수 없습니다",

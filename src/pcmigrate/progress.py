@@ -11,7 +11,22 @@ SLOW_BYTES_PER_SEC = 40 * 1024 * 1024  # 이보다 느린 상태가 오래 이�
 SLOW_AFTER_SECONDS = 60.0
 SPEED_WINDOW = 30.0
 
-PHASE_LABELS = {"scan": "원본 조사", "copy": "복사", "verify": "검사", "manifest": "목록 만들기", "done": "완료"}
+PHASE_LABELS = {"scan": "원본 조사", "copy": "복사", "verify": "검사", "manifest": "목록 만들기", "done": "완료",
+                "list": "목록 읽기", "match": "규칙 맞추기", "find": "파일 찾기", "pack": "담기", "check": "검사",
+                "restore": "복원", "compare": "비교"}
+# 현황 카드의 카운터 분류(GUI 가 색/아이콘으로 구분한다). 기존 CLI 출력에는 쓰이지 않는다.
+OK, SKIPPED, UNREADABLE, FAILED_KIND = "ok", "skipped", "unreadable", "failed"
+KINDS = (OK, SKIPPED, UNREADABLE, FAILED_KIND)
+MAX_PROBLEM_DELTA = 200  # 한 번의 진행 이벤트에 실어 보내는 문제 항목 상한(나머지는 개수만 센다)
+
+
+def categorize(status: str, reason: str = "") -> str:
+    """파일 결과(copier 의 status/reason)를 카운터 분류로 바꾼다. 읽기 실패 중 '사용 중'은 따로 센다."""
+    if status in ("copied", "verified", "pending_verify"):
+        return OK
+    if status in ("skipped_identical", "cloud_only", "would_copy", "would_overwrite", "extra"):
+        return SKIPPED if status in ("skipped_identical", "cloud_only") else OK
+    return UNREADABLE if reason == "in_use" else FAILED_KIND
 NETWORK_SLOW_BYTES_PER_SEC = 11 * 1024 * 1024  # 100Mbps 급 링크의 실제 한계(약 11MB/s)
 SLOW_HINT = ("속도가 계속 느립니다(40MB/s 미만). 외장 드라이브가 USB 2.0 포트에 연결돼 있을 수 있습니다. "
              "USB 3.x 포트(보통 파란색)에 꽂았는지 확인하세요.")
@@ -37,6 +52,13 @@ class ProgressInfo:
     eta_seconds: float | None = None
     hint: str = ""
     message: str = ""
+    # 현황 카드용(기본값이면 CLI 출력은 그대로): 지금 처리 중인 경로, 분류별 개수, 이번 이벤트에서 새로 생긴 문제 항목
+    current: str = ""
+    ok: int = 0
+    skipped: int = 0
+    unreadable: int = 0
+    failed: int = 0
+    problems: tuple = ()  # ((분류, 경로), ...)
 
     @property
     def fraction(self) -> float:
@@ -95,6 +117,19 @@ class ProgressTracker:
         self._start = clock()
         self._samples: deque[tuple[float, int]] = deque([(self._start, 0)])
         self._slow_since: float | None = None
+        self.current = ""
+        self.counts = {k: 0 for k in KINDS}
+        self._new_problems: list[tuple[str, str]] = []
+
+    def note(self, kind: str, path: str = "") -> None:
+        """파일 하나의 결과를 분류별로 센다. 성공이 아닌 것은 경로를 다음 진행 이벤트에 실어 보낸다."""
+        with self._lock:
+            self.counts[kind] = self.counts.get(kind, 0) + 1
+            if kind != OK and path and len(self._new_problems) < MAX_PROBLEM_DELTA:
+                self._new_problems.append((kind, path))
+
+    def set_current(self, path: str) -> None:
+        self.current = path
 
     def add(self, nbytes: int = 0, nfiles: int = 0) -> None:
         with self._lock:
@@ -118,6 +153,8 @@ class ProgressTracker:
         speed = self.speed()
         with self._lock:
             done, nfiles = self.done_bytes, self.done_files
+            counts, problems = dict(self.counts), tuple(self._new_problems)
+            self._new_problems.clear()
         remaining = max(0, self.total_bytes - done)
         eta = (remaining / speed) if speed > 0 else (0.0 if remaining == 0 else None)
         now = self.clock()
@@ -130,4 +167,5 @@ class ProgressTracker:
                     hint = self.slow_hint
             else:
                 self._slow_since = None
-        return ProgressInfo(self.phase, done, self.total_bytes, nfiles, self.total_files, speed, eta, hint, message)
+        return ProgressInfo(self.phase, done, self.total_bytes, nfiles, self.total_files, speed, eta, hint, message,
+                            self.current, counts[OK], counts[SKIPPED], counts[UNREADABLE], counts[FAILED_KIND], problems)

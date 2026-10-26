@@ -105,13 +105,13 @@ def test_export_records_read_failure(env, monkeypatch):
     tmp_path, old, _, expand_for = env
     real = package._write_entry
 
-    def flaky(zf, arc, src):
+    def flaky(zf, arc, src, stage_dir=None):
         if src.name == "a.cfg":
-            raise PermissionError("locked")
-        return real(zf, arc, src)
+            raise package.SourceUnreadable(src, PermissionError("locked"))
+        return real(zf, arc, src, stage_dir)
     monkeypatch.setattr(package, "_write_entry", flaky)
     m = export_package([make_rule()], tmp_path / "p.zip", [], None, expand=expand_for(old))
-    assert len(m["failed"]) == 1 and "PermissionError" in m["failed"][0]["error"]
+    assert len(m["failed"]) == 1 and "읽지 못함" in m["failed"][0]["error"]
     assert len(m["files"]) == 2
 
 

@@ -16,7 +16,7 @@ from typing import Callable
 from . import failure
 from .cancel import Cancelled
 from .fs import long_path
-from .progress import ProgressInfo, fmt_bytes
+from .progress import FAILED_KIND, MAX_PROBLEM_DELTA, UNREADABLE, ProgressInfo, fmt_bytes
 
 FILE_ATTRIBUTE_REPARSE_POINT = 0x400
 FILE_ATTRIBUTE_RECALL_ON_OPEN = 0x00040000
@@ -69,6 +69,7 @@ def scan_source_info(src: Path | str, attr_getter: Callable[[Path], int] | None 
     root = os.path.abspath(str(src))
     info = ScanInfo(root=root)
     start = last = clock()
+    sent_errors = 0  # 진행 이벤트로 이미 알린 오류 수(새 항목만 문제 목록으로 보낸다)
     stack: list[tuple[str, str]] = [(root, "")]  # (절대 경로, 상대 경로)
     while stack:
         if cancel is not None and cancel():
@@ -125,6 +126,11 @@ def scan_source_info(src: Path | str, attr_getter: Callable[[Path], int] | None 
             if progress:
                 progress(msg)
             if progress_info:
-                progress_info(ProgressInfo("scan", info.total_bytes, 0, len(info.entries), 0, message=msg))
+                new = tuple((UNREADABLE if code == "in_use" else FAILED_KIND, rel_) for rel_, code, _t in info.errors[sent_errors:sent_errors + MAX_PROBLEM_DELTA])
+                sent_errors = len(info.errors)
+                unread = sum(1 for _r, code, _t in info.errors if code == "in_use")
+                progress_info(ProgressInfo("scan", info.total_bytes, 0, len(info.entries), 0, message=msg, current=relp or ".",
+                                           skipped=len(info.cloud), unreadable=unread, failed=len(info.errors) - unread,
+                                           problems=new))
     info.seconds = clock() - start
     return info

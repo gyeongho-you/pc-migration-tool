@@ -18,6 +18,23 @@ NEW_FLOW = (NEW_PACKAGE, NEW_PREVIEW, NEW_CONFIRM, NEW_RESULT)
 TITLES = T.TITLES  # 화면 제목은 texts.py 에서 관리
 
 
+def overall_step(screen: str, transfer_mode: str = "", transfer_stage: int = 1) -> tuple[int, int, str, str] | None:
+    """마법사 맨 위의 '전체 단계 n/N' 표시용 (n, N, 흐름 이름, 화면 제목). 시작 화면은 None.
+
+    구 PC / 새 PC 흐름은 4단계, 대용량 복사는 외장/랜선이면 2단계(구 PC 에서 보내기 -> 새 PC 에서 받아 검사), 같은 PC 면 1단계.
+    """
+    if screen in OLD_FLOW:
+        return OLD_FLOW.index(screen) + 1, len(OLD_FLOW), T.OVERALL_FLOWS["old"], TITLES[screen]
+    if screen in NEW_FLOW:
+        return NEW_FLOW.index(screen) + 1, len(NEW_FLOW), T.OVERALL_FLOWS["new"], TITLES[screen]
+    if screen == TRANSFER:
+        if transfer_mode in (T.MODE_EXTERNAL, T.MODE_NETWORK):
+            stage = transfer_stage if transfer_stage in (1, 2) else 1
+            return stage, 2, T.OVERALL_FLOWS["transfer"], T.OVERALL_TRANSFER_STAGES[stage]
+        return 1, 1, T.OVERALL_FLOWS["transfer"], TITLES[screen]
+    return None
+
+
 @dataclass
 class WizardState:
     screen: str = START

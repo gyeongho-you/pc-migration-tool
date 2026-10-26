@@ -6,3 +6,22 @@ build/
 *.spec
 .venv/
 .claude/worktrees/
+
+# 사용자 출력/개인 파일(체크리스트, 탐지 결과, 백업, 이 도구의 기록 파일, 해시 목록)
+checklist*.md
+checklist*.md.bak
+discover*.md
+discover*.json
+*.bak
+*.bak.[0-9]*
+.pcmigrate-*
+*.pcmigrate-part
+*.jsonl
+*.egg-info/
+pcmigrate-win.zip
+pc-package*.zip
+transfer-report*.json
+verify-report*.json
+import-report*.json
+selection*.json
+.playwright-mcp/

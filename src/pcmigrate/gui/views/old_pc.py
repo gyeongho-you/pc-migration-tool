@@ -7,7 +7,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from .. import state as S
 from .. import texts as T
-from ..controller import friendly_error
+from ...api import unreadable_lines
 from .common import (INFO_BG, MUTED_FG, SECRET_BG, SECRET_FG, WARN_FG, BaseView, ResultSummary, TreeTooltip, add_tooltip,
                      autowrap, clear, make_text, make_tree, open_location, set_text, sort_tree)
 
@@ -19,6 +19,7 @@ class ScanView(BaseView):
         super().__init__(app, controller)
         self.navbar(back=lambda: self.c.go(S.START), next_=lambda: self.c.go(S.OLD_DISCOVER))
         self.header(T.SCAN_HEADING, T.SCAN_SUB)
+        self.add_status_card({T.TASK_SCAN})
         top = ttk.Frame(self)
         top.pack(fill="x")
         self.btn = ttk.Button(top, text=T.BTN_SCAN, command=lambda: self.guarded(self.c.start_scan))
@@ -61,6 +62,7 @@ class DiscoverView(BaseView):
         self.navbar(back=lambda: self.c.go(S.OLD_SCAN), next_=lambda: self.c.go(S.OLD_CHECKLIST))
         self._bg = ttk.Style().lookup("TFrame", "background") or "#f0f0f0"
         self.header(T.DISC_HEADING, T.DISC_SUB)
+        self.add_status_card({T.TASK_DISCOVER})
         top = ttk.Frame(self)
         top.pack(fill="x")
         self.start_btn = ttk.Button(top, text=T.BTN_DISCOVER, command=lambda: self.guarded(self.c.start_discover))
@@ -229,6 +231,7 @@ class ChecklistView(BaseView):
         super().__init__(app, controller)
         self.navbar(back=lambda: self.c.go(S.OLD_DISCOVER), next_=lambda: self.c.go(S.OLD_EXPORT))
         self.header(T.CL_HEADING, T.CL_SUB)
+        self.add_status_card({T.TASK_CHECKLIST})
         top = ttk.Frame(self)
         top.pack(fill="x")
         self.make_btn = ttk.Button(top, text=T.BTN_CL_MAKE, command=lambda: self.guarded(self.c.start_checklist))
@@ -305,8 +308,7 @@ class ChecklistView(BaseView):
             self.c.save_text(path, text)
             messagebox.showinfo(T.SAVED_TITLE, T.SAVED_BODY.format(path=path), parent=self)
         except Exception as e:  # noqa: BLE001 - 쉬운 문구로 바꿔 보여 준다
-            fe = friendly_error(e)
-            messagebox.showerror(fe.title, fe.message, parent=self)
+            self.app.show_error(self.c.report_error(e, T.TASK_UI))
 
 
 class ExportView(BaseView):
@@ -319,6 +321,7 @@ class ExportView(BaseView):
         self.open_btn.state(["disabled"])
         self.navbar(back=lambda: self.c.go(S.OLD_CHECKLIST))
         self.header(T.EXP_HEADING, T.EXP_SUB)
+        self.add_status_card({T.TASK_EXPORT})
         row = ttk.Frame(self)
         row.pack(fill="x")
         ttk.Label(row, text=T.EXP_PATH_LABEL).pack(side="left")
@@ -390,7 +393,8 @@ class ExportView(BaseView):
         lines = [T.EXP_DONE.format(path=self.c.state.export_output), "",
                  T.EXP_RULES.format(rules=", ".join(r["id"] for r in m["rules"]) or T.EXP_NO_RULES),
                  T.EXP_COUNTS.format(files=len(m["files"]), skipped=len(m["skipped"]), failed=failed)]
-        lines += [f"  - {f['src']}: {T.friendly_detail(f['error'])}" for f in m["failed"][:20]]
+        lines += [T.friendly_detail(x) for x in unreadable_lines([f for f in m["failed"] if f.get("reason")], 5)]
+        lines += [f"  - {f['src']}: {T.friendly_detail(f['error'])}" for f in m["failed"] if not f.get("reason")][:20]
         lines += ["", T.EXP_TODO]
         for w in m.get("manual_warnings", []):
             for item in w.get("items", [])[:3]:

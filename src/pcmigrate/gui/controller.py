@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import errno
+import inspect
 import logging
 import os
 from dataclasses import dataclass, field
@@ -17,6 +18,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .. import api as real_api
+from .. import errorlog
 from ..cancel import CancelToken
 from ..checklist import write_output
 from ..discover import fmt_size, items_from_selection
@@ -28,6 +30,7 @@ from ..transfer import DriveDisconnected, TransferError
 from . import state as S
 from . import texts as T
 from .runner import Runner
+from .status import StatusModel
 
 
 class GuardError(Exception):
@@ -40,6 +43,8 @@ class FriendlyError:
     what: str  # 무엇이 잘못됐는지
     how: str  # 어떻게 하면 되는지
     detail: str = ""  # traceback(접힌 상세 보기에만)
+    log_path: str = ""  # 오류 로그 파일(기록하지 못했으면 빈 문자열)
+    report: str = ""  # '오류 내용 복사' 로 클립보드에 넣을 전체 텍스트(시각/버전/실행 화면/예외/traceback)
 
     @property
     def message(self) -> str:
@@ -106,6 +111,57 @@ def friendly_error(exc: BaseException, tb: str = "") -> FriendlyError:
     return FriendlyError(T.ERR_TITLES["unexpected"], what.format(name=type(exc).__name__, msg=exc), how, tb)
 
 
+def _supported(fn: Callable, **kw) -> dict:
+    """fn 이 받는 키워드 인자만 남긴다(진행 정보 같은 선택 인자를 가짜/예전 api 에도 안전하게 넘기기 위해)."""
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return {}
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
+        return kw
+    return {k: v for k, v in kw.items() if k in params}
+
+
+def _final_status(res: Any) -> tuple[dict | None, dict | None, str]:
+    """작업 결과에서 현황 카드에 넣을 확정 개수/문제 목록/요약을 뽑는다. 알 수 없는 결과면 (None, None, '')."""
+    try:
+        if getattr(res, "report", None) is not None:  # 복원 결과
+            res = res.report
+        if hasattr(res, "results") and hasattr(res, "to_dict"):  # copier.Report
+            c = res.to_dict()["summary"]
+            counts = {"ok": c.get("copied", 0) + c.get("verified", 0) + c.get("pending_verify", 0) + c.get("would_copy", 0)
+                      + c.get("would_overwrite", 0),
+                      "skipped": c.get("skipped_identical", 0) + c.get("cloud_only", 0), "unreadable": 0, "failed": 0}
+            problems: dict[str, list[str]] = {"skipped": [], "unreadable": [], "failed": []}
+            for r in res.results:
+                if r.status == "cloud_only":
+                    problems["skipped"].append(r.src)
+                elif r.status in ("failed", "mismatch", "missing"):
+                    kind = "unreadable" if r.reason == "in_use" else "failed"
+                    counts[kind] += 1
+                    problems[kind].append(r.src)
+            return counts, problems, T.CARD_SUMMARY_FILES.format(n=sum(counts.values()))
+        if isinstance(getattr(res, "manifest", None), dict):  # 패키지 내보내기
+            m = res.manifest
+            un = [f for f in m["failed"] if f.get("reason")]
+            hard = [f for f in m["failed"] if not f.get("reason")]
+            counts = {"ok": len(m["files"]), "skipped": len(m["skipped"]), "unreadable": len(un), "failed": len(hard)}
+            problems = {"skipped": [x.get("path", "") for x in m["skipped"]], "unreadable": [f["src"] for f in un],
+                        "failed": [f["src"] for f in hard]}
+            return counts, problems, T.CARD_SUMMARY_FILES.format(n=len(m["files"]))
+        if hasattr(getattr(res, "plan", None), "items"):  # 복원 미리보기
+            st = [it["status"] for it in res.plan.items]
+            counts = {"ok": sum(s in ("would_copy", "would_overwrite") for s in st),
+                      "skipped": sum(s == "skipped_identical" for s in st), "unreadable": 0,
+                      "failed": len(res.plan.problems)}
+            return counts, {"failed": [str(p) for p in res.plan.problems]}, T.CARD_SUMMARY_FILES.format(n=len(st))
+        if hasattr(res, "program_count"):
+            return None, None, T.CARD_SUMMARY_PROGRAMS.format(n=res.program_count)
+    except Exception:  # noqa: BLE001 - 요약을 못 만들어도 작업 결과 처리에는 영향이 없어야 한다
+        pass
+    return None, None, T.CARD_SUMMARY_SIMPLE
+
+
 @dataclass
 class CandRow:
     key: tuple
@@ -133,13 +189,16 @@ class Controller:
 
     def __init__(self, api_mod: Any = None, deps: Any = None, runner: Runner | None = None,
                  rules_dir: str | Path | None = None, logger: logging.Logger | None = None,
-                 make_items: Callable | None = None) -> None:
+                 make_items: Callable | None = None, record_error: Callable | None = None) -> None:
         self.api = api_mod or real_api
         self.deps = deps
         self.runner = runner or Runner()
         self.state = S.WizardState(rules_dir=str(rules_dir or default_rules_dir()))
         self.log = logger or logging.getLogger("pcmigrate.gui")
         self.make_items = make_items or items_from_selection
+        self.record_error = record_error or errorlog.record  # (예외, 실행 화면/작업 이름, traceback) -> 로그 파일 경로 | None
+        self.status = StatusModel()  # 현황 카드의 상태(tkinter 와 무관)
+        self.last_error: FriendlyError | None = None
         self.listener: Callable[[str, Any], None] | None = None
         self.cancel_token: CancelToken | None = None
         self.can_cancel = False
@@ -156,6 +215,20 @@ class Controller:
     def pump(self) -> int:
         return self.runner.pump()
 
+    def report_error(self, exc: BaseException, context: str = "", tb: str = "") -> FriendlyError:
+        """오류를 로그 파일에 기록하고 오류 대화상자용 FriendlyError 를 만든다(로그에 설치 목록/파일 내용은 쓰지 않는다)."""
+        fe = friendly_error(exc, tb)
+        where = f"GUI {self.state.screen}" + (f" / {context}" if context else "")
+        path = None
+        try:
+            path = self.record_error(exc, where, tb or None)
+        except Exception:  # noqa: BLE001 - 로그 실패가 오류 표시를 막으면 안 된다
+            path = None
+        fe.log_path = str(path) if path else ""
+        fe.report = errorlog.format_block(exc, where, tb or None)
+        self.last_error = fe
+        return fe
+
     def go(self, screen: str) -> None:
         self.state.screen = screen
         self.emit("screen", screen)
@@ -171,9 +244,11 @@ class Controller:
         self.cancel_token, self.can_cancel = token, cancellable
         self.state.busy, self.state.busy_label = True, label
         self.log.info("task start: %s", label)
+        self.status.begin(label)
         self.emit("busy", label)
         if label in T.PROGRESS:
             self.emit("progress", T.PROGRESS[label])  # 작업 이름과 예상 시간을 바로 보여 준다
+        self.emit("status", self.status)
 
         def finish() -> None:
             self.state.busy, self.state.busy_label = False, ""
@@ -181,28 +256,38 @@ class Controller:
 
         def on_done(res: Any) -> None:
             finish()
+            counts, problems, summary = _final_status(res)
+            self.status.finish(counts, problems, summary)
             self.emit("busy", None)
+            self.emit("status", self.status)
             done(res)
 
         def on_error(exc: BaseException, tb: str) -> None:
             finish()
             self.log.error("task failed: %s (%s)", label, type(exc).__name__)
+            fe = self.report_error(exc, label, tb)
+            self.status.failed(fe.what)
             self.emit("busy", None)
-            self.emit("error", friendly_error(exc, tb))
+            self.emit("status", self.status)
+            self.emit("error", fe)
 
         def on_cancel() -> None:
             finish()
             self.log.info("task cancelled: %s", label)
+            self.status.cancelled()
             self.emit("busy", None)
+            self.emit("status", self.status)
             self.emit("cancelled", label)
 
         def on_progress(m: Any) -> None:
             if isinstance(m, ProgressInfo):  # 바이트/속도/남은 시간(진행 막대용)
                 self.state.transfer_progress = m
+                self.status.info(m)
                 self.emit("progress_info", m)
                 text = T.friendly_detail(format_info(m))
                 self.emit("progress", text + (f"\n{T.ICON_WARN} {m.hint}" if m.hint else ""))
             else:
+                self.status.message(T.friendly_detail(m))
                 self.emit("progress", T.friendly_detail(m))
 
         self.runner.submit(lambda progress: fn(progress, token), on_done=on_done, on_error=on_error,
@@ -230,7 +315,8 @@ class Controller:
     # ------------------------------------------------------------------ 구 PC 1) 조사
     def start_scan(self) -> None:
         def work(progress, token):
-            return self.api.run_scan(self.state.rules_dir, self.deps)
+            return self.api.run_scan(self.state.rules_dir, self.deps,
+                                     **_supported(self.api.run_scan, progress_info=progress))
 
         def done(res):
             self.state.scan = res
@@ -241,7 +327,8 @@ class Controller:
     def start_discover(self, min_size_kb: int = 0) -> None:
         def work(progress, token):
             return self.api.run_discover(self.state.rules_dir, min_size_kb=min_size_kb, progress=progress,
-                                         deps=self.deps, cancel=token)
+                                         deps=self.deps, cancel=token,
+                                         **_supported(self.api.run_discover, progress_info=progress))
 
         def done(res):
             self.state.discovery = res
@@ -292,7 +379,8 @@ class Controller:
     def start_checklist(self) -> None:
         """항상 '모두 보기' 로 만들고, 화면에서 관련 없는 경고를 숨기거나 보인다(조사를 다시 하지 않는다)."""
         def work(progress, token):
-            return self.api.run_checklist(self.state.rules_dir, show_all=True, fmt="md", deps=self.deps)
+            return self.api.run_checklist(self.state.rules_dir, show_all=True, fmt="md", deps=self.deps,
+                                          **_supported(self.api.run_checklist, progress_info=progress))
 
         def done(res):
             self.state.checklist = res
@@ -410,7 +498,8 @@ class Controller:
 
         def work(progress, token):
             return self.api.run_export(self.state.rules_dir, output, extra_items=items or None,
-                                       allow_secrets=has_secret, deps=self.deps)
+                                       allow_secrets=has_secret, deps=self.deps,
+                                       **_supported(self.api.run_export, progress_info=progress))
 
         def done(res):
             self.state.export_result, self.state.export_output = res, output
@@ -496,7 +585,7 @@ class Controller:
 
         def work(progress, token):
             return self.api.run_import(package, self.state.rules_dir, yes=True, allow_extra=allow_extra,
-                                       deps=self.deps)
+                                       deps=self.deps, **_supported(self.api.run_import, progress_info=progress))
 
         def done(res):
             self.state.import_result = res
@@ -681,6 +770,8 @@ class Controller:
         check = self.check_transfer_paths(s.transfer_src, s.transfer_dst)
         if not check.ok:
             raise GuardError(" ".join(t for ok, t in check.lines if not ok))
+        if report_path and real_api.report_inside(report_path, s.transfer_src):
+            raise GuardError(T.G_REPORT_INSIDE_SOURCE)
         key = (s.transfer_src, s.transfer_dst)
         if verify_only:
             if not os.path.isdir(s.transfer_dst):
@@ -725,7 +816,7 @@ class Controller:
                 try:
                     rep.write(Path(report_path))
                 except OSError as e:
-                    self.emit("error", friendly_error(e))
+                    self.emit("error", self.report_error(e, label))
         label = (T.TASK_TRANSFER_PREVIEW if dry_run else T.TASK_VERIFY_AGAIN if verify_only
                  else T.TASK_RETRY if retry_failed else T.TASK_TRANSFER)
         self._run(label, work, done, cancellable=True)
@@ -750,7 +841,7 @@ class Controller:
                 try:
                     rep.write(Path(report_path))
                 except OSError as e:
-                    self.emit("error", friendly_error(e))
+                    self.emit("error", self.report_error(e, T.TASK_VERIFY))
         self._run(T.TASK_VERIFY, work, done, cancellable=True)
 
     # ------------------------------------------------------------------ 대용량 복사: 결과
@@ -836,6 +927,10 @@ class Controller:
         rep = self.state.transfer_report
         if rep is None:
             raise GuardError(T.G_NOTHING_TO_SAVE)
+        s = self.state
+        for folder in (s.verify_target if self.is_verify_flow() else s.transfer_src,):
+            if folder and real_api.report_inside(path, folder):
+                raise GuardError(T.G_REPORT_INSIDE_SOURCE)
         try:
             rep.write(Path(path))
         except OSError as e:

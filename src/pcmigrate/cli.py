@@ -3,14 +3,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
+import os
 import sys
 import time
 from pathlib import Path
 
-from . import __version__, envpaths
-from .api import (NEEDS_CONFIRM, ApiError, Deps, check_unexpanded, format_write_error, report_inside, run_checklist,
-                  run_copy, run_discover, run_export, run_import, run_manifest, run_scan, run_transfer, run_verify,
-                  selection_json)
+from . import __version__, envpaths, errorlog
+from .api import (NEEDS_CONFIRM, ApiError, Deps, check_outputs_outside, check_unexpanded, format_write_error,
+                  report_inside, run_checklist, run_copy, run_discover, run_export, run_import, run_manifest,
+                  run_scan, run_transfer, run_verify, same_file, selection_json)
 from .checklist import write_output
 from .detect import read_registry_programs, winget_export_raw, winget_list_raw
 from .manifest import ManifestError, build_manifest, verify_against_manifest
@@ -61,6 +63,16 @@ def _unexpanded(**paths: str | None) -> bool:
     return bool(lines)
 
 
+def _output_is_dir(**paths: str | None) -> bool:
+    """출력 파일 경로에 기존 '폴더'를 준 경우(폴더를 .bak 으로 옮기고 같은 이름 파일을 만들게 되므로) 거부한다."""
+    for label, value in paths.items():
+        if value and os.path.isdir(value):
+            _err(f"출력 경로가 폴더입니다: {value} (--{label})",
+                 "힌트: 파일 이름까지 지정하세요(예: D:\\백업\\pc-package.zip). 기존 폴더는 건드리지 않았습니다.")
+            return True
+    return False
+
+
 def _fail(e: ApiError) -> int:
     _err(*e.lines, e.message)
     return e.code
@@ -100,6 +112,10 @@ def _cmd_scan(args: argparse.Namespace) -> int:
 def _cmd_copy(args: argparse.Namespace) -> int:
     if _unexpanded(src=args.src, dst=args.dst, report=args.report):
         return 1
+    try:
+        check_outputs_outside(args.src, report=args.report)
+    except ApiError as e:
+        return _fail(e)
     report = run_copy(args.src, args.dst, dry_run=args.dry_run)
     if args.report:
         try:
@@ -148,6 +164,34 @@ def _chunk_bytes(mb: float | None) -> int | None:
     return int(mb * 1024 * 1024) if mb else None
 
 
+def _int_range(lo: int, hi: int):
+    def conv(text: str) -> int:
+        try:
+            v = int(text)
+        except ValueError:
+            raise argparse.ArgumentTypeError(f"{lo}~{hi} 사이의 정수를 입력하세요(입력: {text!r})") from None
+        if not lo <= v <= hi:
+            raise argparse.ArgumentTypeError(
+                f"{lo}~{hi} 사이여야 합니다(입력: {v}). 자동으로 바꾸지 않으니 범위 안의 값을 지정하세요")
+        return v
+    return conv
+
+
+CHUNK_MB_RANGE = (0.25, 1024.0)
+
+
+def _chunk_mb(text: str) -> float:
+    try:
+        v = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"숫자(MB)를 입력하세요(입력: {text!r})") from None
+    lo, hi = CHUNK_MB_RANGE
+    if not math.isfinite(v) or not lo <= v <= hi:
+        raise argparse.ArgumentTypeError(
+            f"{lo:g}~{hi:g}MB 사이여야 합니다(입력: {text}). 자동으로 바꾸지 않으니 범위 안의 값을 지정하세요")
+    return v
+
+
 def _cmd_transfer(args: argparse.Namespace) -> int:
     def warn(msg: str) -> None:
         print(f"[경고] {msg}", file=sys.stderr)
@@ -155,6 +199,11 @@ def _cmd_transfer(args: argparse.Namespace) -> int:
     if _unexpanded(src=args.src, dst=args.dst, report=args.report, log=args.log, state_file=args.state_file,
                    manifest_out=args.manifest_out, use_manifest=args.use_manifest):
         return 1
+    try:
+        check_outputs_outside(args.src, report=args.report, log=args.log, state_file=args.state_file,
+                              manifest_out=args.manifest_out)
+    except ApiError as e:
+        return _fail(e)
     if not (args.dry_run or args.verify_only):
         _err(*PRECHECK_LINES)
     try:
@@ -166,6 +215,8 @@ def _cmd_transfer(args: argparse.Namespace) -> int:
                               manifest_out=args.manifest_out, use_manifest=args.use_manifest,
                               verify_dest=args.verify_dest, copy_mode=args.copy_mode,
                               copy_threads=args.copy_threads)
+    except ApiError as e:
+        return _fail(e)
     except TransferError as e:
         print(f"전송 실패: {e}", file=sys.stderr)
         return 1
@@ -201,6 +252,10 @@ def _cmd_transfer(args: argparse.Namespace) -> int:
 def _cmd_manifest(args: argparse.Namespace) -> int:
     if _unexpanded(src=args.src, out=args.out):
         return 1
+    try:
+        check_outputs_outside(args.src, out=args.out)
+    except ApiError as e:
+        return _fail(e)
     try:
         r = run_manifest(args.src, args.out, workers=args.workers, chunk=_chunk_bytes(args.chunk_mb),
                          progress=_cli_progress(), progress_info=_cli_hint(), deps=_deps())
@@ -242,7 +297,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
 
 
 def _cmd_checklist(args: argparse.Namespace) -> int:
-    if _unexpanded(output=args.output, package=args.package):
+    if _unexpanded(output=args.output, package=args.package) or _output_is_dir(output=args.output):
         return 1
     try:
         r = run_checklist(args.rules, package=args.package, show_all=args.all, fmt=args.format, deps=_deps())
@@ -262,7 +317,8 @@ def _cmd_checklist(args: argparse.Namespace) -> int:
 
 
 def _cmd_discover(args: argparse.Namespace) -> int:
-    if _unexpanded(output=args.output, output_selection=args.output_selection):
+    if (_unexpanded(output=args.output, output_selection=args.output_selection)
+            or _output_is_dir(output=args.output, **{"output-selection": args.output_selection})):
         return 1
     try:
         d = run_discover(args.rules, min_size_kb=args.min_size_kb, show_all=args.all,
@@ -290,7 +346,7 @@ def _cmd_discover(args: argparse.Namespace) -> int:
 
 
 def _cmd_export(args: argparse.Namespace) -> int:
-    if _unexpanded(output=args.output, extra=args.extra):
+    if _unexpanded(output=args.output, extra=args.extra) or _output_is_dir(output=args.output):
         return 1
     try:
         r = run_export(args.rules, args.output, extra=args.extra, allow_secrets=args.allow_secrets,
@@ -304,15 +360,21 @@ def _cmd_export(args: argparse.Namespace) -> int:
              "패키지 파일을 안전하게 보관하세요.")
     _err(*r.notes)
     print(json.dumps(r.summary_dict(args.output), ensure_ascii=False))
+    _err(*r.unreadable_lines())
+    for f in r.hard_failures:
+        _err(f"실패: {f['src']} -> {f['error']}")
     _print_warnings(r.manifest.get("manual_warnings", []))
     _print_checklist_hint(r.checklist)
     if r.discovery:
         _print_hint("(자동으로 포함되지 않습니다).", *r.discovery)
-    return 1 if r.manifest["failed"] else 0
+    return 1 if r.hard_failures else 0  # 읽지 못한 파일은 안내만 하고 성공으로 끝낸다(패키지는 검증을 통과했다)
 
 
 def _cmd_import(args: argparse.Namespace) -> int:
     if _unexpanded(package=args.package, report=args.report):
+        return 1
+    if same_file(args.report, args.package):
+        _err("--report 가 패키지 파일 자신입니다. 패키지를 덮어쓰지 않도록 다른 이름으로 저장하세요.")
         return 1
     try:
         r = run_import(args.package, args.rules, dry_run=args.dry_run, yes=args.yes,
@@ -359,6 +421,27 @@ def _cmd_gui(args: argparse.Namespace) -> int:
         print(f"그래픽 화면을 쓸 수 없습니다(tkinter 가 설치되지 않았을 수 있습니다): {e}", file=sys.stderr)
         return 1
     return gui_main([])
+
+
+def _cmd_logs(args: argparse.Namespace) -> int:
+    d = errorlog.log_dir()
+    print(f"오류 로그 폴더: {d}")
+    print(errorlog.PATH_NOTE)
+    last = errorlog.last_error(d)
+    if last is None:
+        print("기록된 오류가 없습니다.")
+    else:
+        path, block = last
+        print(f"가장 최근 오류({path.name}):")
+        for line in errorlog.summarize_block(block):
+            print(f"  {line}")
+    if args.open:
+        try:
+            os.startfile(str(d))  # type: ignore[attr-defined]
+        except (AttributeError, OSError) as e:
+            _err(f"탐색기로 열지 못했습니다({type(e).__name__}). 위 경로를 직접 여세요.")
+            return 1
+    return 0
 
 
 # --------------------------------------------------------------------------- 파서
@@ -423,8 +506,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="OneDrive 클라우드 전용 파일도 포함(대량 다운로드 발생)")
     t.add_argument("--verify-only", action="store_true", help="복사 없이 원본과 대상을 비교만 하고 리포트를 갱신(대상은 항상 다시 읽음)")
     t.add_argument("--retry-failed", action="store_true", help="전체를 다시 복사하지 않고 검사가 끝나지 않았거나 실패한 파일만 다시 복사/검사")
-    t.add_argument("--workers", type=int, help="파일 단위 병렬 검사 개수(기본 2, 최대 8). 느린 USB/HDD 에서는 1 이 나을 수 있음")
-    t.add_argument("--chunk-mb", type=float, help="읽기 청크 크기(MB, 기본 4)")
+    t.add_argument("--workers", type=_int_range(1, 8), help="파일 단위 병렬 검사 개수(1~8, 기본 2). 느린 USB/HDD 에서는 1 이 나을 수 있음")
+    t.add_argument("--chunk-mb", type=_chunk_mb, help="읽기 청크 크기(MB, 0.25~1024, 기본 4)")
     t.add_argument("--no-keep-awake", action="store_true", help="전송 중 절전 방지를 끈다(기본은 시스템 절전을 막음)")
     t.add_argument("--manifest-out", help="원본 기준 해시 목록(.jsonl)을 저장. 네트워크 대상이면 대상 검사를 미루고 새 PC 에서 verify 로 비교")
     t.add_argument("--use-manifest", help="원본 해시를 이 목록에서 가져와 원본을 다시 읽지 않음(외장 드라이브 2단계: 외장 -> 새 PC)")
@@ -433,7 +516,7 @@ def build_parser() -> argparse.ArgumentParser:
                    help="--manifest-out 과 함께여도 대상을 지금 다시 읽어 검사(네트워크면 오래 걸림)")
     g.add_argument("--no-verify-dest", dest="verify_dest", action="store_const", const=False,
                    help="대상 검사를 미룬다(해시 목록만 만들고 새 PC 에서 verify)")
-    t.add_argument("--copy-threads", type=int, help="복사 도구가 동시에 복사할 파일 수(기본 4, 1~16). 작은 파일이 많을 때 빠르며, 느린 HDD/USB 에서는 1 을 권장")
+    t.add_argument("--copy-threads", type=_int_range(1, 16), help="복사 도구가 동시에 복사할 파일 수(기본 4, 1~16). 작은 파일이 많을 때 빠르며, 느린 HDD/USB 에서는 1 을 권장")
     t.add_argument("--copy-mode", choices=("restartable", "normal", "unbuffered"), default="restartable",
                    help="복사 방식: restartable(기본, 끊겨도 이어받음) / normal / unbuffered(아주 큰 파일에 유리)")
     t.set_defaults(func=_cmd_transfer)
@@ -441,16 +524,16 @@ def build_parser() -> argparse.ArgumentParser:
     m = sub.add_parser("manifest", help="원본(로컬)을 읽어 해시 목록 파일을 만든다(읽기 전용)")
     m.add_argument("src", help="원본 폴더(읽기만 함)")
     m.add_argument("--out", required=True, help="해시 목록 파일(.jsonl) 저장 경로")
-    m.add_argument("--workers", type=int)
-    m.add_argument("--chunk-mb", type=float)
+    m.add_argument("--workers", type=_int_range(1, 8), help="파일 단위 병렬 개수(1~8, 기본 2)")
+    m.add_argument("--chunk-mb", type=_chunk_mb, help="읽기 청크 크기(MB, 0.25~1024, 기본 4)")
     m.set_defaults(func=_cmd_manifest)
 
     v = sub.add_parser("verify", help="해시 목록과 로컬 폴더를 비교(누락/내용 다름/추가 파일). 대상은 읽기만 함")
     v.add_argument("--manifest", required=True, help="구 PC 에서 만든 해시 목록(.jsonl)")
     v.add_argument("--target", required=True, help="검사할 로컬 폴더(새 PC)")
     v.add_argument("--report", help="결과 리포트(JSON). 검사할 폴더 밖에 저장해야 함")
-    v.add_argument("--workers", type=int)
-    v.add_argument("--chunk-mb", type=float)
+    v.add_argument("--workers", type=_int_range(1, 8), help="파일 단위 병렬 개수(1~8, 기본 2)")
+    v.add_argument("--chunk-mb", type=_chunk_mb, help="읽기 청크 크기(MB, 0.25~1024, 기본 4)")
     v.add_argument("--no-extras", action="store_true", help="목록에 없는 추가 파일 찾기를 건너뜀")
     v.set_defaults(func=_cmd_verify)
 
@@ -462,6 +545,9 @@ def build_parser() -> argparse.ArgumentParser:
     c.set_defaults(func=_cmd_copy)
     g = sub.add_parser("gui", help="그래픽 마법사(Tkinter)를 연다")
     g.set_defaults(func=_cmd_gui)
+    lg = sub.add_parser("logs", help="오류 로그 폴더 경로와 최근 오류 요약을 보여 준다")
+    lg.add_argument("--open", action="store_true", help="탐색기로 로그 폴더를 연다")
+    lg.set_defaults(func=_cmd_logs)
     return p
 
 
@@ -473,4 +559,14 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as e:
         print(str(e), file=sys.stderr)
         return 2
-    return args.func(args)
+    try:
+        return args.func(args)
+    except KeyboardInterrupt:
+        _err("중단했습니다. 원본은 읽기만 하므로 바뀌지 않았습니다.")
+        return 130
+    except Exception as e:  # noqa: BLE001 - traceback 대신 쉬운 문구 + 로그 파일로 안내
+        path = errorlog.record(e, f"pcmigrate {args.command}")
+        _err("예상하지 못한 오류가 났습니다. " + (f"자세한 내용은 {path} 에 기록했습니다."
+                                          if path else "오류 로그도 남기지 못했습니다(로그 폴더에 쓸 수 없음)."),
+             f"원인(요약): {type(e).__name__}: {e}")
+        return 1

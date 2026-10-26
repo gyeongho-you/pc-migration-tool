@@ -24,7 +24,7 @@ from .cancel import Cancelled
 from .copier import (EXTRA, FAILED, MISMATCH, MISSING, VERIFIED, FileResult, IoStats, Report, sha256_file)
 from .engine import clamp_workers, run_ordered
 from .fs import long_path
-from .progress import ProgressInfo, ProgressTracker, format_info
+from .progress import OK, ProgressInfo, ProgressTracker, categorize, format_info
 from .scan import ScanInfo, scan_source_info
 
 MANIFEST_FORMAT = "pcmigrate-manifest"
@@ -36,6 +36,17 @@ _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 
 class ManifestError(ValueError):
     """목록 파일이 잘못되었거나 안전하지 않음."""
+
+
+NOT_UTF8 = "목록 파일을 읽을 수 없습니다(UTF-8 텍스트가 아닙니다). 이 도구가 만든 .jsonl 파일이 맞는지 확인하세요."
+
+
+def _count_field(header: dict, key: str) -> int:
+    """헤더의 개수 필드. 숫자가 아니면 목록 파일 오류."""
+    v = header.get(key) or 0
+    if isinstance(v, bool) or not isinstance(v, int) or v < 0:
+        raise ManifestError(f"목록 파일의 {key} 값이 올바르지 않습니다")
+    return v
 
 
 def _safe_rel(rel: object) -> str:
@@ -103,14 +114,24 @@ class ManifestReader:
                 first = f.readline()
         except OSError as e:
             raise ManifestError(f"목록 파일을 읽을 수 없습니다: {e}") from e
+        except UnicodeDecodeError as e:
+            raise ManifestError(NOT_UTF8) from e
         try:
             self.header = json.loads(first)
-        except ValueError as e:
+        except (ValueError, RecursionError) as e:  # 너무 깊게 중첩된 JSON 은 RecursionError
             raise ManifestError("목록 파일의 첫 줄이 올바르지 않습니다") from e
+        if not isinstance(self.header, dict):
+            raise ManifestError("목록 파일의 첫 줄이 올바르지 않습니다(목록 파일이 아닌 JSON 입니다)")
         if self.header.get("format") != MANIFEST_FORMAT or self.header.get("version") != MANIFEST_VERSION:
             raise ManifestError("지원하지 않는 목록 파일입니다(형식 또는 버전이 다름)")
 
     def rows(self) -> Iterator[dict]:
+        try:
+            yield from self._rows()
+        except UnicodeDecodeError as e:
+            raise ManifestError(NOT_UTF8) from e
+
+    def _rows(self) -> Iterator[dict]:
         self.footer = None
         with open(long_path(self.path), "r", encoding="utf-8") as f:
             f.readline()  # 헤더
@@ -122,6 +143,10 @@ class ManifestReader:
                     row = json.loads(line)
                 except ValueError:
                     continue  # 끝이 잘린 줄은 무시하고, footer 가 없으므로 불완전 목록으로 보고된다
+                except RecursionError as e:
+                    raise ManifestError(f"{n}번째 줄의 항목이 올바르지 않습니다") from e
+                if not isinstance(row, dict):
+                    raise ManifestError(f"{n}번째 줄의 항목이 올바르지 않습니다")
                 if row.get("end") is True:
                     self.footer = row
                     continue
@@ -169,6 +194,7 @@ def build_manifest(src: Path | str, out: Path | str, *, workers: int | None = No
 
     def task(entry):
         rel, size, mtime = entry
+        tracker.set_current(info.abs_path(rel))
         cached = cached_hash(rel, size, mtime) if cached_hash else None
         if cached:
             stats.reused()
@@ -188,9 +214,11 @@ def build_manifest(src: Path | str, out: Path | str, *, workers: int | None = No
         digest, err = result
         if digest:
             writer.write_row(rel, size, mtime, digest)
+            tracker.note(OK)
         else:
             errors.append(err)
             writer.note_error()
+            tracker.note(categorize(err.status, err.reason), err.src)
         tracker.add(0, 1)
         now = clock()
         if (progress or progress_info) and now - last[0] >= min_interval:
@@ -261,7 +289,7 @@ def verify_against_manifest(manifest: Path | str, target: Path | str, *, workers
         raise ManifestError(f"대상 폴더가 없습니다: {target}")
     reader = ManifestReader(Path(manifest))
     header = reader.header
-    total_bytes, total_files = int(header.get("total_bytes") or 0), int(header.get("total_files") or 0)
+    total_bytes, total_files = _count_field(header, "total_bytes"), _count_field(header, "total_files")
     report = Report(dry_run=False)
     stats = IoStats()
     tracker = ProgressTracker("verify", total_bytes, total_files, clock=clock)
@@ -280,12 +308,14 @@ def verify_against_manifest(manifest: Path | str, target: Path | str, *, workers
                 progress(format_info(snap))
 
     def task(row):
+        tracker.set_current(os.path.join(target, *row["rel"].split("/")))
         return _check_row(row, target, chunk, cancel, lambda n: tracker.add(n), stats)
 
     def handle(row, res):
         expected.add(row["rel"].casefold())
         report.results.append(res)
         tracker.add(0, 1)
+        tracker.note(categorize(res.status, res.reason), res.dst or res.src)
         emit()
 
     run_ordered(reader.rows(), task, handle, workers=clamp_workers(workers), cancel=cancel)

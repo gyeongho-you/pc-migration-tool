@@ -7,7 +7,6 @@ from tkinter import filedialog, messagebox, ttk
 from .. import state as S
 from .. import texts as T
 from ...progress import fmt_bytes
-from ..controller import friendly_error
 from .common import (INFO_BG, MUTED_FG, OK_BG, OK_FG, SECRET_BG, SECRET_FG, WARN_FG, BaseView, ResultSummary, TextDialog,
                      TreeTooltip, add_tooltip, autowrap, clear, make_tree)
 
@@ -51,6 +50,7 @@ class TransferView(BaseView):
         super().__init__(app, controller)
         self.navbar(back=lambda: self.c.go(S.START))
         self.header(T.TR_HEADING, T.TR_SUB)
+        self.add_status_card({T.TASK_TRANSFER, T.TASK_TRANSFER_PREVIEW, T.TASK_VERIFY, T.TASK_VERIFY_AGAIN, T.TASK_RETRY})
         scroll = ScrollBody(self)
         scroll.pack(fill="both", expand=True)
         body = scroll.inner
@@ -399,8 +399,7 @@ class TransferView(BaseView):
             self.c.save_transfer_report(p)
             messagebox.showinfo(T.SAVED_TITLE, T.SAVED_BODY.format(path=p), parent=self)
         except Exception as e:  # noqa: BLE001
-            fe = friendly_error(e)
-            messagebox.showerror(fe.title, fe.message, parent=self)
+            self.app.show_error(self.c.report_error(e, T.TASK_UI))
 
     def _show_cloud(self) -> None:
         files = self.c.transfer_summary().get("cloud_files", [])

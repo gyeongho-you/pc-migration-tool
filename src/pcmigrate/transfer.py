@@ -31,7 +31,7 @@ from .engine import clamp_workers, run_ordered
 from .fs import long_path
 from .manifest import ManifestReader, ManifestWriter
 from .power import KeepAwake
-from .progress import ProgressInfo, ProgressTracker, fmt_bytes, format_info, slow_policy
+from .progress import OK, ProgressInfo, ProgressTracker, categorize, fmt_bytes, format_info, slow_policy
 from .scan import ScanInfo, is_cloud_only, scan_source_info  # noqa: F401  (is_cloud_only 는 기존 import 경로 유지)
 
 STATE_NAME = ".pcmigrate-state.json"
@@ -196,6 +196,12 @@ def interpret_exit(code: int) -> tuple[bool, list[str]]:
 
 def default_attr_getter(path: Path) -> int:
     return getattr(os.stat(path), "st_file_attributes", 0)
+
+
+def parse_copy_path(line: str) -> str | None:
+    """robocopy 파일 줄에서 경로를 꺼낸다(현황 카드의 '지금 처리 중인 파일' 표시용). 아니면 None."""
+    m = _COPY_LINE.match(line)
+    return m.group(2) if m else None
 
 
 def parse_copy_line(line: str) -> int | None:
@@ -539,6 +545,9 @@ def transfer(src: Path, dst: Path, *, dry_run: bool = False, include_cloud: bool
                 raise TransferError(msg)
 
     if dry_run:
+        if progress_info:
+            progress_info(ProgressInfo("compare", 0, 0, 0, len(entries), message="복사될 파일을 비교하는 중입니다…",
+                                       skipped=len(skipped_cloud)))
         return _dry_run(report, entries, skipped_cloud, scan, dst, runner, copy_mode, network)
 
     # ---- 실제 실행
@@ -585,6 +594,8 @@ def transfer(src: Path, dst: Path, *, dry_run: bool = False, include_cloud: bool
                     if size is None:
                         return
                     tracker.add(size, 1)
+                    tracker.set_current(parse_copy_path(line) or "")
+                    tracker.note(OK)
                     now = clock()
                     with emit_lock:
                         if now - last_emit[0] < min_report_interval:
@@ -773,6 +784,7 @@ def _verify_phase(report: Report, entries, scan: ScanInfo, dst: Path, state: Sta
     def task(entry):
         rel, size, mtime = entry
         s_path, d_path = _join(scan.root, rel), _join(dst_root, rel)
+        tracker.set_current(d_path)
         if not strict and not verify_only:
             digest = state.is_verified(rel, size, mtime, d_path)
             if digest is not None:
@@ -824,6 +836,7 @@ def _verify_phase(report: Report, entries, scan: ScanInfo, dst: Path, state: Sta
         if res.status == FAILED and res.reason in ("disconnected",) and not alive():
             raise DriveDisconnected(DISCONNECTED_MESSAGE)
         tracker.add(0, 1)
+        tracker.note(categorize(res.status, res.reason), res.src)
         _add_result(report, res, detail_ok)
         emit()
 

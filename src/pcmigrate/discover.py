@@ -23,6 +23,7 @@ from .envpaths import expand_env
 from .detect import Program
 from .discover_data import (BROWSER_VENDOR_DIRS, DOT_HINTS, DOT_SKIP, EXTRA_ROOTS, ROOTS, SECRET_PATTERNS, SKIP_NAMES,
                             SKIP_PREFIXES, SKIP_SUBSTRINGS, Root)
+from .progress import ProgressInfo
 from .rules import Rule
 
 Expand = Callable[[str], str]
@@ -322,7 +323,8 @@ def discover(rules: list[Rule], programs: list[Program], expand: Expand = expand
              with_sizes: bool = True, per_limit: float = 3.0, total_limit: float = 60.0,
              clock: Callable[[], float] = time.monotonic, min_size_kb: int = 0,
              show_all: bool = False, progress: Callable[[str], None] | None = None,
-             cancel: Callable[[], bool] | None = None) -> Discovery:
+             cancel: Callable[[], bool] | None = None,
+             progress_info: Callable[[ProgressInfo], None] | None = None) -> Discovery:
     """규칙 없는 설치 프로그램과 사용자 데이터 폴더 후보를 찾는다.
 
     progress 가 있으면 진행 메시지(문자열)를 넘긴다. 출력 방식은 호출자(UI)가 정한다.
@@ -331,7 +333,12 @@ def discover(rules: list[Rule], programs: list[Program], expand: Expand = expand
         if progress is not None:
             progress(msg)
 
+    def info(phase: str, msg: str, done: int = 0, total: int = 0, current: str = "") -> None:
+        if progress_info is not None:  # GUI 현황 카드용(단계, 후보 폴더 처리 수, 현재 폴더)
+            progress_info(ProgressInfo(phase, 0, 0, done, total, message=msg, current=current))
+
     t0 = clock()
+    info("list", "설치 프로그램 목록과 규칙을 대조하는 중입니다…")
     say("설치 프로그램 목록과 규칙을 대조하는 중...")
     d = Discovery(with_sizes=with_sizes)
     reg = [p for p in programs if p.source == "registry"] or list(programs)
@@ -353,6 +360,7 @@ def discover(rules: list[Rule], programs: list[Program], expand: Expand = expand
     ruleless.sort(key=lambda p: p.name.lower())
 
     say(f"규칙 없는 설치 프로그램 {len(ruleless)}개. 설정 폴더 후보를 찾는 중...")
+    info("find", f"규칙 없는 설치 프로그램 {len(ruleless)}개. 설정 폴더 후보를 찾는 중입니다…")
     concrete = rule_concrete_paths(rules, expand)
     all_programs = ruleless + rule_programs + [bp for bp, _ in d.bundles]
     entries = {p.name: ProgramEntry(p) for p in ruleless}
@@ -379,6 +387,7 @@ def discover(rules: list[Rule], programs: list[Program], expand: Expand = expand
         if cancel is not None and cancel():
             raise Cancelled()
         if with_sizes:
+            info("scan", f"후보 폴더 크기를 재는 중입니다({i}/{len(cands)})", i - 1, len(cands), c.path)
             scan_candidate(c, per_limit, clock, budget_end)
             if i % 20 == 0 and i < len(cands):
                 say(f"  크기 계산 {i}/{len(cands)}")

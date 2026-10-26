@@ -6,13 +6,15 @@ import os
 import sys
 import tempfile
 import tkinter as tk
+import traceback
 from tkinter import font as tkfont
 from tkinter import messagebox, ttk
 
+from .. import errorlog
 from . import state as S
 from . import texts as T
 from .controller import Controller, FriendlyError
-from .views.common import (MUTED_FG, STAGE_FONT, BaseView, TextDialog, autowrap)
+from .views.common import (BIG_FONT, INFO_BG, MUTED_FG, OK_FG, STAGE_FONT, BaseView, TextDialog, autowrap, open_location)
 from .views.new_pc import ConfirmView, PackageView, PreviewView, ResultView
 from .views.old_pc import ChecklistView, DiscoverView, ExportView, ScanView
 from .views.start import StartView
@@ -105,14 +107,22 @@ class ErrorDialog(tk.Toplevel):
             ttk.Label(body, text=T.ERR_HOW, foreground=MUTED_FG).pack(anchor="w", pady=(8, 0))
             self.how_label = ttk.Label(body, text=err.how, wraplength=540, justify="left")
             self.how_label.pack(anchor="w", fill="x")
+        self.log_note = ttk.Label(body, text=T.ERROR_LOG_NOTE if err.log_path else T.ERROR_LOG_FAILED_NOTE,
+                                  wraplength=540, justify="left", foreground=MUTED_FG)
+        self.log_note.pack(anchor="w", fill="x", pady=(8, 0))
         self.detail = tk.Text(self, height=10, width=80, wrap="none")
         self.detail.insert("1.0", err.detail or T.NO_DETAIL)
         self.detail.configure(state="disabled")
         self.shown = False
         bar = ttk.Frame(self, padding=(12, 0, 12, 12))
         bar.pack(fill="x", side="bottom")
+        self.err = err
         self.toggle = ttk.Button(bar, text=T.BTN_DETAIL_SHOW, command=self._toggle)
         self.toggle.pack(side="left")
+        self.log_btn = ttk.Button(bar, text=T.BTN_OPEN_LOG_FOLDER, command=self.open_log_folder)
+        self.log_btn.pack(side="left", padx=(8, 0))
+        self.copy_btn = ttk.Button(bar, text=T.BTN_COPY_ERROR, command=self.copy_error)
+        self.copy_btn.pack(side="left", padx=(8, 0))
         self.ok_btn = ttk.Button(bar, text=T.BTN_OK, command=self.destroy)
         self.ok_btn.pack(side="right")
         self.bind("<Return>", self.close_event)
@@ -124,6 +134,16 @@ class ErrorDialog(tk.Toplevel):
         """Enter/Esc 로 닫기(다른 화면의 Enter/Esc 동작이 겹치지 않게 'break')."""
         self.destroy()
         return "break"
+
+    def open_log_folder(self) -> None:
+        open_location(str(errorlog.log_dir()))
+
+    def copy_error(self) -> None:
+        """오류 내용(시각, 버전, 실행 화면, 예외, 전체 traceback)을 클립보드에 넣는다."""
+        text = self.err.report or "\n".join(x for x in (self.err.what, self.err.how, self.err.detail) if x)
+        self.clipboard_clear()
+        self.clipboard_append(text)
+        self.log_note.configure(text=T.ERROR_COPIED)
 
     def _toggle(self) -> None:
         self.shown = not self.shown
@@ -195,6 +215,12 @@ class App(tk.Tk):
         ttk.Separator(self).pack(fill="x")
         self.crumb = ttk.Label(self, text="", padding=(10, 4), foreground="#0b5394")
         self.crumb.pack(fill="x")
+        self.overall = tk.Frame(self, bg=INFO_BG, padx=10, pady=4)  # 전체 단계 n/N (흐름 안에서만 보인다)
+        self.overall_label = tk.Label(self.overall, text="", bg=INFO_BG, font=BIG_FONT)
+        self.overall_label.pack(side="left")
+        self.overall_chips: list[tk.Label] = []
+        self.overall_flow = tk.Label(self.overall, text="", bg=INFO_BG, fg=MUTED_FG)
+        self.overall_flow.pack(side="right")
 
     def _build_footer(self) -> None:
         ttk.Separator(self).pack(fill="x", side="bottom")
@@ -204,6 +230,8 @@ class App(tk.Tk):
         right.pack(side="right", padx=(10, 0))
         self.progress = ttk.Progressbar(right, mode="indeterminate", length=170)
         self.progress.pack(side="top")
+        self.log_link = ttk.Button(right, text=T.BTN_OPEN_ERROR_LOG, command=lambda: open_location(str(errorlog.log_dir())))
+        self.log_link.pack(side="bottom", pady=(4, 0))  # 오류가 났을 때 로그를 바로 열 수 있게 항상 보인다
         self.cancel_btn = ttk.Button(right, text=T.BTN_CANCEL, command=self.c.cancel)
         left = ttk.Frame(bar)
         left.pack(side="left", fill="x", expand=True)
@@ -221,7 +249,47 @@ class App(tk.Tk):
         self.current = screen
         view.tkraise()
         self.crumb.configure(text=T.CRUMB_HOME if screen == S.START else T.TITLES.get(screen, screen))
+        self.update_overall()
         view.on_show()
+        view.refresh_card()
+
+    def update_overall(self) -> None:
+        """맨 위의 '전체 단계 n/N' 큰 표시(흐름 안의 화면에서만)."""
+        mode, stage = self.c.flow()
+        step = S.overall_step(self.current, mode, stage)
+        if step is None:
+            self.overall.pack_forget()
+            return
+        n, total, flow, title = step
+        self.overall.pack(fill="x", after=self.crumb)
+        self.overall_label.configure(text=T.OVERALL_FMT.format(n=n, total=total))
+        self.overall_flow.configure(text=f"{flow} · {title}")
+        while len(self.overall_chips) < total:
+            chip = tk.Label(self.overall, text="", padx=8, pady=1)
+            chip.pack(side="left", padx=(8, 0), before=self.overall_flow)
+            self.overall_chips.append(chip)
+        for i, chip in enumerate(self.overall_chips):
+            if i >= total:
+                chip.pack_forget()
+                continue
+            chip.pack(side="left", padx=(8, 0), before=self.overall_flow)
+            state = "done" if i + 1 < n else "current" if i + 1 == n else "todo"
+            chip.configure(text=(T.ICON_OK + " " if state == "done" else "") + str(i + 1),
+                           bg="#0b5394" if state == "current" else "#d6e4fa" if state == "done" else "#efefef",
+                           fg="white" if state == "current" else OK_FG if state == "done" else MUTED_FG)
+
+    def show_error(self, err: FriendlyError) -> ErrorDialog:
+        """오류 대화상자(로그 폴더 열기/오류 내용 복사 버튼 포함)."""
+        self.status.configure(text=T.ERROR_STATUS)
+        return ErrorDialog(self, err)
+
+    def report_callback_exception(self, exc, val, tb) -> None:
+        """tkinter 콜백 안에서 처리되지 않은 오류도 로그에 남기고 같은 대화상자로 보여 준다(창 모드 exe 에서는 콘솔이 없다)."""
+        text = "".join(traceback.format_exception(exc, val, tb))
+        try:
+            self.show_error(self.c.report_error(val, T.TASK_UI, text))
+        except Exception:  # noqa: BLE001 - 오류 표시 중 오류가 또 나도 앱이 죽지 않게
+            errorlog.record(val, "GUI", text)
 
     def go_home(self) -> None:
         if self.c.state.busy:
@@ -307,13 +375,18 @@ class App(tk.Tk):
         elif kind == "cancelled":
             self.status.configure(text=T.CANCELLED.format(task=payload))
         elif kind == "error":
-            self.status.configure(text=T.ERROR_STATUS)
-            ErrorDialog(self, payload)
+            self.show_error(payload)
+        elif kind == "transfer_flow":
+            self.update_overall()
         for v in self.views.values():
             v.on_event(kind, payload)
+        if kind in ("status", "busy", "screen"):
+            self.views[self.current].refresh_card()
 
     def _tick(self) -> None:
         self.c.pump()
+        if self.c.status.running:  # 경과 시간/속도가 계속 바뀌도록 작업 중에는 0.1초마다 현황 카드를 다시 그린다
+            self.views[self.current].refresh_card()
         self.after(100, self._tick)
 
     def _close(self) -> None:
@@ -334,6 +407,11 @@ def main(argv: list[str] | None = None) -> int:
     except tk.TclError as e:
         if sys.stderr is not None:  # 창 모드 exe 에서는 표준 오류가 없다
             print(f"화면을 열 수 없습니다(디스플레이가 없는 환경일 수 있습니다): {e}", file=sys.stderr)
+        return 1
+    except Exception as e:  # noqa: BLE001 - 창을 만들기 전의 예상 밖 오류도 로그에 남긴다
+        path = errorlog.record(e, "GUI 시작")
+        if sys.stderr is not None:
+            print(f"예상하지 못한 오류가 났습니다. 자세한 내용은 {path} 에 기록했습니다.", file=sys.stderr)
         return 1
     app.mainloop()
     return 0

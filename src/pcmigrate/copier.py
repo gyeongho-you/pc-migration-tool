@@ -101,7 +101,7 @@ def sha256_file(path: Path, chunk: int | None = None, cancel: Callable[[], bool]
         while True:
             if cancel is not None and cancel():
                 raise Cancelled()
-            n = f.readinto(view)
+            n = failure.read_chunk(f.readinto, view)
             if not n:
                 break
             h.update(view[:n])
@@ -186,6 +186,8 @@ def copy_file(src: Path, dst: Path, dry_run: bool = False) -> FileResult:
     except Exception as e:  # 파일 단위로 격리: 하나 실패해도 계속 진행
         res.status = FAILED
         res.error = f"{type(e).__name__}: {e}"
+        if isinstance(e, OSError):
+            res.reason = failure.classify(e, str(src)).code
         try:
             tmp.unlink(missing_ok=True)
         except OSError:
@@ -285,7 +287,7 @@ def copy_verified(src: Path, dst: Path, *, chunk: int | None = None, cancel: Cal
                     if cancel is not None and cancel():
                         raise Cancelled()
                     where = str(src)
-                    n = fin.readinto(view)
+                    n = failure.read_chunk(fin.readinto, view)
                     if not n:
                         break
                     h.update(view[:n])
@@ -320,6 +322,9 @@ def copy_verified(src: Path, dst: Path, *, chunk: int | None = None, cancel: Cal
         f = failure.classify(e, where)
         res.status, res.reason, res.error = FAILED, f.code, f"{f.text} ({where})"
         _rm(tmp)
+    except BaseException:  # 예상 밖 예외/중단(Ctrl+C)에도 반쪽 임시 파일을 남기지 않는다
+        _rm(tmp)
+        raise
     return res
 
 

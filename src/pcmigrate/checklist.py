@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import errno
 import json
 import os
 import re
@@ -447,12 +448,18 @@ def render(cl: Checklist, fmt: str = "text") -> str:
 def write_output(path: Path, text: str) -> None:
     """기존 파일은 .bak 으로 보존한 뒤 원자적으로 쓴다."""
     path = Path(path)
+    if path.is_dir():  # 폴더를 .bak 으로 옮기고 같은 이름의 파일을 만들게 되므로 쓰지 않는다
+        raise IsADirectoryError(errno.EISDIR, "대상이 폴더입니다", str(path))
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".pcmigrate-part")
-    tmp.write_text(text, encoding="utf-8")
-    if path.exists():
-        os.replace(path, _backup_path(path))
-    os.replace(tmp, path)
+    try:
+        tmp.write_text(text, encoding="utf-8")
+        if path.exists():
+            os.replace(path, _backup_path(path))
+        os.replace(tmp, path)
+    except BaseException:  # 쓰기 실패/중단 시 반쪽 임시 파일을 남기지 않는다
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def rule_warning_pairs(rules: list[Rule]) -> list[tuple[str, list[str]]]:

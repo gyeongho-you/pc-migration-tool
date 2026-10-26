@@ -11,6 +11,20 @@ MISMATCH, MISSING_DEST, SIZE_MISMATCH = "mismatch", "missing_dest", "size_mismat
 NET_NOT_FOUND, NET_LOGON, NET_CONFLICT, NET_DENIED = "net_not_found", "net_logon", "net_conflict", "net_denied"
 
 
+class ReadLocked(PermissionError):
+    """파일은 열렸는데 읽는 도중 접근 거부: 다른 프로세스가 바이트 범위를 잠근 경우(Python 은 winerror 없이 EACCES 로 알린다)."""
+
+
+def read_chunk(read, *args):
+    """read(*args) 를 부르되, 열린 뒤의 PermissionError 는 '사용 중'(ReadLocked)으로 바꾼다."""
+    try:
+        return read(*args)
+    except ReadLocked:
+        raise
+    except PermissionError as e:
+        raise ReadLocked(e.errno, e.strerror or "locked", e.filename) from e
+
+
 @dataclass(frozen=True)
 class Failure:
     code: str
@@ -68,6 +82,8 @@ def classify(exc: BaseException, path: str = "") -> Failure:
     """예외를 원인 분류로 바꾼다. 경로가 260자 이상인데 '없음'이면 경로 길이 문제로 본다."""
     if not isinstance(exc, OSError):
         return REASONS[OTHER]
+    if isinstance(exc, ReadLocked):
+        return REASONS[IN_USE]
     win = getattr(exc, "winerror", None)
     code = exc.errno
     shown = path or (exc.filename if isinstance(getattr(exc, "filename", None), str) else "")
