@@ -9,6 +9,7 @@ from .. import state as S
 from .. import texts as T
 from ...api import unreadable_lines
 from .common import (DANGER_BG, DANGER_FG, INFO_BG, INFO_FG, LIST_BG, MUTED_FG, OK_FG, SUB_FONT, WARN_FG, BaseView,
+                     bind_alt,
                      Collapsible, PathField, ResultSummary, ScrollBody, TreeTooltip, autowrap, clear, clean_path, make_text,
                      make_tree, open_location, set_text, sort_tree, table_hint)
 
@@ -75,6 +76,15 @@ class DiscoverView(BaseView):
         cols = [("sel", T.DISC_COLS[0], 56), ("warn", T.DISC_COLS[1], 96), ("prog", T.DISC_COLS[2], 190),
                 ("path", T.DISC_COLS[3], 320), ("size", T.DISC_COLS[4], 80), ("grade", T.DISC_COLS[5], 90)]
         frame, self.tree = make_tree(self, cols, height=6)
+        self.bulk = ttk.Frame(self)
+        self.select_all_btn = ttk.Button(self.bulk, text=T.DISC_SELECT_ALL, command=self._select_all)
+        self.clear_all_btn = ttk.Button(self.bulk, text=T.DISC_CLEAR_ALL, command=self._clear_all)
+        self.select_all_btn.pack(side="left")
+        self.clear_all_btn.pack(side="left", padx=6)
+        self.bulk_msg = ttk.Label(self.bulk, text="", justify="left")
+        self.bulk_msg.pack(side="left", padx=6)
+        for b in (self.select_all_btn, self.clear_all_btn):
+            bind_alt(self.app, b, lambda: self.app.current == self.name)
         self.tree.tag_configure("secret", background=DANGER_BG, foreground=DANGER_FG)
         self.tree.tag_configure("weak", foreground=WARN_FG)
         self.tree.bind("<Button-1>", self._click)
@@ -82,7 +92,7 @@ class DiscoverView(BaseView):
         self.tree.bind("<<TreeviewSelect>>", self._show_detail)
         self.tips = TreeTooltip(self.tree, self._tip_text)
         # 아래쪽 묶음을 먼저 pack(side=bottom) 해 두어야 창이 낮아도 '이해했습니다' 체크와 선택 개수가 잘리지 않는다(표가 남는 높이를 쓴다)
-        self.count = ttk.Label(self, text=T.DISC_SELECTED.format(n=0))
+        self.count = ttk.Label(self, text=T.DISC_SELECTED.format(n=0, m=0))
         self.count.pack(side="bottom", anchor="w", pady=(4, 0))
         self.ack_var = tk.BooleanVar(value=False)
         self.ack = ttk.Checkbutton(self, variable=self.ack_var, command=self._ack_changed, text=T.DISC_ACK)
@@ -94,6 +104,10 @@ class DiscoverView(BaseView):
         autowrap(self.detail)
         self.hint_label = table_hint(self)
         self.hint_label.pack(side="bottom", anchor="w")  # 표 아래: Space 로 선택
+        self.bulk_hint = ttk.Label(self, text=T.DISC_BULK_SCOPE, foreground=MUTED_FG, justify="left")
+        self.bulk_hint.pack(side="bottom", anchor="w", fill="x")
+        autowrap(self.bulk_hint)
+        self.bulk.pack(side="bottom", anchor="w", fill="x", pady=(4, 0))  # 표 바로 아래 줄
         frame.pack(side="top", fill="both", expand=True, pady=6)
         self.rows: dict[str, object] = {}
         self.finish()
@@ -144,8 +158,22 @@ class DiscoverView(BaseView):
             self.banner.configure(text="", bg=self._bg)
         sel = self.c.selected_rows()
         big = sum(1 for r in sel if r.size.endswith("GB"))
-        self.count.configure(text=T.DISC_SELECTED.format(n=len(sel)) + (T.DISC_SELECTED_BIG.format(n=big) if big else ""))
+        self.count.configure(text=T.DISC_SELECTED.format(n=len(sel), m=len(rows)) + (T.DISC_SELECTED_BIG.format(n=big) if big else ""))
         self.ack_var.set(self.c.state.secrets_ack)
+
+    def _visible_keys(self) -> list:
+        return [r.key for r in self.rows.values()]
+
+    def _select_all(self) -> None:
+        n, k = self.c.select_all_candidates(self._visible_keys())
+        msg = T.DISC_BULK_SELECTED.format(n=n)
+        if k:
+            msg += " " + T.DISC_BULK_SKIPPED_SECRET.format(k=k)
+        self.bulk_msg.configure(text=msg)
+
+    def _clear_all(self) -> None:
+        n = self.c.clear_all_candidates(self._visible_keys())
+        self.bulk_msg.configure(text=T.DISC_BULK_CLEARED.format(n=n))
 
     def _toggle(self, iid: str) -> None:
         r = self.rows.get(iid)

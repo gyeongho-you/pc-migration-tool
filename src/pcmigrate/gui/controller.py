@@ -639,6 +639,38 @@ class Controller:
     def selected_rows(self) -> list[CandRow]:
         return [r for r in self.candidate_rows() if r.key in self.state.selected]
 
+    def _target_rows(self, keys) -> list[CandRow]:
+        """일괄 선택/해제 대상: 화면에 보이는 키(keys). None 이면 후보 전체. 목록에 없는 키는 무시한다."""
+        rows = self.candidate_rows()
+        if keys is None:
+            return rows
+        wanted = set(keys)
+        return [r for r in rows if r.key in wanted]
+
+    def select_all_candidates(self, keys=None) -> tuple[int, int]:
+        """보이는 후보를 모두 선택한다. 민감한 정보 가능성 항목은 동의 여부와 상관없이 건너뛴다(직접 골라야 함).
+        반환: (새로 선택된 개수, 건너뛴 민감 항목 개수)."""
+        added = skipped = 0
+        for r in self._target_rows(keys):
+            if r.secret:
+                skipped += 1
+                continue
+            if r.key not in self.state.selected:
+                self.state.selected.add(r.key)
+                added += 1
+        self.emit("selection_changed")
+        return added, skipped
+
+    def clear_all_candidates(self, keys=None) -> int:
+        """보이는 후보의 선택을 모두 해제한다(민감 항목 포함). 반환: 해제된 개수."""
+        n = 0
+        for r in self._target_rows(keys):
+            if r.key in self.state.selected:
+                self.state.selected.discard(r.key)
+                n += 1
+        self.emit("selection_changed")
+        return n
+
     # ------------------------------------------------------------------ 구 PC 3) 해야 할 일 목록
     def start_checklist(self) -> None:
         """항상 '모두 보기' 로 만들고, 화면에서 관련 없는 경고를 숨기거나 보인다(조사를 다시 하지 않는다)."""
