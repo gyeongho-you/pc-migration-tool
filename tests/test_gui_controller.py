@@ -216,7 +216,7 @@ def test_checklist_tabs_and_save_text(env, tmp_path):
     c.start_checklist()
     tabs = c.checklist_tabs()
     assert list(tabs) == list(T.CL_TABS)
-    assert any("규칙에 없는 프로그램 1개" in l for l in tabs[T.CL_TABS[0]])
+    assert any("자동 목록에 없는 프로그램 1개" in l for l in tabs[T.CL_TABS[0]])
     assert any("Rhino 8" in l for l in tabs[T.CL_TABS[1]]) and any("winget import" in l for l in tabs[T.CL_TABS[1]])
     out = tmp_path / "sub" / "c.md"
     c.save_text(str(out), c.checklist_text("md"))
@@ -246,14 +246,13 @@ def test_no_write_before_preview_checkbox_and_final_confirmation(env):
     assert apply_calls(api) == []
     c.start_preview()
     assert api.calls[-1] == ("import", True, False, False)  # 미리보기는 dry_run
-    for step, why in ((None, "확인했습니다"), ("checked", "예")):
+    for why, act in (("확인했습니다", c.set_preview_checked), ("이해했습니다", c.set_bak_understood), ("예", None)):
         ok, reason = c.can_apply()
-        assert not ok and why in reason
+        assert not ok and why in reason  # 미리보기 확인 -> 백업 파일 이해 -> 확인 창 '예' 순서로 하나씩 요구한다
         with pytest.raises(GuardError):
             c.start_apply()
-        if step == "checked":
-            break
-        c.set_preview_checked(True)
+        if act:
+            act(True)
     assert apply_calls(api) == []
     c.confirm_final(True)
     assert c.can_apply() == (True, "")
@@ -273,8 +272,15 @@ def test_final_confirmation_requires_checkbox_and_unchecking_revokes(env):
     c.confirm_final(True)  # 체크박스 없이 대화상자만 눌러도 무효
     assert c.state.final_confirmed is False
     c.set_preview_checked(True)
+    c.confirm_final(True)  # 두 번째 확인(백업 파일 이해) 없이는 확정도 무효
+    assert c.state.final_confirmed is False
+    c.set_bak_understood(True)
     c.confirm_final(True)
     assert c.can_apply()[0]
+    c.set_bak_understood(False)  # 두 번째 체크를 풀어도 확정이 취소된다
+    assert c.can_apply()[0] is False and c.state.final_confirmed is False
+    c.set_bak_understood(True)
+    c.confirm_final(True)
     c.set_preview_checked(False)  # 체크를 풀면 확정도 취소
     assert c.can_apply()[0] is False and c.state.final_confirmed is False
 
@@ -284,12 +290,14 @@ def test_changing_package_invalidates_preview_and_blocked_package_cannot_apply(e
     c.set_package("a.zip")
     c.start_preview()
     c.set_preview_checked(True)
+    c.set_bak_understood(True)
     c.confirm_final(True)
     c.set_package("b.zip")
     assert c.can_apply()[0] is False and c.state.preview is None and not c.state.preview_checked
     api.preview = real_api.ImportResult(plan([item()], problems=["해시 불일치"]), "blocked", 0)
     c.start_preview()
     c.set_preview_checked(True)
+    c.set_bak_understood(True)
     c.confirm_final(True)
     ok, why = c.can_apply()
     assert not ok and why == T.G_PACKAGE_BLOCKED
@@ -307,6 +315,7 @@ def test_extra_items_need_separate_consent_and_allow_extra_follows_it(env):
     rows = c.preview_rows()
     assert [r["extra"] for r in rows] == [True, False] and rows[1]["status"].startswith("덮어씀")
     c.set_preview_checked(True)
+    c.set_bak_understood(True)
     c.confirm_final(True)
     ok, why = c.can_apply()
     assert not ok and "별도 동의" in why
@@ -435,12 +444,12 @@ def test_transfer_cancel_and_error_events(tmp_path):
 
 def test_friendly_errors_have_what_how_and_traceback_only_in_detail():
     e1 = friendly_error(real_api.ApiError("규칙 오류: x", lines=["a"]))
-    assert e1.what == "a\n규칙 오류: x" and e1.how == T.ERR_API_RULES and e1.detail == ""
+    assert e1.what == "a\n자동 목록 오류: x" and e1.how == T.ERR_API_RULES and e1.detail == ""
     e2 = friendly_error(FileNotFoundError(3, "경로 없음", "Z:\\a"), "TB-TEXT")
     assert e2.what == T.ERR_PATH_MISSING[0].format(path=": Z:\\a") and e2.how == T.ERR_PATH_MISSING[1]
     assert e2.detail == "TB-TEXT" and "TB-TEXT" not in e2.message
     e3 = friendly_error(KeyError("boom"), "Traceback (most recent call last)...")
-    assert e3.title == T.ERR_TITLES["unexpected"] and "KeyError" in e3.what and "Traceback" not in e3.message
+    assert e3.title == T.ERR_TITLES["unexpected"] and "KeyError" not in e3.what and "KeyError" in e3.detail and "Traceback" not in e3.message  # 영문 예외 이름은 상세 보기에만
     assert e3.how == T.ERR_UNEXPECTED[1] and "Traceback" in e3.detail
     g = friendly_error(GuardError("막음"))
     assert g.what == "막음" and g.title == T.ERR_TITLES["guard"]
@@ -481,7 +490,7 @@ def test_unexpected_exception_in_task_becomes_error_event(env):
     api.run_scan = boom
     c.start_scan()
     err = [p for k, p in ev if k == "error"][0]
-    assert "RuntimeError" in err.message and "Traceback" in err.detail and not c.state.busy
+    assert "RuntimeError" not in err.message and "RuntimeError" in err.detail and "Traceback" in err.detail and not c.state.busy  # 영문 예외 이름은 상세 보기 안에만
 
 
 def test_log_contains_events_but_no_program_names_or_paths(tmp_path):
@@ -576,6 +585,7 @@ def test_reasons_for_disabled_buttons(env, tmp_path):
     c.start_preview()
     assert c.apply_reason() == T.G_NEED_CHECK_PREVIEW
     c.set_preview_checked(True)
+    c.set_bak_understood(True)
     assert c.apply_reason() == ""
 
 

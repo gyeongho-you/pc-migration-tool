@@ -13,6 +13,7 @@ import errno
 import inspect
 import logging
 import os
+import re
 import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -34,6 +35,36 @@ from . import state as S
 from . import texts as T
 from .runner import Runner
 from .status import StatusModel
+
+
+def _home_aliases() -> list[tuple[str, str]]:
+    """(실제 경로, 대신 보여 줄 환경변수 표시). 긴 경로부터 바꿔야 하므로 길이 순으로 정렬한다."""
+    pairs: list[tuple[str, str]] = []
+    for var in ("LOCALAPPDATA", "APPDATA", "TEMP", "TMP", "USERPROFILE"):
+        val = os.environ.get(var)
+        if val and len(val) > 3:
+            pairs.append((val, f"%{var}%"))
+    home = os.path.expanduser("~")
+    if home and home != "~" and len(home) > 3:
+        pairs.append((home, "%USERPROFILE%"))
+    return sorted(set(pairs), key=lambda t: -len(t[0]))
+
+
+def anonymize_paths(text: str) -> str:
+    """오류 보고서에 들어가는 개인 경로(내 사용자 폴더 등)를 %USERPROFILE% 같은 표시로 바꾼다(대소문자 무시, 슬래시 방향 무관)."""
+    for real, alias in _home_aliases():
+        for variant in {real, real.replace("\\", "/"), real.replace("/", "\\")}:
+            if variant:
+                text = re.sub(re.escape(variant), lambda _m, a=alias: a, text, flags=re.IGNORECASE)
+    return text
+
+
+@dataclass(frozen=True)
+class DriveEntry:
+    """드라이브 선택 콤보에 보여 줄 한 줄(읽기 전용 조회 결과)."""
+    root: str  # 예: E:\
+    kind: str  # removable | fixed | network | cdrom | ramdisk | unknown
+    free_text: str = ""
 
 
 class GuardError(Exception):
@@ -111,7 +142,8 @@ def friendly_error(exc: BaseException, tb: str = "") -> FriendlyError:
     if isinstance(exc, GuardError):
         return FriendlyError(T.ERR_TITLES["guard"], str(exc), "", tb)
     what, how = T.ERR_UNEXPECTED
-    return FriendlyError(T.ERR_TITLES["unexpected"], what.format(name=type(exc).__name__, msg=exc), how, tb)
+    head = f"{type(exc).__name__}: {exc}"  # 영문 예외 이름은 본문이 아니라 '상세 보기' 안에만 둔다
+    return FriendlyError(T.ERR_TITLES["unexpected"], what, how, f"{head}\n{tb}" if tb else head)
 
 
 def _supported(fn: Callable, **kw) -> dict:
@@ -211,8 +243,64 @@ class Controller:
         self._dest_cache: dict[str, Any] = {}
         self.roadmap_marks: set[str] = set()  # 전체 이전 순서에서 체크한 항목(창을 닫았다 열어도 유지)
         self._in_listener_error = False
+        self.drive_lister: Callable[[], list] | None = None  # 시험에서 가짜 드라이브 목록을 넣는 자리
         if hasattr(self.runner, "on_callback_error"):
             self.runner.on_callback_error = self._callback_failed
+
+    # ------------------------------------------------------------------ 경로 편의(읽기 전용 조회)
+    def list_drives(self) -> list[DriveEntry]:
+        """연결된 드라이브 목록(외장/이동식 먼저). Windows 가 아니거나 조회에 실패하면 빈 목록."""
+        if self.drive_lister is not None:
+            return list(self.drive_lister())
+        if os.name != "nt":
+            return []
+        out: list[DriveEntry] = []
+        try:
+            import ctypes
+            from .. import fs
+            mask = ctypes.windll.kernel32.GetLogicalDrives()
+            for i in range(26):
+                if mask & (1 << i):
+                    root = f"{chr(65 + i)}:\\"
+                    kind = fs.drive_kind(root)
+                    if kind == "cdrom":
+                        continue
+                    free = fs.free_space(root) if kind != "network" else None
+                    out.append(DriveEntry(root, kind, fmt_bytes(free) if free is not None else ""))
+        except (AttributeError, OSError):
+            return out
+        out.sort(key=lambda d: (d.kind != "removable", d.root))
+        return out
+
+    def default_desktop(self) -> str:
+        """바탕화면 폴더(OneDrive 로 옮겨진 경우 포함). 찾지 못하면 사용자 폴더 아래 Desktop."""
+        home = os.path.expanduser("~")
+        cands = []
+        for var in ("OneDriveCommercial", "OneDriveConsumer", "OneDrive"):
+            base = os.environ.get(var)
+            if base:
+                cands.append(os.path.join(base, "Desktop"))
+        cands.append(os.path.join(home, "Desktop"))
+        for c in cands:
+            if os.path.isdir(c):
+                return c
+        return cands[-1]
+
+    def default_export_path(self) -> str:
+        """구 PC 의 설정 묶음 파일 저장 기본 위치: 바탕화면의 pcmigrate-settings.zip."""
+        return os.path.join(self.default_desktop(), T.EXP_DEFAULT_NAME)
+
+    def find_manifest(self, *folders: str) -> str:
+        """확인용 목록 파일을 주어진 폴더(와 그 바로 위 폴더)에서 찾는다. 없으면 빈 문자열(읽기만 한다)."""
+        seen: list[str] = []
+        for f in folders:
+            if f and os.path.isdir(f):
+                seen += [f, os.path.dirname(os.path.normpath(f))]
+        for folder in dict.fromkeys(seen):
+            cand = os.path.join(folder, MANIFEST_NAME)
+            if os.path.isfile(cand):
+                return cand
+        return ""
 
     # ------------------------------------------------------------------ 이벤트/실행
     def emit(self, kind: str, payload: Any = None) -> None:
@@ -252,7 +340,8 @@ class Controller:
         except Exception:  # noqa: BLE001 - 로그 실패가 오류 표시를 막으면 안 된다
             path = None
         fe.log_path = str(path) if path else ""
-        fe.report = errorlog.format_block(exc, where, tb or None)
+        fe.report = anonymize_paths(errorlog.format_block(exc, where, tb or None))
+        fe.detail = anonymize_paths(fe.detail)
         self.last_error = fe
         return fe
 
@@ -566,7 +655,7 @@ class Controller:
 
     def _reset_confirms(self) -> None:
         s = self.state
-        s.preview_checked = s.final_confirmed = s.extra_consent = False
+        s.preview_checked = s.bak_understood = s.final_confirmed = s.extra_consent = False
 
     def start_preview(self) -> None:
         if not self.state.package:
@@ -609,13 +698,20 @@ class Controller:
             self.state.final_confirmed = False
         self.emit("confirm_changed")
 
+    def set_bak_understood(self, on: bool) -> None:
+        """'덮어쓰는 파일은 백업 파일(.bak)로 남는다는 것을 이해했습니다'(미리보기 확인과 따로 받는 두 번째 확인)."""
+        self.state.bak_understood = bool(on)
+        if not on:
+            self.state.final_confirmed = False
+        self.emit("confirm_changed")
+
     def set_extra_consent(self, on: bool) -> None:
         self.state.extra_consent = bool(on)
         self.emit("confirm_changed")
 
     def confirm_final(self, yes: bool) -> None:
         """확인 대화상자에서 '예'를 눌렀을 때만 True 로 호출한다."""
-        self.state.final_confirmed = bool(yes) and self.state.preview_checked
+        self.state.final_confirmed = bool(yes) and self.state.preview_checked and self.state.bak_understood
         self.emit("confirm_changed")
 
     def can_apply(self) -> tuple[bool, str]:
@@ -626,6 +722,8 @@ class Controller:
             return False, T.G_PACKAGE_BLOCKED
         if not s.preview_checked:
             return False, T.G_NEED_CHECK_PREVIEW
+        if not s.bak_understood:
+            return False, T.G_NEED_BAK_UNDERSTAND
         if p.n_extra and not s.extra_consent:
             return False, T.G_NEED_EXTRA_CONSENT
         if not s.final_confirmed:
@@ -665,6 +763,11 @@ class Controller:
                 "backups": [x.backup for x in rep.results if x.backup],
                 "warnings": [(w.get("name", ""), i) for w in r.plan.warnings for i in w.get("items", [])]}
 
+    def backup_folder(self) -> str:
+        """복원 때 만든 백업 파일(.bak)이 있는 폴더(여러 곳이면 첫 번째). 없으면 빈 문자열."""
+        backups = self.import_summary().get("backups", [])
+        return os.path.dirname(backups[0]) if backups else ""
+
     def import_counts(self) -> tuple[int, int, int]:
         """(성공, 건너뜀, 실패)"""
         c = self.import_summary().get("counts", {})
@@ -698,7 +801,7 @@ class Controller:
         return self.state.transfer_mode, self.state.transfer_stage
 
     def is_verify_flow(self) -> bool:
-        """랜선 2단계: 복사 없이 새 PC 의 복사본을 목록 파일과 비교만 한다."""
+        """랜선 2단계: 복사 없이 새 PC의 복사본을 목록 파일과 비교만 한다."""
         return self.flow() == (T.MODE_NETWORK, 2)
 
     def flow_labels(self) -> tuple[str, str]:
@@ -713,11 +816,28 @@ class Controller:
     def flow_steps(self) -> tuple[str, ...]:
         return T.TR_FLOW_STEPS.get(self.flow(), ())
 
+    def transfer_step(self) -> tuple[tuple[str, ...], int]:
+        """단계 표시줄용 (단계 이름들, 지금 단계 1부터). 방식 → 폴더 → 미리보기 → 복사 → 결과(랜선 2단계는 방식 → 목록·폴더 → 검사 → 결과)."""
+        s, rep = self.state, self.state.transfer_report
+        done = rep is not None and not s.transfer_was_dry_run
+        if self.is_verify_flow():
+            if done:
+                return T.TR_VERIFY_STEP_NAMES, 4
+            ok = self.check_verify_inputs(s.verify_manifest, s.verify_target).ok
+            return T.TR_VERIFY_STEP_NAMES, 3 if (s.busy or ok) else 2
+        if done:
+            return T.TR_STEP_NAMES, 5
+        if s.busy:
+            return T.TR_STEP_NAMES, 3 if s.busy_label == T.TASK_TRANSFER_PREVIEW else 4
+        if s.transfer_preview_key == (s.transfer_src, s.transfer_dst) and not s.transfer_blocked:
+            return T.TR_STEP_NAMES, 4
+        return T.TR_STEP_NAMES, 3 if self.check_transfer_paths(s.transfer_src, s.transfer_dst).ok else 2
+
     def flow_title(self) -> str:
         return T.TR_FLOW_TITLES.get(self.flow(), T.TR_HEADING)
 
     def manifest_out_path(self) -> str:
-        """1단계(외장/랜선)에서 확인용 목록 파일을 저장할 위치: 대상(외장 드라이브 또는 새 PC 의 공유 폴더) 안."""
+        """1단계(외장/랜선)에서 확인용 목록 파일을 저장할 위치: 대상(외장 드라이브 또는 새 PC의 공유 폴더) 안."""
         s = self.state
         if s.transfer_mode in (T.MODE_EXTERNAL, T.MODE_NETWORK) and s.transfer_stage == 1 and s.transfer_dst:
             return os.path.join(s.transfer_dst, MANIFEST_NAME)

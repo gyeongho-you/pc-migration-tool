@@ -1,4 +1,4 @@
-"""구 PC 흐름: 조사 -> 규칙에 없는 프로그램 확인 -> 해야 할 일 목록 -> 설정 패키지 만들기."""
+"""구 PC 흐름: 조사 -> 자동 목록에 없는 프로그램 확인 -> 해야 할 일 목록 -> 설정 묶음 파일 만들기."""
 from __future__ import annotations
 
 import os
@@ -8,8 +8,9 @@ from tkinter import filedialog, messagebox, ttk
 from .. import state as S
 from .. import texts as T
 from ...api import unreadable_lines
-from .common import (INFO_BG, MUTED_FG, OK_FG, SECRET_BG, SECRET_FG, WARN_FG, BaseView, ResultSummary, TreeTooltip, add_tooltip,
-                     autowrap, clear, make_text, make_tree, open_location, set_text, sort_tree)
+from .common import (DANGER_BG, DANGER_FG, INFO_BG, INFO_FG, LIST_BG, MUTED_FG, OK_FG, SUB_FONT, WARN_FG, BaseView,
+                     Collapsible, PathField, ResultSummary, ScrollBody, TreeTooltip, autowrap, clear, clean_path, make_text,
+                     make_tree, open_location, set_text, sort_tree, table_hint)
 
 
 class ScanView(BaseView):
@@ -18,27 +19,27 @@ class ScanView(BaseView):
     def __init__(self, app, controller) -> None:
         super().__init__(app, controller)
         self.navbar(back=lambda: self.c.go(S.START), next_=lambda: self.c.go(S.OLD_DISCOVER))
+        self.btn = self.add_action(T.BTN_SCAN, lambda: self.guarded(self.c.start_scan), padx=10)  # 하단 고정 막대(스크롤 밖)
+        self.primary = self.btn
         self.header(T.SCAN_HEADING, T.SCAN_SUB)
         self.add_status_card({T.TASK_SCAN})
-        top = ttk.Frame(self)
-        top.pack(fill="x")
-        self.btn = ttk.Button(top, text=T.BTN_SCAN, command=lambda: self.guarded(self.c.start_scan))
-        self.btn.pack(side="left")
-        self.primary = self.btn
-        self.summary = ttk.Label(top, text=T.SCAN_IDLE)
-        self.summary.pack(side="left", padx=12)
+        self.summary = ttk.Label(self, text=T.SCAN_IDLE, font=SUB_FONT)
+        self.summary.pack(anchor="w", pady=(0, 4))
         ttk.Label(self, text=T.SCAN_TABLE_TITLE).pack(anchor="w", pady=(10, 2))
         frame, self.tree = make_tree(self, [("rule", T.COL_PROGRAM_RULE, 260), ("evidence", T.COL_EVIDENCE, 560)], height=12)
         frame.pack(fill="both", expand=True)
         self.tips = TreeTooltip(self.tree, lambda iid, col: self.tree.set(iid, self.tree["columns"][col]))
         self.set_next_reason(T.WHY_SCAN_FIRST)
         self.next_btn.state(["disabled"])
+        self.next_btn.emphasize(False)
         self.finish()
 
     def on_show(self) -> None:
         done = bool(self.c.state.scan)
         self.next_btn.state(["!disabled"] if done else ["disabled"])
         self.set_next_reason("" if done else T.WHY_SCAN_FIRST)
+        self.btn.emphasize(not done)
+        self.next_btn.emphasize(done)
         self.btn.focus_set()
 
     def on_event(self, kind, payload) -> None:
@@ -52,6 +53,8 @@ class ScanView(BaseView):
         self.summary.configure(text=T.SCAN_RESULT.format(programs=r.program_count, rules=len(r.matched), more=extra))
         self.next_btn.state(["!disabled"])
         self.set_next_reason("")
+        self.btn.emphasize(False)
+        self.next_btn.emphasize(True)
 
 
 class DiscoverView(BaseView):
@@ -60,51 +63,54 @@ class DiscoverView(BaseView):
     def __init__(self, app, controller) -> None:
         super().__init__(app, controller)
         self.navbar(back=lambda: self.c.go(S.OLD_SCAN), next_=lambda: self.c.go(S.OLD_CHECKLIST))
+        self.start_btn = self.add_action(T.BTN_DISCOVER, lambda: self.guarded(self.c.start_discover), padx=10)
+        self.primary = self.start_btn
         self._bg = ttk.Style().lookup("TFrame", "background") or "#f0f0f0"
         self.header(T.DISC_HEADING, T.DISC_SUB)
         self.add_status_card({T.TASK_DISCOVER})
-        top = ttk.Frame(self)
-        top.pack(fill="x")
-        self.start_btn = ttk.Button(top, text=T.BTN_DISCOVER, command=lambda: self.guarded(self.c.start_discover))
-        self.start_btn.pack(side="left")
-        self.primary = self.start_btn
-        self.info = ttk.Label(top, text=T.DISC_HINT)
-        self.info.pack(side="left", padx=12)
-        autowrap(self.info, 160)
+        self.info = ttk.Label(self, text=T.DISC_HINT, justify="left")
+        self.info.pack(anchor="w", fill="x")
+        autowrap(self.info)
 
         cols = [("sel", T.DISC_COLS[0], 56), ("warn", T.DISC_COLS[1], 96), ("prog", T.DISC_COLS[2], 190),
                 ("path", T.DISC_COLS[3], 320), ("size", T.DISC_COLS[4], 80), ("grade", T.DISC_COLS[5], 90)]
-        frame, self.tree = make_tree(self, cols, height=11)
-        frame.pack(fill="both", expand=True, pady=6)
-        self.tree.tag_configure("secret", background=SECRET_BG, foreground=SECRET_FG)
+        frame, self.tree = make_tree(self, cols, height=6)
+        self.tree.tag_configure("secret", background=DANGER_BG, foreground=DANGER_FG)
         self.tree.tag_configure("weak", foreground=WARN_FG)
         self.tree.bind("<Button-1>", self._click)
         self.tree.bind("<space>", self._key_toggle)
         self.tree.bind("<<TreeviewSelect>>", self._show_detail)
         self.tips = TreeTooltip(self.tree, self._tip_text)
-
-        self.detail = ttk.Label(self, text="", justify="left")
-        self.detail.pack(anchor="w", fill="x")
-        autowrap(self.detail)
-        self.banner = tk.Label(self, text="", anchor="w", justify="left")
-        self.banner.pack(fill="x", pady=4)
-        autowrap(self.banner, 40)
+        # 아래쪽 묶음을 먼저 pack(side=bottom) 해 두어야 창이 낮아도 '이해했습니다' 체크와 선택 개수가 잘리지 않는다(표가 남는 높이를 쓴다)
+        self.count = ttk.Label(self, text=T.DISC_SELECTED.format(n=0))
+        self.count.pack(side="bottom", anchor="w", pady=(4, 0))
         self.ack_var = tk.BooleanVar(value=False)
         self.ack = ttk.Checkbutton(self, variable=self.ack_var, command=self._ack_changed, text=T.DISC_ACK)
-        self.ack.pack(anchor="w")
-        self.count = ttk.Label(self, text=T.DISC_SELECTED.format(n=0))
-        self.count.pack(anchor="w", pady=(4, 0))
+        self.ack.pack(side="bottom", anchor="w")
+        self.banner = tk.Label(self, text="", anchor="w", justify="left")
+        self.banner.pack(side="bottom", fill="x", pady=4)
+        autowrap(self.banner, 40)
+        self.detail = ttk.Label(self, text="", justify="left")  # 줄을 고르면 그때만 보인다
+        autowrap(self.detail)
+        self.hint_label = table_hint(self)
+        self.hint_label.pack(side="bottom", anchor="w")  # 표 아래: Space 로 선택
+        frame.pack(side="top", fill="both", expand=True, pady=6)
         self.rows: dict[str, object] = {}
         self.finish()
 
     def on_show(self) -> None:
         self._refresh()
+        done = bool(self.c.state.discovery)
+        self.start_btn.emphasize(not done)
+        self.next_btn.emphasize(done)
         self.start_btn.focus_set()
 
     def on_event(self, kind, payload) -> None:
         if kind == "discover_done":
             d = payload
             self.info.configure(text=T.DISC_SUMMARY.format(n=d.program_count, m=d.candidate_count, k=d.secret_count))
+            self.start_btn.emphasize(False)
+            self.next_btn.emphasize(True)
             self.ack_var.set(False)
             self._refresh()
         elif kind == "selection_changed":
@@ -133,9 +139,9 @@ class DiscoverView(BaseView):
             sort_tree(self.tree, col, desc)
         n_secret = sum(1 for r in rows if r.secret)
         if n_secret:
-            self.banner.configure(text=T.DISC_BANNER.format(icon=T.ICON_WARN, n=n_secret), bg=SECRET_BG, fg=SECRET_FG)
+            self.banner.configure(text=T.DISC_BANNER.format(icon=T.ICON_WARN, n=n_secret), bg=DANGER_BG, fg=DANGER_FG)
         else:
-            self.banner.configure(text="", bg=self._bg, fg="black")
+            self.banner.configure(text="", bg=self._bg)
         sel = self.c.selected_rows()
         big = sum(1 for r in sel if r.size.endswith("GB"))
         self.count.configure(text=T.DISC_SELECTED.format(n=len(sel)) + (T.DISC_SELECTED_BIG.format(n=big) if big else ""))
@@ -162,6 +168,7 @@ class DiscoverView(BaseView):
         if not sel or sel[0] not in self.rows:
             return
         r = self.rows[sel[0]]
+        self.detail.pack(side="bottom", anchor="w", fill="x", after=self.banner)
         text = T.DISC_DETAIL.format(kind=r.kind, path=r.path, grade=r.grade, reason=f" — {r.reason}" if r.reason else "")
         if r.secret:
             text += T.DISC_DETAIL_SECRET.format(names=", ".join(r.secret))
@@ -181,20 +188,20 @@ class CheckList(ttk.Frame):
     def __init__(self, parent: tk.Misc, on_toggle) -> None:
         super().__init__(parent)
         self.on_toggle = on_toggle
-        self.canvas = tk.Canvas(self, highlightthickness=0, background="#ffffff")
+        self.canvas = tk.Canvas(self, highlightthickness=0, background=LIST_BG)
         ys = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
         self.canvas.configure(yscrollcommand=ys.set)
         self.canvas.grid(row=0, column=0, sticky="nsew")
         ys.grid(row=0, column=1, sticky="ns")
         self.rowconfigure(0, weight=1)
         self.columnconfigure(0, weight=1)
-        self.inner = tk.Frame(self.canvas, background="#ffffff")
+        self.inner = tk.Frame(self.canvas, background=LIST_BG)
         self.win = self.canvas.create_window((0, 0), window=self.inner, anchor="nw")
         self.inner.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
         self.canvas.bind("<Configure>", self._resize)
         self.widgets: list[tuple[tk.Widget, str]] = []
         self.vars: list[tk.BooleanVar] = []
-        self.canvas.bind("<MouseWheel>", lambda e: self.canvas.yview_scroll(-1 * (e.delta // 120), "units"))
+        self.canvas.pc_wheel = lambda delta: self.canvas.yview_scroll(-1 * (delta // 120), "units")  # 앱 전체 휠 처리기가 호출
 
     def _resize(self, e) -> None:
         self.canvas.itemconfigure(self.win, width=e.width)
@@ -211,12 +218,12 @@ class CheckList(ttk.Frame):
                 var = tk.BooleanVar(value=checked)
                 # ttk.Checkbutton 은 줄바꿈(wraplength)을 지원하지 않아 tk.Checkbutton 을 쓴다(포커스 테두리 표시)
                 w = tk.Checkbutton(self.inner, text=text, variable=var, command=lambda t=text: self.on_toggle(t),
-                                   anchor="w", justify="left", background="#ffffff", activebackground="#eef3fb",
-                                   highlightthickness=2, highlightbackground="#ffffff", highlightcolor="#0b5394",
+                                   anchor="w", justify="left", background=LIST_BG, activebackground=INFO_BG,
+                                   highlightthickness=2, highlightbackground=LIST_BG, highlightcolor=INFO_FG,
                                    font="TkDefaultFont")
                 self.vars.append(var)
             else:
-                w = tk.Label(self.inner, text=text, justify="left", anchor="w", foreground=MUTED_FG, background="#ffffff",
+                w = tk.Label(self.inner, text=text, justify="left", anchor="w", foreground=MUTED_FG, background=LIST_BG,
                              font="TkDefaultFont")
             w.configure(wraplength=width)
             w.pack(anchor="w", fill="x", pady=2, padx=4)
@@ -230,18 +237,17 @@ class ChecklistView(BaseView):
     def __init__(self, app, controller) -> None:
         super().__init__(app, controller)
         self.navbar(back=lambda: self.c.go(S.OLD_DISCOVER), next_=lambda: self.c.go(S.OLD_EXPORT))
+        self.make_btn = self.add_action(T.BTN_CL_MAKE, lambda: self.guarded(self.c.start_checklist), padx=10)
+        self.primary = self.make_btn
         self.header(T.CL_HEADING, T.CL_SUB)
         self.add_status_card({T.TASK_CHECKLIST})
         top = ttk.Frame(self)
         top.pack(fill="x")
-        self.make_btn = ttk.Button(top, text=T.BTN_CL_MAKE, command=lambda: self.guarded(self.c.start_checklist))
-        self.make_btn.pack(side="left")
-        self.primary = self.make_btn
         self.save_btn = ttk.Button(top, text=T.BTN_CL_SAVE, command=self._save)
-        self.save_btn.pack(side="left", padx=8)
+        self.save_btn.pack(side="left")
         self.save_btn.state(["disabled"])
         self.reason = ttk.Label(top, text=T.WHY_CHECKLIST_FIRST, foreground=WARN_FG)
-        self.reason.pack(side="left", padx=4)
+        self.reason.pack(side="left", padx=10)
         ttk.Label(top, text=T.CL_PRIVACY, foreground=WARN_FG).pack(side="right")
 
         opts = ttk.Frame(self)
@@ -268,10 +274,14 @@ class ChecklistView(BaseView):
         self.finish()
 
     def on_show(self) -> None:
+        self.make_btn.emphasize(self.c.state.checklist is None)
+        self.next_btn.emphasize(self.c.state.checklist is not None)
         self.make_btn.focus_set()
 
     def on_event(self, kind, payload) -> None:
         if kind == "checklist_done":
+            self.make_btn.emphasize(False)
+            self.next_btn.emphasize(True)
             self.save_btn.state(["!disabled"])
             self.reason.configure(text="")
             self._rebuild()
@@ -316,54 +326,70 @@ class ExportView(BaseView):
 
     def __init__(self, app, controller) -> None:
         super().__init__(app, controller)
-        self.open_btn = ttk.Button(self, text=T.BTN_OPEN_LOCATION, command=self._open)
-        self.open_btn.pack(side="bottom", anchor="e")
-        self.open_btn.state(["disabled"])
         self.navbar(back=lambda: self.c.go(S.OLD_CHECKLIST))
+        self.go_btn = self.add_action(T.BTN_EXPORT, self._export)  # 하단 고정 막대의 주 버튼(끝나면 '완료')
+        self.primary = self.go_btn
+        self.reason = ttk.Label(self.bar_right, text="", foreground=WARN_FG, justify="right")
+        self.reason.pack(side="right", padx=10)
         self.header(T.EXP_HEADING, T.EXP_SUB)
         self.add_status_card({T.TASK_EXPORT})
-        row = ttk.Frame(self)
-        row.pack(fill="x")
-        ttk.Label(row, text=T.EXP_PATH_LABEL).pack(side="left")
+        scroll = ScrollBody(self)
+        scroll.pack(fill="both", expand=True)
+        self.scroll = scroll
+        body = ttk.Frame(scroll.inner, padding=(0, 0, 8, 0))
+        body.pack(fill="both", expand=True)
         self.path_var = tk.StringVar()
-        entry = ttk.Entry(row, textvariable=self.path_var)
-        entry.pack(side="left", fill="x", expand=True, padx=6)
-        ttk.Button(row, text=T.BTN_BROWSE, command=self._browse).pack(side="left")
-        self.plan = ttk.Label(self, text="", justify="left")
+        self.path_field = PathField(body, self.path_var, self._browse, label=T.EXP_PATH_LABEL, hint=T.EXP_PATH_HINT,
+                                    drives=self.c.list_drives,
+                                    on_drive=lambda root: self._set_path(os.path.join(root, T.EXP_DEFAULT_NAME)),
+                                    extra=[(T.BTN_EXP_DESKTOP, lambda: self._set_path(self.c.default_export_path()))])
+        self.path_field.pack(fill="x")
+        entry = self.path_field.entry
+        self.plan = ttk.Label(body, text="", justify="left")
         self.plan.pack(anchor="w", fill="x", pady=8)
         autowrap(self.plan)
-        self.resume_box = ttk.Frame(self)  # 이어받을 수 있을 때만 보인다
+        self.resume_box = ttk.Frame(body)  # 이어받을 수 있을 때만 보인다
         self.resume_lbl = ttk.Label(self.resume_box, text="", justify="left", foreground=OK_FG)
         self.resume_lbl.pack(anchor="w", fill="x")
         autowrap(self.resume_lbl)
         self.restart_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(self.resume_box, text=T.EXP_RESTART_CHECK, variable=self.restart_var).pack(anchor="w")
         self._resume_shown = False
-        entry.bind("<FocusOut>", lambda e: self._update_resume())
-        entry.bind("<Return>", lambda e: self._update_resume())
-        act = ttk.Frame(self)
-        act.pack(fill="x")
-        self.go_btn = ttk.Button(act, text=T.BTN_EXPORT, command=self._export)
-        self.go_btn.pack(side="left")
-        self.primary = self.go_btn
-        self.reason = ttk.Label(act, text="", foreground=WARN_FG)
-        self.reason.pack(side="left", padx=8)
-        lic = ttk.Label(self, text=T.LICENSE_BANNER, foreground=WARN_FG, justify="left")
-        lic.pack(anchor="w", fill="x", pady=(8, 0))
-        autowrap(lic)
-        self.summary = ResultSummary(self)
+        entry.bind("<FocusOut>", lambda e: self._update_resume(), add="+")
+        entry.bind("<Return>", lambda e: self._update_resume(), add="+")
+        self.summary = ResultSummary(body)
         self.summary.pack(fill="x", pady=6)
-        frame, self.result = make_text(self, height=9)
-        frame.pack(fill="both", expand=True, pady=4)
+        # 끝난 뒤: 큰 '다음에 할 일' 상자와 결과 위치 열기
+        self.next_box = tk.Frame(body, bg=INFO_BG, highlightbackground=INFO_FG, highlightthickness=1, padx=12, pady=8)
+        tk.Label(self.next_box, text=T.NEXT_TITLE, bg=INFO_BG, fg=INFO_FG, font=SUB_FONT, anchor="w").pack(anchor="w")
+        self.next_lines: list[tk.Label] = []
+        for line in T.EXP_NEXT_STEPS:
+            lbl = tk.Label(self.next_box, text=line, bg=INFO_BG, justify="left", anchor="w")
+            lbl.pack(anchor="w", fill="x", pady=2)
+            autowrap(lbl, 30)
+            self.next_lines.append(lbl)
+        self.open_btn = ttk.Button(self.next_box, text=T.BTN_OPEN_RESULT, command=self._open)
+        self.open_btn.pack(anchor="w", pady=(6, 0))
+        self.open_btn.state(["disabled"])
+        self.more = Collapsible(body)  # 자세한 결과(포함된 자동 목록, 읽지 못한 파일, 직접 해야 할 일)
+        frame, self.result = make_text(self.more.body, height=9)
+        frame.pack(fill="both", expand=True)
+        self.lic_link = self.license_link(body)
+        self.lic_link.pack(anchor="w", pady=(6, 0))
+        self._done = False
         self.path_var.trace_add("write", lambda *a: self._update_reason())
         self.finish()
 
+    def _set_path(self, path: str) -> None:
+        self.path_var.set(path)
+        self._update_resume()
+
     def _update_resume(self) -> None:
-        hint = self.c.export_resume_hint(self.path_var.get())
+        hint = self.c.export_resume_hint(clean_path(self.path_var.get()))
         if hint:
             self.resume_lbl.configure(text=hint)
             if not self._resume_shown:
-                self.resume_box.pack(anchor="w", fill="x", before=self.go_btn.master)
+                self.resume_box.pack(anchor="w", fill="x", after=self.plan)
                 self._resume_shown = True
         elif self._resume_shown:
             self.resume_box.pack_forget()
@@ -371,8 +397,10 @@ class ExportView(BaseView):
             self.restart_var.set(False)
 
     def _update_reason(self) -> None:
-        why = self.c.export_reason(self.path_var.get())
+        why = self.c.export_reason(clean_path(self.path_var.get()))
         self.reason.configure(text=why)
+        if self._done:
+            return
         self.go_btn.state(["disabled"] if why == T.WHY_NEED_OUTPUT else ["!disabled"])
 
     def on_show(self) -> None:
@@ -385,19 +413,33 @@ class ExportView(BaseView):
         if not sel:
             text += T.EXP_PLAN_NONE
         self.plan.configure(text=text)
+        self._reset_done()
+        self.scroll.scroll_to_top()
+        if not self.path_var.get().strip():
+            self.path_var.set(self.c.default_export_path())  # 기본: 바탕화면의 pcmigrate-settings.zip
         self._update_reason()
         self._update_resume()
         self.go_btn.focus_set()
 
+    def _reset_done(self) -> None:
+        """화면에 다시 들어오면 '완료' 상태를 풀고 주 버튼을 '패키지 만들기' 로 되돌린다."""
+        if self._done:
+            self._done = False
+            self.go_btn.configure(text=T.BTN_EXPORT, command=self._export)
+            self.next_box.pack_forget()
+            self.more.pack_forget()
+            self.summary.clear()
+
     def _browse(self) -> None:
         p = filedialog.asksaveasfilename(parent=self, title=T.EXP_SAVE_TITLE, defaultextension=".zip",
-                                         filetypes=[("설정 패키지", "*.zip")], initialfile="pcmigrate-settings.zip")
+                                         filetypes=[("설정 묶음 파일", "*.zip")], initialfile=T.EXP_DEFAULT_NAME)
         if p:
-            self.path_var.set(p)
+            self.path_var.set(p.replace("/", "\\"))
             self._update_resume()
 
     def _export(self) -> None:
-        out = self.path_var.get().strip()
+        self.path_field.normalize()
+        out = clean_path(self.path_var.get())
         if not out:
             messagebox.showwarning(T.EXP_NEED_PATH_TITLE, T.EXP_NEED_PATH, parent=self)
             return
@@ -431,9 +473,14 @@ class ExportView(BaseView):
         for w in m.get("manual_warnings", []):
             for item in w.get("items", [])[:3]:
                 lines.append(f"  - {w.get('name')}: {item}")
-        lines += ["", T.LICENSE_NOTE]
         set_text(self.result, lines)
+        self.next_box.pack(fill="x", pady=(6, 0), before=self.lic_link)
+        self.more.pack(fill="x", before=self.lic_link, pady=(4, 0))
+        self.after_idle(lambda: self.scroll.scroll_to(self.summary))  # 끝나면 결과와 '다음에 할 일' 상자가 바로 보이게
         self.open_btn.state(["!disabled"])
+        self._done = True
+        self.go_btn.state(["!disabled"])
+        self.go_btn.configure(text=T.BTN_DONE, command=lambda: self.c.go(S.START))  # 마지막 화면의 주 버튼은 '완료'
 
     def _open(self) -> None:
         open_location(self.c.state.export_output)

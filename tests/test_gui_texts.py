@@ -43,7 +43,7 @@ def constants():
             yield name, getattr(T, name)
 
 
-USER_CONSTANTS = {n: v for n, v in constants() if n not in ("DETAIL_REPLACEMENTS", "FONT_FAMILIES", "FONT_SIZE")}
+USER_CONSTANTS = {n: v for n, v in constants() if n not in ("DETAIL_REPLACEMENTS", "FONT_FAMILIES", "FONT_SIZE", "TEXT_ICONS")}
 
 
 def test_there_are_many_constants():
@@ -143,8 +143,8 @@ def test_jargon_free_replacements_present_in_key_screens():
     assert "미리보기(실제로 바꾸지 않음)" in T.TASK_TRANSFER_PREVIEW and "실제로 바꾸지 않음" in T.PREV_SUB + T.TR_PREVIEW_RESULT
     assert "\\\\컴퓨터이름\\폴더" in T.TR_DST_HINT  # 공유 폴더 경로 안내
     assert ".bak" in T.SAFETY_LINES[1] and "백업 파일" in T.SAFETY_LINES[1]
-    assert "정확한지" in T.TR_SUB  # 파일이 정확히 복사됐는지 검사(해시)
-    assert "엄격 검사" in T.TR_STRICT and "공유 폴더" in T.TR_DST_HINT
+    assert "같은지" in T.TR_SUB and T.TERM_CHECK_DESC in T.TERM_CHECK_FULL  # 복사본이 원본과 같은지 확인(해시를 쓰지 않는다)
+    assert T.TR_STRICT == T.TERM_FULL_RECHECK == "처음부터 모두 다시 확인(오래 걸림)" and "공유 폴더" in T.TR_DST_HINT
 
 
 def test_button_names_are_clear_verbs():
@@ -152,7 +152,7 @@ def test_button_names_are_clear_verbs():
                   T.BTN_PREVIEW_NEXT, T.BTN_BROWSE):
         assert 1 < len(label) <= 16
     assert "미리보기 실행" in T.BTN_TR_PREVIEW and "복사 시작" in T.BTN_TR_GO and T.BTN_APPLY == "복원 실행"
-    assert T.BTN_NEXT == "다음" and T.BTN_CANCEL == "취소"
+    assert T.BTN_NEXT == "다음(N)" and T.BTN_CANCEL == "취소"  # (N) 은 Alt+N 단축키 표시
 
 
 def test_license_notice_is_prominent():

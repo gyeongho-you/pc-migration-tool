@@ -7,21 +7,27 @@ import sys
 import tempfile
 import tkinter as tk
 import traceback
+from pathlib import Path
+from tkinter import filedialog
 from tkinter import font as tkfont
 from tkinter import messagebox, ttk
 
 from .. import errorlog
 from . import state as S
 from . import texts as T
-from .controller import Controller, FriendlyError
-from .views.common import (BIG_FONT, INFO_BG, MUTED_FG, OK_FG, STAGE_FONT, BaseView, TextDialog, autowrap, open_location)
+from .controller import Controller, FriendlyError, anonymize_paths
+from .views import common as C
+from .views.common import (CHIP_DONE_BG, CHIP_TODO_BG, FONT_DELTA_RANGE, INFO_BG, INFO_FG, MUTED_FG, OK_FG, SUB_FONT, TITLE_FONT, WARN_FG,
+                           ActionButton, BaseView, TextDialog, add_tooltip, autowrap, install_wheel, open_location, setup_fonts)
 from .views.new_pc import ConfirmView, PackageView, PreviewView, ResultView
 from .views.old_pc import ChecklistView, DiscoverView, ExportView, ScanView
 from .views.start import StartView
 from .views.transfer import TransferView
 
 LOG_NAME = "pcmigrate-gui.log"
-MIN_SIZE = (900, 640)
+BASE_SIZE = (1040, 760)  # 96dpi(100%) 기준 시작 크기
+MIN_SIZE = (900, 640)  # 96dpi 기준 최소 크기: 이 크기에서도 입력칸과 주 버튼이 첫 화면에 보여야 한다
+SCREEN_MARGIN = (40, 90)  # 화면(작업 표시줄 포함)에서 남겨 둘 여백
 
 
 def enable_high_dpi() -> None:
@@ -38,6 +44,15 @@ def enable_high_dpi() -> None:
         pass
 
 
+def window_sizes(scale: float, screen: tuple[int, int]) -> tuple[tuple[int, int], tuple[int, int]]:
+    """(시작 크기, 최소 크기). 배율(scale = 화면 dpi / 96)만큼 키우되 화면 크기를 넘지 않게 자른다."""
+    sw, sh = screen
+    max_w, max_h = max(640, sw - SCREEN_MARGIN[0]), max(480, sh - SCREEN_MARGIN[1])
+    start = (min(round(BASE_SIZE[0] * scale), max_w), min(round(BASE_SIZE[1] * scale), max_h))
+    mini = (min(round(MIN_SIZE[0] * scale), max_w, start[0]), min(round(MIN_SIZE[1] * scale), max_h, start[1]))
+    return start, mini
+
+
 def setup_logging(path: str | None = None) -> str:
     """%TEMP%\\pcmigrate-gui.log 에 이벤트 종류만 기록한다(설치 목록/경로 내용은 남기지 않는다)."""
     path = path or os.path.join(tempfile.gettempdir(), LOG_NAME)
@@ -51,79 +66,98 @@ def setup_logging(path: str | None = None) -> str:
 
 
 class RoadmapDialog(tk.Toplevel):
-    """전체 이전 순서: 번호, 체크박스, '도구가 도와줌 / 직접 하셔야 함' 표시. 내용은 texts.py 의 ROADMAP_* 에서 온다."""
+    """전체 이전 순서: 제목, 진행률 n/N, 번호와 체크박스, '도구가 도와줌 / 직접 하셔야 함' 표시, 하단 '닫기'. 내용은 texts.py 의 ROADMAP_* 에서 온다."""
 
     def __init__(self, parent: tk.Misc, controller: Controller) -> None:
         super().__init__(parent)
         self.c = controller
         self.title(T.ROADMAP_TITLE)
         self.transient(parent.winfo_toplevel())
-        self.geometry("760x620")
-        canvas = tk.Canvas(self, highlightthickness=0)
-        bar = ttk.Scrollbar(self, orient="vertical", command=canvas.yview)
-        canvas.configure(yscrollcommand=bar.set)
-        bar.pack(side="right", fill="y")
-        canvas.pack(side="left", fill="both", expand=True)
-        body = ttk.Frame(canvas, padding=12)
-        win = canvas.create_window((0, 0), window=body, anchor="nw")
-        body.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.bind("<Configure>", lambda e: canvas.itemconfigure(win, width=e.width))
+        w, h = min(760, max(520, parent.winfo_screenwidth() - 120)), min(660, max(420, parent.winfo_screenheight() - 140))
+        self.geometry(f"{w}x{h}")
+        top = ttk.Frame(self, padding=(14, 10, 14, 0))
+        top.pack(fill="x")
+        self.heading = ttk.Label(top, text=T.ROADMAP_HEADING, font=TITLE_FONT)
+        self.heading.pack(side="left")
+        self.progress_label = ttk.Label(top, text="", font=SUB_FONT, foreground=INFO_FG)
+        self.progress_label.pack(side="right")
+        bottom = ttk.Frame(self, padding=(14, 8))
+        bottom.pack(side="bottom", fill="x")
+        self.close_btn = ActionButton(bottom, text=T.BTN_CLOSE, command=self.destroy, kind="primary")
+        self.close_btn.pack(side="right")
+        body_holder = C.ScrollBody(self)
+        body_holder.pack(fill="both", expand=True)
+        body = ttk.Frame(body_holder.inner, padding=(14, 6))
+        body.pack(fill="both", expand=True)
         intro = ttk.Label(body, text=T.ROADMAP_INTRO, justify="left")
         intro.pack(anchor="w", fill="x")
         autowrap(intro, 30)
         self.vars: dict[str, tk.BooleanVar] = {}
         self.who_labels: dict[str, ttk.Label] = {}
         for heading, items in ((T.ROADMAP_OLD_HEADING, T.ROADMAP_OLD), (T.ROADMAP_NEW_HEADING, T.ROADMAP_NEW)):
-            ttk.Label(body, text=heading, font=STAGE_FONT).pack(anchor="w", pady=(14, 4))
+            ttk.Label(body, text=heading, font=SUB_FONT).pack(anchor="w", pady=(14, 4))
             for i, (key, title, who, detail) in enumerate(items, 1):
                 row = ttk.Frame(body)
                 row.pack(fill="x", pady=3)
                 var = tk.BooleanVar(value=key in self.c.roadmap_marks)
                 self.vars[key] = var
-                ttk.Checkbutton(row, text=f"{i}) {title}", variable=var, command=lambda k=key: self.c.toggle_roadmap(k)).pack(anchor="w")
-                who_label = ttk.Label(row, text=who, foreground="#1b6e2f" if who == T.WHO_TOOL else "#8a4b00" if who == T.WHO_HUMAN else "#0b5394")
+                ttk.Checkbutton(row, text=f"{i}) {title}", variable=var, command=lambda k=key: self._toggle(k)).pack(anchor="w")
+                who_label = ttk.Label(row, text=who, foreground=OK_FG if who == T.WHO_TOOL else WARN_FG if who == T.WHO_HUMAN else INFO_FG)
                 who_label.pack(anchor="w", padx=(24, 0))
                 self.who_labels[key] = who_label
                 d = ttk.Label(row, text=detail, justify="left", foreground=MUTED_FG)
                 d.pack(anchor="w", fill="x", padx=(24, 0))
                 autowrap(d, 40)
+        self.update_progress()
         self.bind("<Escape>", lambda e: (self.destroy(), "break")[1])
+        self.bind("<Return>", lambda e: (self.destroy(), "break")[1])
+
+    def _toggle(self, key: str) -> None:
+        self.c.toggle_roadmap(key)
+        self.update_progress()
+
+    def update_progress(self) -> None:
+        total = len(self.vars)
+        done = sum(1 for k in self.vars if k in self.c.roadmap_marks)
+        self.progress_label.configure(text=T.ROADMAP_PROGRESS.format(n=done, total=total))
 
 
 class ErrorDialog(tk.Toplevel):
-    """오류 대화상자: '무엇이 잘못됐나요 / 어떻게 하면 되나요' 두 줄 + 접힌 '상세 보기'(traceback)."""
+    """오류 대화상자: 한국어 한 문장 + '이렇게 해 보세요' + 접힌 '상세 보기'(영문 예외 이름과 traceback) + '문제 보고서 저장'."""
 
     def __init__(self, parent: tk.Misc, err: FriendlyError) -> None:
         super().__init__(parent)
         self.title(err.title)
         self.transient(parent)
         self.resizable(True, True)
-        body = ttk.Frame(self, padding=12)
+        body = ttk.Frame(self, padding=14)
         body.pack(fill="x")
-        self.what_label = ttk.Label(body, text=err.what, wraplength=540, justify="left", font=STAGE_FONT)
+        self.what_label = ttk.Label(body, text=err.what, wraplength=560, justify="left", font=SUB_FONT)
         self.what_label.pack(anchor="w", fill="x")
         self.how_label = None
         if err.how:
-            ttk.Label(body, text=T.ERR_HOW, foreground=MUTED_FG).pack(anchor="w", pady=(8, 0))
-            self.how_label = ttk.Label(body, text=err.how, wraplength=540, justify="left")
+            ttk.Label(body, text=T.ERR_HOW, foreground=INFO_FG, font=C.BOLD_FONT).pack(anchor="w", pady=(10, 0))
+            self.how_label = ttk.Label(body, text=err.how, wraplength=560, justify="left")
             self.how_label.pack(anchor="w", fill="x")
         self.log_note = ttk.Label(body, text=T.ERROR_LOG_NOTE if err.log_path else T.ERROR_LOG_FAILED_NOTE,
-                                  wraplength=540, justify="left", foreground=MUTED_FG)
-        self.log_note.pack(anchor="w", fill="x", pady=(8, 0))
+                                  wraplength=560, justify="left", foreground=MUTED_FG)
+        self.log_note.pack(anchor="w", fill="x", pady=(10, 0))
         self.detail = tk.Text(self, height=10, width=80, wrap="none")
         self.detail.insert("1.0", err.detail or T.NO_DETAIL)
         self.detail.configure(state="disabled")
         self.shown = False
-        bar = ttk.Frame(self, padding=(12, 0, 12, 12))
+        bar = ttk.Frame(self, padding=(14, 0, 14, 14))
         bar.pack(fill="x", side="bottom")
         self.err = err
         self.toggle = ttk.Button(bar, text=T.BTN_DETAIL_SHOW, command=self._toggle)
         self.toggle.pack(side="left")
+        self.save_btn = ttk.Button(bar, text=T.BTN_SAVE_REPORT, command=self.save_report)
+        self.save_btn.pack(side="left", padx=(8, 0))
         self.log_btn = ttk.Button(bar, text=T.BTN_OPEN_LOG_FOLDER, command=self.open_log_folder)
         self.log_btn.pack(side="left", padx=(8, 0))
         self.copy_btn = ttk.Button(bar, text=T.BTN_COPY_ERROR, command=self.copy_error)
         self.copy_btn.pack(side="left", padx=(8, 0))
-        self.ok_btn = ttk.Button(bar, text=T.BTN_OK, command=self.destroy)
+        self.ok_btn = ActionButton(bar, text=T.BTN_OK, command=self.destroy, kind="primary")
         self.ok_btn.pack(side="right")
         self.bind("<Return>", self.close_event)
         self.bind("<Escape>", self.close_event)
@@ -138,17 +172,38 @@ class ErrorDialog(tk.Toplevel):
     def open_log_folder(self) -> None:
         open_location(str(errorlog.log_dir()))
 
+    def report_text(self) -> str:
+        """저장/복사할 문제 보고서(개인 폴더 경로는 %USERPROFILE% 등으로 바꾼다)."""
+        text = self.err.report or "\n".join(x for x in (self.err.what, self.err.how, self.err.detail) if x)
+        return anonymize_paths(text)
+
     def copy_error(self) -> None:
         """오류 내용(시각, 버전, 실행 화면, 예외, 전체 traceback)을 클립보드에 넣는다."""
-        text = self.err.report or "\n".join(x for x in (self.err.what, self.err.how, self.err.detail) if x)
         self.clipboard_clear()
-        self.clipboard_append(text)
+        self.clipboard_append(self.report_text())
         self.log_note.configure(text=T.ERROR_COPIED)
+
+    def save_report(self, path: str | None = None) -> str:
+        """문제 보고서를 파일로 저장한다(저장 위치는 사용자가 고른다). 저장한 경로를 돌려준다(취소하면 빈 문자열)."""
+        if path is None:
+            parent = Path(os.path.expanduser("~")) / "Desktop"
+            path = filedialog.asksaveasfilename(parent=self, title=T.REPORT_SAVE_TITLE, defaultextension=".txt",
+                                                filetypes=[("텍스트", "*.txt")], initialfile=T.REPORT_DEFAULT_NAME,
+                                                initialdir=str(parent) if parent.is_dir() else None)
+        if not path:
+            return ""
+        try:
+            Path(path).write_text(self.report_text(), encoding="utf-8")
+        except OSError as e:
+            self.log_note.configure(text=f"{T.ICON_FAIL} {e.strerror or e}")
+            return ""
+        self.log_note.configure(text=T.ERROR_REPORT_SAVED)
+        return path
 
     def _toggle(self) -> None:
         self.shown = not self.shown
         if self.shown:
-            self.detail.pack(fill="both", expand=True, padx=12, pady=(0, 8))
+            self.detail.pack(fill="both", expand=True, padx=14, pady=(0, 8))
             self.toggle.configure(text=T.BTN_DETAIL_HIDE)
         else:
             self.detail.pack_forget()
@@ -164,11 +219,16 @@ class App(tk.Tk):
         super().__init__()
         self.c = controller or Controller()
         self.title(T.APP_TITLE)
-        self.geometry("1040x760")
-        self.minsize(*MIN_SIZE)
+        self.ui_scale = self._measure_scale()
+        start, mini = window_sizes(self.ui_scale, (self.winfo_screenwidth(), self.winfo_screenheight()))
+        self.min_size = mini
+        self.geometry(f"{start[0]}x{start[1]}")
+        self.minsize(*mini)
         self.current = S.START
+        self.font_delta = 0
         self.help_dialog: TextDialog | None = None
         self._setup_style()
+        install_wheel(self)
         self._build_header()
         self._build_footer()  # 아래쪽 위젯을 먼저 pack 해야 본문이 늘어나도 잘리지 않는다
         self.body = ttk.Frame(self)
@@ -189,34 +249,66 @@ class App(tk.Tk):
         self.after(100, self._tick)
 
     # ------------------------------------------------------------------ 구성
+    def _measure_scale(self) -> float:
+        """화면 배율(dpi/96). 알 수 없으면 1."""
+        try:
+            return max(1.0, min(3.0, float(self.winfo_fpixels("1i")) / 96.0))
+        except (tk.TclError, ValueError):
+            return 1.0
+
     def _setup_style(self) -> None:
-        """글꼴(맑은 고딕 10pt)을 통일하고, 표 줄 높이/버튼 여백을 글꼴에 맞춘다."""
+        """글꼴(맑은 고딕, 본문 11pt)을 통일하고, 표 줄 높이/버튼 여백을 글꼴에 맞춘다."""
         try:
             families = set(tkfont.families())
             fam = next((f for f in T.FONT_FAMILIES if f in families), None)
-            for name in ("TkDefaultFont", "TkTextFont", "TkMenuFont", "TkHeadingFont", "TkFixedFont"):
-                f = tkfont.nametofont(name)
-                f.configure(size=T.FONT_SIZE, **({"family": fam} if fam else {}))
-            style = ttk.Style(self)
-            line = tkfont.nametofont("TkDefaultFont").metrics("linespace")
-            style.configure("Treeview", rowheight=line + 8)
-            style.configure("TButton", padding=(10, 4))
-            style.configure("TCheckbutton", padding=(2, 2))
+            setup_fonts(self, T.FONT_SIZE + self.font_delta, fam)
+            self._apply_font_metrics()
         except tk.TclError:
             pass
 
+    def _apply_font_metrics(self) -> None:
+        style = ttk.Style(self)
+        line = tkfont.nametofont("TkDefaultFont").metrics("linespace")
+        style.configure("Treeview", rowheight=line + 8)
+        style.configure("Treeview.Heading", font=C.BOLD_FONT)
+        style.configure("TButton", padding=(10, 4))
+        style.configure("Mini.TButton", padding=(4, 1))
+        style.configure("TCheckbutton", padding=(2, 2))
+        style.configure("TRadiobutton", padding=(2, 2))
+
+    def change_font(self, delta: int) -> int:
+        """글자 크기 키우기(+1)/줄이기(-1). 허용 범위 안에서만 바뀌며 바뀐 단계(본문 pt 기준)를 돌려준다."""
+        lo, hi = FONT_DELTA_RANGE
+        self.font_delta = max(lo, min(hi, self.font_delta + delta))
+        try:
+            setup_fonts(self, T.FONT_SIZE + self.font_delta)
+            self._apply_font_metrics()
+        except tk.TclError:
+            pass
+        self.font_up.state(["disabled"] if self.font_delta >= hi else ["!disabled"])
+        self.font_down.state(["disabled"] if self.font_delta <= lo else ["!disabled"])
+        return T.FONT_SIZE + self.font_delta
+
     def _build_header(self) -> None:
-        bar = ttk.Frame(self, padding=(10, 6))
+        bar = ttk.Frame(self, padding=(12, 6))
         bar.pack(fill="x")
-        ttk.Label(bar, text=T.APP_TITLE, font=("TkDefaultFont", 12, "bold")).pack(side="left")
+        ttk.Label(bar, text=T.APP_TITLE, font=SUB_FONT).pack(side="left")
+        ttk.Label(bar, text="›", foreground=INFO_FG, padding=(10, 0, 0, 0)).pack(side="left")
+        self.crumb = ttk.Label(bar, text="", foreground=INFO_FG, padding=(4, 0))
+        self.crumb.pack(side="left")
         info = self.c.system_info()
-        self.env_label = ttk.Label(bar, text=f"{info.os_name} · {T.HEADER_ADMIN[info.is_admin]}", foreground="#444444")
+        self.env_label = ttk.Label(bar, text=f"{info.os_name} · {T.HEADER_ADMIN[info.is_admin]}", foreground=MUTED_FG)
         self.env_label.pack(side="right")
-        ttk.Separator(self).pack(fill="x")
-        self.crumb = ttk.Label(self, text="", padding=(10, 4), foreground="#0b5394")
-        self.crumb.pack(fill="x")
-        self.overall = tk.Frame(self, bg=INFO_BG, padx=10, pady=4)  # 전체 단계 n/N (흐름 안에서만 보인다)
-        self.overall_label = tk.Label(self.overall, text="", bg=INFO_BG, font=BIG_FONT)
+        self.font_up = ttk.Button(bar, text=T.BTN_FONT_UP, width=3, style="Mini.TButton", command=lambda: self.change_font(1))
+        self.font_down = ttk.Button(bar, text=T.BTN_FONT_DOWN, width=3, style="Mini.TButton", command=lambda: self.change_font(-1))
+        self.font_up.pack(side="right", padx=(4, 12))
+        self.font_down.pack(side="right")
+        add_tooltip(self.font_up, T.TIP_FONT_UP)
+        add_tooltip(self.font_down, T.TIP_FONT_DOWN)
+        self.header_sep = ttk.Separator(self)
+        self.header_sep.pack(fill="x")
+        self.overall = tk.Frame(self, bg=INFO_BG, padx=12, pady=2)  # 전체 단계 n/N + 단계 이름 (흐름 안에서만 보인다)
+        self.overall_label = tk.Label(self.overall, text="", bg=INFO_BG, font=SUB_FONT)
         self.overall_label.pack(side="left")
         self.overall_chips: list[tk.Label] = []
         self.overall_flow = tk.Label(self.overall, text="", bg=INFO_BG, fg=MUTED_FG)
@@ -224,24 +316,44 @@ class App(tk.Tk):
 
     def _build_footer(self) -> None:
         ttk.Separator(self).pack(fill="x", side="bottom")
-        bar = ttk.Frame(self, padding=(10, 6))
+        bar = ttk.Frame(self, padding=(12, 2))
         bar.pack(fill="x", side="bottom")
+        self.footer = bar
         right = ttk.Frame(bar)
         right.pack(side="right", padx=(10, 0))
-        self.progress = ttk.Progressbar(right, mode="indeterminate", length=170)
-        self.progress.pack(side="top")
-        self.log_link = ttk.Button(right, text=T.BTN_OPEN_ERROR_LOG, command=lambda: open_location(str(errorlog.log_dir())))
-        self.log_link.pack(side="bottom", pady=(4, 0))  # 오류가 났을 때 로그를 바로 열 수 있게 항상 보인다
+        self.progress = ttk.Progressbar(right, mode="indeterminate", length=170)  # 작업 중에만 보인다(유휴일 때는 숨김)
+        self.progress_shown = False
+        self.log_link = ActionButton(right, text=T.BTN_OPEN_ERROR_LOG, kind="link",
+                                     command=lambda: open_location(str(errorlog.log_dir())))
+        self.log_link.pack(side="bottom")  # 오류가 났을 때 로그를 바로 열 수 있게 항상 보인다(작은 링크)
         self.cancel_btn = ttk.Button(right, text=T.BTN_CANCEL, command=self.c.cancel)
         left = ttk.Frame(bar)
         left.pack(side="left", fill="x", expand=True)
-        self.stage = ttk.Label(left, text=T.READY, font=STAGE_FONT)  # 지금 하는 일(크게)
+        self.stage = ttk.Label(left, text=T.READY, font=SUB_FONT)  # 지금 하는 일
         self.stage.pack(anchor="w")
-        self.status = ttk.Label(left, text="", justify="left")  # 진행 메시지와 예상 시간
-        self.status.pack(anchor="w", fill="x")
+        self.status = ttk.Label(left, text="", justify="left")  # 진행 메시지(현황 카드가 없는 화면에서만 보인다)
         autowrap(self.status, 20)
         self.note = ttk.Label(left, text="", foreground=MUTED_FG)
-        self.note.pack(anchor="w")
+        self._left = left
+
+    def _sync_footer(self) -> None:
+        """하단 상태줄: 유휴일 때는 '준비됨' 한 줄만. 작업 중이어도 현황 카드가 보이는 화면에서는 같은 말이 겹치지 않게 막대/설명을 숨긴다."""
+        busy = bool(self.c.state.busy)
+        card = getattr(self.views.get(self.current), "card", None) if hasattr(self, "views") else None
+        card_visible = bool(card is not None and card.shown)
+        want_bar = busy and not card_visible
+        if want_bar and not self.progress_shown:
+            self.progress.pack(side="top", before=self.log_link)
+            self.progress_shown = True
+        elif not want_bar and self.progress_shown:
+            self.progress.pack_forget()
+            self.progress_shown = False
+        want_text = busy and not card_visible
+        for w in (self.status, self.note):
+            if want_text and not w.winfo_manager():
+                w.pack(anchor="w", fill="x")
+            elif not want_text and w.winfo_manager():
+                w.pack_forget()
 
     # ------------------------------------------------------------------ 화면/도움말/키
     def show(self, screen: str) -> None:
@@ -252,18 +364,20 @@ class App(tk.Tk):
         self.update_overall()
         view.on_show()
         view.refresh_card()
+        self._sync_footer()
 
     def update_overall(self) -> None:
-        """맨 위의 '전체 단계 n/N' 큰 표시(흐름 안의 화면에서만)."""
+        """맨 위의 '전체 단계 n/N' 과 단계 이름 표시(흐름 안의 화면에서만)."""
         mode, stage = self.c.flow()
         step = S.overall_step(self.current, mode, stage)
         if step is None:
             self.overall.pack_forget()
             return
         n, total, flow, title = step
-        self.overall.pack(fill="x", after=self.crumb)
+        names = S.overall_names(self.current, mode)
+        self.overall.pack(fill="x", after=self.header_sep)
         self.overall_label.configure(text=T.OVERALL_FMT.format(n=n, total=total))
-        self.overall_flow.configure(text=f"{flow} · {title}")
+        self.overall_flow.configure(text=flow)
         while len(self.overall_chips) < total:
             chip = tk.Label(self.overall, text="", padx=8, pady=1)
             chip.pack(side="left", padx=(8, 0), before=self.overall_flow)
@@ -274,12 +388,14 @@ class App(tk.Tk):
                 continue
             chip.pack(side="left", padx=(8, 0), before=self.overall_flow)
             state = "done" if i + 1 < n else "current" if i + 1 == n else "todo"
-            chip.configure(text=(T.ICON_OK + " " if state == "done" else "") + str(i + 1),
-                           bg="#0b5394" if state == "current" else "#d6e4fa" if state == "done" else "#efefef",
-                           fg="white" if state == "current" else OK_FG if state == "done" else MUTED_FG)
+            name = names[i] if i < len(names) else ""
+            chip.configure(text=(T.ICON_OK + " " if state == "done" else "") + f"{i + 1} {name}".strip(),
+                           bg=INFO_FG if state == "current" else CHIP_DONE_BG if state == "done" else CHIP_TODO_BG,
+                           fg="white" if state == "current" else OK_FG if state == "done" else MUTED_FG,
+                           font=C.BOLD_FONT if state == "current" else C.BODY_FONT)
 
     def show_error(self, err: FriendlyError) -> ErrorDialog:
-        """오류 대화상자(로그 폴더 열기/오류 내용 복사 버튼 포함)."""
+        """오류 대화상자(문제 보고서 저장/로그 폴더 열기/오류 내용 복사 버튼 포함)."""
         self.status.configure(text=T.ERROR_STATUS)
         return ErrorDialog(self, err)
 
@@ -324,7 +440,7 @@ class App(tk.Tk):
         w = self.focus_get()
         if w is None or w.winfo_toplevel() is not self or isinstance(w, tk.Text):
             return None
-        if isinstance(w, ttk.Button):
+        if isinstance(w, (ttk.Button, ActionButton)):
             w.invoke()
             return "break"
         btn = self.views[self.current].primary
@@ -334,16 +450,13 @@ class App(tk.Tk):
         return None
 
     def _on_escape(self, event):
+        """Esc: 대화상자 닫기(각 대화상자가 처리)와 진행 중인 작업 취소에만 쓴다. 화면을 '이전'으로 되돌리지 않는다."""
         w = self.focus_get()
         if w is not None and w.winfo_toplevel() is not self:
             return None
         if self.c.state.busy:
             if self.c.can_cancel:
                 self.c.cancel()
-            return "break"
-        back = self.views[self.current].back_btn
-        if back is not None and "disabled" not in back.state():
-            back.invoke()
             return "break"
         return None
 
@@ -382,12 +495,14 @@ class App(tk.Tk):
             v.on_event(kind, payload)
         if kind in ("status", "busy", "screen"):
             self.views[self.current].refresh_card()
+        self._sync_footer()
 
     def _tick(self) -> None:
         try:
             self.c.pump()
             if self.c.status.running:  # 경과 시간/속도가 계속 바뀌도록 작업 중에는 0.1초마다 현황 카드를 다시 그린다
                 self.views[self.current].refresh_card()
+                self._sync_footer()
         except Exception as e:  # noqa: BLE001 - 한 번의 오류로 폴링이 멈추면 진행/완료가 영영 화면에 오지 않는다
             self.report_callback_exception(type(e), e, e.__traceback__)
         finally:

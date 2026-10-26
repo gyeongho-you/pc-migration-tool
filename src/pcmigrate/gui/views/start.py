@@ -1,4 +1,4 @@
-"""시작 화면: 구 PC / 신 PC / 대용량 복사 중 선택."""
+"""시작 화면: ① 쓰던 PC에서 준비 / ② 새 PC에서 가져오기 / ③ 큰 파일 옮기기 중 선택. 큰 버튼 3개 + 전체 순서 보기."""
 from __future__ import annotations
 
 import tkinter as tk
@@ -6,7 +6,8 @@ from tkinter import ttk
 
 from .. import state as S
 from .. import texts as T
-from .common import OK_FG, WARN_FG, BaseView, autowrap
+from .common import (BODY_FONT, INFO_BORDER, INFO_FG, MUTED_FG, SUB_FONT, WARN_BG, WARN_FG, ActionButton, BaseView, Collapsible,
+                     ScrollBody, autowrap)
 
 
 class StartView(BaseView):
@@ -14,36 +15,50 @@ class StartView(BaseView):
 
     def __init__(self, app, controller) -> None:
         super().__init__(app, controller)
-        self.header(T.START_HEADING)
-        intro = ttk.Label(self, text=T.START_INTRO, justify="left")
-        intro.pack(anchor="w", fill="x", pady=(2, 6))
+        self.header(T.START_HEADING, roadmap=False)
+        scroll = ScrollBody(self)
+        scroll.pack(fill="both", expand=True)
+        self.scroll = scroll
+        body = ttk.Frame(scroll.inner, padding=(0, 0, 8, 0))
+        body.pack(fill="both", expand=True)
+        intro = ttk.Label(body, text=T.START_INTRO, justify="left")  # 소개는 2줄 이내
+        intro.pack(anchor="w", fill="x", pady=(2, 8))
         autowrap(intro)
-        # 라이선스 안내는 눈에 띄는 색 상자 + 아이콘 + 문구(색에만 의존하지 않음)
-        self.license_box = tk.Label(self, text=T.LICENSE_BANNER, anchor="w", justify="left", bg="#fff4d6", fg=WARN_FG,
-                                    padx=10, pady=6, font=("TkDefaultFont", 10, "bold"))
-        self.license_box.pack(fill="x", pady=(0, 8))
-        autowrap(self.license_box, 40)
-        grid = ttk.Frame(self)
-        grid.pack(fill="x", pady=6)
-        self.buttons: list[ttk.Button] = []
+        grid = ttk.Frame(body)
+        grid.pack(fill="x", pady=4)
+        self.buttons: list[ActionButton] = []
+        self.cards: list[tk.Frame] = []
         for i, (title, desc, btn_text, target) in enumerate(T.START_CHOICES):
-            box = ttk.LabelFrame(grid, text=title, padding=10)
+            box = tk.Frame(grid, highlightbackground=INFO_BORDER, highlightthickness=1, padx=12, pady=10)
             box.grid(row=0, column=i, sticky="nsew", padx=6)
             grid.columnconfigure(i, weight=1, uniform="start")
-            lbl = ttk.Label(box, text=desc, justify="left")
-            lbl.pack(anchor="w", fill="x", pady=(0, 8))
-            autowrap(lbl, 16)
-            b = ttk.Button(box, text=btn_text, command=lambda t=target: self.c.go(t))
-            b.pack(anchor="e")
-            self.buttons.append(b)
-        self.primary = self.buttons[0]
-        notes = ttk.LabelFrame(self, text=T.SAFETY_TITLE, padding=10)
-        notes.pack(fill="x", pady=12)
-        for line in T.SAFETY_LINES:
-            lbl = ttk.Label(notes, text="• " + line, justify="left")
-            lbl.pack(anchor="w", fill="x")
+            head = tk.Label(box, text=title, font=SUB_FONT, anchor="w", justify="left", fg=INFO_FG)
+            head.pack(anchor="w", fill="x")
+            autowrap(head, 40)
+            lbl = tk.Label(box, text=desc, justify="left", anchor="w", fg=MUTED_FG, font=BODY_FONT)
+            lbl.pack(anchor="w", fill="x", pady=(6, 10))
             autowrap(lbl, 40)
+            b = ActionButton(box, text=btn_text, command=lambda t=target: self.c.go(t), kind="primary", pady=10)
+            b.pack(side="bottom", fill="x")
+            self.buttons.append(b)
+            self.cards.append(box)
+        self.primary = self.buttons[0]
+        self.order_note = ttk.Label(body, text=T.START_ORDER_NOTE, font=SUB_FONT, foreground=INFO_FG)
+        self.order_note.pack(anchor="w", padx=6, pady=(10, 6))
+        self.roadmap_big = ActionButton(body, text=T.BTN_ROADMAP_BIG, command=lambda: self.app.show_roadmap(), kind="plain",
+                                        font=SUB_FONT, pady=10)
+        self.roadmap_big.pack(fill="x", padx=6, pady=(0, 12))
+        # 라이선스 안내는 아래쪽에 약하게(시작 화면과 마지막 결과 화면에서만 크게 보인다)
+        self.license_box = tk.Label(body, text=T.LICENSE_BANNER, anchor="w", justify="left", bg=WARN_BG, fg=WARN_FG, padx=10, pady=4,
+                                    font=BODY_FONT)
+        self.license_box.pack(fill="x", padx=6)
+        autowrap(self.license_box, 40)
+        self.safety = Collapsible(body, T.SAFETY_TITLE, T.SAFETY_TITLE_OPEN)
+        self.safety.pack(anchor="w", fill="x", padx=6, pady=(8, 0))
+        for line in T.SAFETY_LINES:
+            self.safety.add_text("• " + line, pad=40)
         self.finish()
 
     def on_show(self) -> None:
         self.buttons[0].focus_set()
+        self.scroll.scroll_to_top()

@@ -161,6 +161,6 @@ def test_default_rules_dir_source_and_frozen(monkeypatch, tmp_path):
 def test_readme_documents_gui():
     text = (Path(__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8")
     for needle in ("python -m pcmigrate.gui", "python -m pcmigrate gui", "pcmigrate-gui.bat", "pythonw",
-                   "구 PC(내보내기)", "신 PC(가져오기)", "대용량 데이터 복사", "pcmigrate-gui.log", "비밀 정보가 포함될 수 있음을 이해했습니다",
+                   "쓰던 PC에서 준비하기(구 PC)", "새 PC에서 설치하고 가져오기(신 PC)", "큰 파일(도면·사진) 옮기기(대용량 복사)", "pcmigrate-gui.log", "비밀 정보가 포함될 수 있음을 이해했습니다",
                    "--add-data"):
         assert needle in text, needle

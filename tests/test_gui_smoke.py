@@ -144,7 +144,7 @@ def test_window_resize_down_to_minimum_does_not_break_layout(ctx):
 
 # --------------------------------------------------------------------- 키 조작
 
-def test_enter_runs_primary_button_and_escape_goes_back_or_cancels(ctx):
+def test_enter_runs_primary_button_and_escape_only_closes_dialogs_or_cancels(ctx):
     app, c, api = ctx.app, ctx.c, ctx.api
     c.go(S.OLD_SCAN)
     app.update()
@@ -153,8 +153,7 @@ def test_enter_runs_primary_button_and_escape_goes_back_or_cancels(ctx):
     app.focus_get = lambda: app.views[S.OLD_SCAN].btn  # 버튼에 포커스가 있으면 그 버튼을 누른다
     app._on_return(None)
     assert len([x for x in api.calls if x[0] == "scan"]) == 2
-    assert app._on_escape(None) == "break" and c.state.screen == S.START  # Esc = 이전 화면
-    assert app._on_escape(None) is None  # 처음 화면에는 이전이 없음
+    assert app._on_escape(None) is None and c.state.screen == S.OLD_SCAN  # Esc 는 '이전'으로 돌아가지 않는다(대화상자 닫기와 작업 취소에만 쓴다)
     app.focus_get = lambda: tk.Text(app)  # 여러 줄 입력창에서는 Enter 가 줄바꿈이므로 가로채지 않음
     assert app._on_return(None) is None
     c.state.busy, c.can_cancel = True, True
@@ -305,6 +304,8 @@ def test_checklist_view_tabs_checkboxes_persist_and_hide_toggle(ctx):
 def test_export_view_reason_requires_path_and_confirmation_and_shows_summary(ctx, tmp_path):
     v = ctx.app.views[S.OLD_EXPORT]
     ctx.c.go(S.OLD_EXPORT)
+    assert v.path_var.get() == ctx.c.default_export_path() and v.path_var.get().endswith(T.EXP_DEFAULT_NAME)  # 기본값: 바탕화면의 설정 묶음 파일
+    v.path_var.set("")
     assert "disabled" in v.go_btn.state() and v.reason.cget("text") == T.WHY_NEED_OUTPUT
     v._export()
     assert ctx.shown[-1][0] == "warn" and not [x for x in ctx.api.calls if x[0] == "export"]
@@ -372,6 +373,9 @@ def test_new_pc_flow_preview_confirm_and_result_summary(ctx):
     assert "disabled" in cf.run_btn.state() and cf.why.cget("text") == T.G_NEED_CHECK_PREVIEW  # 이유 표시
     cf.checked_var.set(True)
     cf._checked_changed()
+    assert "disabled" in cf.run_btn.state() and cf.why.cget("text") == T.G_NEED_BAK_UNDERSTAND  # 두 번째 확인: 백업 파일 이해
+    cf.bak_var.set(True)
+    cf._bak_changed()
     assert "disabled" in cf.run_btn.state() and cf.why.cget("text") == T.G_NEED_EXTRA_CONSENT  # 별도 동의 필요
     cf.extra_var.set(True)
     cf._extra_changed()

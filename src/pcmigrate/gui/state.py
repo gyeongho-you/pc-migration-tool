@@ -21,7 +21,7 @@ TITLES = T.TITLES  # 화면 제목은 texts.py 에서 관리
 def overall_step(screen: str, transfer_mode: str = "", transfer_stage: int = 1) -> tuple[int, int, str, str] | None:
     """마법사 맨 위의 '전체 단계 n/N' 표시용 (n, N, 흐름 이름, 화면 제목). 시작 화면은 None.
 
-    구 PC / 새 PC 흐름은 4단계, 대용량 복사는 외장/랜선이면 2단계(구 PC 에서 보내기 -> 새 PC 에서 받아 검사), 같은 PC 면 1단계.
+    구 PC / 새 PC 흐름은 4단계, 대용량 복사는 외장/랜선이면 2단계(구 PC에서 보내기 -> 새 PC에서 받아 검사), 같은 PC 면 1단계.
     """
     if screen in OLD_FLOW:
         return OLD_FLOW.index(screen) + 1, len(OLD_FLOW), T.OVERALL_FLOWS["old"], TITLES[screen]
@@ -33,6 +33,17 @@ def overall_step(screen: str, transfer_mode: str = "", transfer_stage: int = 1) 
             return stage, 2, T.OVERALL_FLOWS["transfer"], T.OVERALL_TRANSFER_STAGES[stage]
         return 1, 1, T.OVERALL_FLOWS["transfer"], TITLES[screen]
     return None
+
+
+def overall_names(screen: str, transfer_mode: str = "") -> tuple[str, ...]:
+    """맨 위 단계 표시줄에 번호와 함께 보여 줄 단계 이름들(overall_step 의 N 개와 같은 개수)."""
+    if screen in OLD_FLOW:
+        return T.OVERALL_STEP_NAMES["old"]
+    if screen in NEW_FLOW:
+        return T.OVERALL_STEP_NAMES["new"]
+    if screen == TRANSFER:
+        return T.OVERALL_STEP_NAMES["transfer" if transfer_mode in (T.MODE_EXTERNAL, T.MODE_NETWORK) else "local"]
+    return ()
 
 
 @dataclass
@@ -54,7 +65,8 @@ class WizardState:
     package: str = ""
     preview: Any = None  # api.ImportResult (mode=dry-run)
     preview_package: str = ""  # 미리보기를 만든 패키지 경로(바뀌면 무효)
-    preview_checked: bool = False  # '미리보기를 확인했습니다'
+    preview_checked: bool = False  # '미리보기에서 덮어쓸 파일을 확인했습니다'
+    bak_understood: bool = False  # '백업 파일(.bak)이 남는다는 것을 이해했습니다'(두 번째 확인)
     final_confirmed: bool = False  # 확인 대화상자에서 '예'
     extra_consent: bool = False  # 규칙 없이 선택 포함된 파일 복원 동의(--allow-extra)
     import_result: Any = None  # api.ImportResult (mode=applied)
