@@ -227,9 +227,11 @@ CL_SAVE_CONFIRM = "다음 위치에 저장합니다:\n{path}\n\n개인 정보 �
 SAVED_TITLE = "저장 완료"
 SAVED_BODY = "저장했습니다:\n{path}"
 CL_GUIDE = (
-    "Windows 앱 설치 도구(winget)로 한 번에 설치할 수 있는 프로그램이 있습니다. 구 PC에서 만든 설정 묶음 파일 안의 programs/winget.json 파일을 "
-    "새 PC로 옮긴 뒤, 명령 프롬프트에서 아래 명령을 직접 실행해 주세요(이 도구가 대신 실행하지는 않습니다):",
-    "winget import -i winget.json --ignore-unavailable --accept-package-agreements --accept-source-agreements",
+    "Windows 앱 설치 도구(winget)로 한 번에 설치할 수 있는 프로그램이 있습니다. 먼저 신 PC의 명령 프롬프트에서 아래 명령으로 "
+    "설정 묶음 파일 안의 프로그램 목록(winget.json)을 꺼내세요(폴더는 아무 곳이나 됩니다):",
+    "pcmigrate winget-extract 설정묶음.zip --output 폴더경로",
+    "그런 다음 꺼낸 winget.json 으로 아래 명령을 직접 실행해 주세요(이 도구가 대신 실행하지는 않습니다):",
+    "winget import -i 폴더경로\\winget.json --ignore-unavailable --accept-package-agreements --accept-source-agreements",
 )
 CL_SUMMARY_INSTALL = "1. 새 PC에서 먼저 설치: 직접 설치 {a}건, 설치 도구로 개별 설치 {b}건 (설치 도구로 한 번에 설치 {c}건은 별도)"
 CL_SUMMARY_LOGIN = "2. 로그인·인증: {n}건"
@@ -239,7 +241,7 @@ CL_SUMMARY_OMITTED = "이 PC에 관련 없는 경고 {n}건은 숨겼습니다('
 CL_SUMMARY_DISC = "자동 목록에 없는 프로그램 {n}개{m} — '자동 목록에 없는 프로그램 확인' 화면에서 직접 고른 것만 설정 묶음 파일에 들어갑니다."
 CL_SUMMARY_DISC_M = ", 설정 폴더 후보 {m}개"
 CL_SUMMARY_LICENSE = "라이선스는 복원되지 않습니다. 모든 항목은 직접 확인해 주세요."
-CL_HIDDEN_MARK = "(이 PC 에서 감지되지 않음)"  # checklist.py 가 붙이는 표시와 같아야 한다(테스트로 확인)
+CL_HIDDEN_MARK = "(이 PC에서 감지되지 않음)"  # checklist.py 가 붙이는 표시와 같아야 한다(테스트로 확인)
 
 # --------------------------------------------------------------------------- 구 PC 4) 설정 묶음 파일 만들기
 EXP_HEADING = TITLES[OLD_EXPORT]
@@ -312,7 +314,8 @@ PREV_PROBLEMS = f"{ICON_FAIL} 설정 묶음 파일에 문제가 있어 복원할
 PREV_OK = f"{ICON_OK} 검사 통과(모든 파일 내용이 정확함)"
 PREV_COLS = ("처리", "복원 위치", "백업 파일(.bak) 위치", "구분")
 PREV_STATUS = {"would_copy": "새로 만듦", "would_overwrite": "덮어씀(백업함)", "skipped_identical": "같음(건너뜀)",
-               "rejected": "복원 안 함(링크)"}
+               "rejected": "복원 안 함(링크)", "denied": "복원 안 함(보안)"}
+PREV_DENIED_NOTE = f"{ICON_WARN} 보안상 복원하지 않는 형식 {{n}}개 · 나머지는 복원됩니다"
 PREV_REJECTED_NOTE = (f"{ICON_WARN} 복원 위치가 바로가기(정션/링크)를 거치는 파일 {{n}}개는 복원되지 않습니다. "
                       "링크를 없애거나 실제 폴더로 바꾼 뒤 다시 시도해 주세요(링크 너머에는 쓰지 않습니다).")
 PREV_KIND_RULE, PREV_KIND_EXTRA = "자동 목록", "직접 고른 항목"
@@ -692,6 +695,13 @@ ERR_API_HOW = "메시지를 확인한 뒤 다시 시도해 주세요. 더 자세
 ERR_API_RULES = "프로그램 설치 폴더 안의 자동 목록 폴더(rules)가 손상됐을 수 있습니다. 설치 폴더를 다시 복사해 주세요."
 ERR_API_PACKAGE = "설정 묶음 파일이 손상됐거나 중간에 바뀐 것 같습니다. 구 PC에서 다시 만들어 복사해 주세요."
 ERR_API_SECRET = "민감한 정보가 포함될 수 있는 항목의 선택을 해제하거나, 내용을 확인한 뒤 이해했다는 표시를 하고 다시 시도해 주세요."
+ERR_EXPORT_LOCK = ("같은 이름의 설정 묶음 파일을 만드는 작업이 이미 실행 중입니다{where}.",
+                   "그 작업이 끝나길 기다리거나, 다른 파일 이름으로 저장해 주세요. 실행 중인 것이 없다면 이 프로그램을 모두 닫고 다시 실행해 주세요.")
+ERR_EXPORT_CHECK_FAILED = ("만든 설정 묶음 파일을 다시 검사했더니 문제가 있어 저장하지 않았습니다. 이 PC의 원본 파일은 그대로입니다.{kept}",
+                           "같은 설정으로 다시 만들면 처음부터 다시 만듭니다. 같은 문제가 반복되면 저장할 드라이브 상태를 확인하고, "
+                           "'문제 보고서 저장'으로 파일을 저장해 담당자에게 보내 주세요.")
+ERR_EXPORT_KEPT = "\n문제를 확인할 수 있도록 임시 파일을 남겨 두었습니다(확인이 끝나면 지워도 됩니다): {path}"
+EXP_DENIED = "보안상 복원하지 않는 형식(실행·스크립트·라이브러리 등) {n}개는 설정 묶음 파일에 넣지 않았습니다. 나머지는 정상으로 들어갔습니다."
 ERR_API_SELECTION = "고른 항목이 이 PC에 없거나 바뀌었습니다. 자동 목록에 없는 프로그램 확인 화면에서 다시 골라 주세요."
 BTN_OPEN_LOG_FOLDER, BTN_COPY_ERROR = "로그 폴더 열기", "오류 내용 복사"
 BTN_OPEN_ERROR_LOG = "오류 로그 열기"

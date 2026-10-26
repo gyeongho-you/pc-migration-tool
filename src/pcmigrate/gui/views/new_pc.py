@@ -72,6 +72,7 @@ class PreviewView(BaseView):
         autowrap(self.summary)
         self.problem_box = tk.Label(self, text="", anchor="w", justify="left", padx=10, pady=6)  # 이 화면의 유일한 안내 상자
         self.problem_box.pack(fill="x", pady=4)
+        self._empty_bg = self.problem_box.cget("bg")
         autowrap(self.problem_box, 40)
         cols = [("status", T.PREV_COLS[0], 130), ("target", T.PREV_COLS[1], 460), ("backup", T.PREV_COLS[2], 250),
                 ("extra", T.PREV_COLS[3], 110)]
@@ -103,12 +104,15 @@ class PreviewView(BaseView):
         self.full = {}
         if p is None:
             self.summary.configure(text=T.PREV_NONE)
+            self.problem_box.configure(text="", bg=self._empty_bg)  # 이전 미리보기의 '검사 통과' 표시가 남지 않게
             self.next_btn.state(["disabled"])
             self.set_next_reason(T.WHY_PREVIEW_FIRST)
             return
         counts = p.summary()
-        self.summary.configure(text=T.PREV_SUMMARY.format(new=counts.get("would_copy", 0), over=counts.get("would_overwrite", 0),
-                                                           same=counts.get("skipped_identical", 0)))
+        text = T.PREV_SUMMARY.format(new=counts.get("would_copy", 0), over=counts.get("would_overwrite", 0),
+                                     same=counts.get("skipped_identical", 0))
+        denied = self.c.denied_note()
+        self.summary.configure(text=text + (f"\n{denied}" if denied else ""))  # 별도 상자 없이 요약 아래 한 줄
         problems = self.c.preview_problems()
         if problems:
             self.problem_box.configure(text=T.PREV_PROBLEMS.format(items="\n".join("• " + x for x in problems[:8])),
@@ -302,7 +306,7 @@ class ResultView(BaseView):
             self.open_btn.state(["disabled"])
             self.bak_btn.state(["disabled"])
             return
-        self.note.configure(text="")
+        self.note.configure(text=self.c.denied_note())
         ok, skipped, failed = self.c.import_counts()
         self.summary.show(ok, skipped, failed, T.RES_ALL_OK, T.RES_IMPORT_FAIL)
 

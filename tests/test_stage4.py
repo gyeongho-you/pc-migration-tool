@@ -131,7 +131,7 @@ def test_render_has_checkboxes_sections_and_winget_guide(fmt):
     cl = build_checklist([("Revit", ["w1"])], [Program("Rhino 8")], wg("a.b"))
     out = render(cl, fmt)
     assert "- [ ] w1 (Revit)" in out and "- [ ] Rhino 8 — 매칭 근거: 없음" in out
-    assert "1. 새 PC 에서 먼저 설치" in out and "--ignore-unavailable" in out
+    assert "1. 새 PC에서 먼저 설치" in out and "--ignore-unavailable" in out
     assert "자동 실행하지 않습니다" in out
 
 

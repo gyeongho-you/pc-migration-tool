@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import tkinter as tk
+from tkinter import font as tkfont
 from tkinter import ttk
 
 from .. import status as ST
@@ -53,11 +54,11 @@ class StatusCard(tk.Frame):
         top = tk.Frame(box, bg=INFO_BG)
         top.pack(fill="x")
         tk.Label(top, text=T.CARD_TITLE, bg=INFO_BG, fg=MUTED_FG).pack(side="left")
-        self.steps_row = tk.Frame(box, bg=INFO_BG)
-        self.steps_row.pack(fill="x")
+        self.steps_row = tk.Frame(top, bg=INFO_BG)  # '작업 현황' 제목과 같은 줄(낮은 창에서 카드가 길어지지 않게)
+        self.steps_row.pack(side="left", padx=(10, 0))
         self.step_labels: list[tk.Label] = []
         self.metrics_row = tk.Frame(box, bg=INFO_BG)
-        self.metrics_row.pack(fill="x", pady=(4, 0))
+        self.metrics_row.pack(fill="x", pady=(2, 0))
         self.metric_values: dict[str, tk.Label] = {}
         for i, key in enumerate((T.CARD_METRIC_FILES, T.CARD_METRIC_BYTES, T.CARD_METRIC_SPEED, T.CARD_METRIC_ELAPSED,
                                  T.CARD_METRIC_ETA)):
@@ -68,13 +69,14 @@ class StatusCard(tk.Frame):
             lbl.pack(anchor="w")
             self.metric_values[key] = lbl
         cur = tk.Frame(box, bg=INFO_BG)
-        cur.pack(fill="x", pady=(6, 0))
+        cur.pack(fill="x", pady=(4, 0))
+        self.cur_row = cur
         tk.Label(cur, text=T.CARD_CURRENT + ":", bg=INFO_BG, fg=MUTED_FG).pack(side="left")
         self.current = tk.Label(cur, text=T.CARD_CURRENT_NONE, bg=INFO_BG, anchor="w")
         self.current.pack(side="left", padx=(6, 0))
         self.current_tip = Tooltip(self.current, "")
         self.chips_row = tk.Frame(box, bg=INFO_BG)
-        self.chips_row.pack(fill="x", pady=(8, 0))
+        self.chips_row.pack(fill="x", pady=(6, 0))
         self.chips: dict[str, tk.Label] = {}
         self.chip_tips: dict[str, Tooltip] = {}
         for kind in ST.KINDS:
@@ -84,9 +86,10 @@ class StatusCard(tk.Frame):
             self.chips[kind] = chip
             self.chip_tips[kind] = Tooltip(chip, "")
         self.resumed = tk.Label(box, text="", bg=INFO_BG, fg=OK_FG, anchor="w", justify="left")
-        self.resumed.pack(fill="x", pady=(6, 0))
-        self.problem = tk.Label(box, text="", anchor="w", justify="left", padx=8, pady=4)
-        self.problem.pack(fill="x", pady=(8, 0))
+        self.resumed.pack(fill="x", pady=(4, 0))
+        self.problem = tk.Label(box, text="", anchor="w", justify="left", padx=8, pady=2)
+        self.problem.pack(fill="x", pady=(6, 0))
+        self._problem_shown = True
         autowrap(self.problem, 30)
         self.last = tk.Label(box, text="", bg=INFO_BG, fg=MUTED_FG, anchor="w", justify="left")
         self.last.pack(fill="x", pady=(4, 0))
@@ -145,7 +148,7 @@ class StatusCard(tk.Frame):
             self.bar.configure(value=snap.fraction * 100)
         for name, value in snap.metrics:
             self.metric_values[name].configure(text=value)
-        self.current.configure(text=snap.current_short)
+        self.current.configure(text=self._fit_path(snap.current, snap.current_short))
         self.current_tip.text = snap.current
         for chip in snap.chips:
             bg, fg = CHIP_COLORS[chip.level]
@@ -156,8 +159,33 @@ class StatusCard(tk.Frame):
         self.resumed.configure(text=snap.resumed_line)
         bg, fg = (DANGER_BG, DANGER_FG) if snap.has_problem else (OK_BG, OK_FG)
         self.problem.configure(text=f"{T.CARD_PROBLEM_LABEL} {snap.problem_line}", bg=bg, fg=fg)
+        # 문제가 있으면 위쪽 한 줄과 같은 내용이라 자세히 안에서는 숨긴다(낮은 창에서 카드 높이를 아낀다). 문제가 없을 때만 '없음'을 보여 준다
+        want_problem = not snap.has_problem
+        if want_problem != self._problem_shown:
+            if want_problem:
+                self.problem.pack(fill="x", pady=(6, 0), before=self.last)
+            else:
+                self.problem.pack_forget()
+            self._problem_shown = want_problem
         self.problem_flag.configure(text=snap.problem_line if snap.has_problem else "")  # 문제가 있으면 기본 줄에도 한 줄로 알린다
         self.last.configure(text=f"{T.CARD_LAST}: {snap.last_message}")
+
+    def _fit_path(self, full: str, short: str) -> str:
+        """지금 처리 중인 경로를 카드 너비에 맞게 가운데 말줄임한다(좁은 창에서 파일 이름이 잘리지 않게)."""
+        if not full:
+            return short
+        try:
+            avail = self.cur_row.winfo_width() - 130
+            if avail < 120:
+                return short
+            font = tkfont.nametofont(str(self.current.cget("font")))
+            limit = len(full)
+            while limit > 24 and font.measure(T.ellipsize_path(full, limit)) > avail:
+                limit -= 4
+            fitted = T.ellipsize_path(full, limit)
+            return fitted if len(fitted) <= len(short) or font.measure(short) > avail else short
+        except tk.TclError:
+            return short
 
     def _draw_steps(self, steps: tuple) -> None:
         if len(self.step_labels) != len(steps):

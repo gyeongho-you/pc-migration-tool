@@ -467,6 +467,9 @@ class ExportView(BaseView):
             lines += [T.EXP_RESTART_REASON.format(why=rs["reason"]), ""]
         lines += [T.EXP_RULES.format(rules=", ".join(r["id"] for r in m["rules"]) or T.EXP_NO_RULES),
                   T.EXP_COUNTS.format(files=len(m["files"]), skipped=len(m["skipped"]), failed=failed)]
+        n_denied = sum(1 for s in m["skipped"] if s.get("denied"))
+        if n_denied:
+            lines.append(f"{T.ICON_WARN} " + T.EXP_DENIED.format(n=n_denied))
         lines += [T.friendly_detail(x) for x in unreadable_lines([f for f in m["failed"] if f.get("reason")], 5)]
         lines += [f"  - {f['src']}: {T.friendly_detail(f['error'])}" for f in m["failed"] if not f.get("reason")][:20]
         lines += ["", T.EXP_TODO]

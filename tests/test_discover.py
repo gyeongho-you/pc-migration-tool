@@ -482,7 +482,7 @@ def test_checklist_section_summary_only_and_optional():
     assert "규칙 없는 프로그램(요약)" in out and "설정 폴더 후보 9개" in out and "자동으로 백업/복원되지 않으며" in out
     assert "규칙 없는 프로그램(요약)" not in render_checklist(build_checklist([], [Program("a")], []))
     pkg = render_checklist(build_checklist([], [Program("a")], [], discovery=(4, None)))
-    assert "구 PC 에서 discover 로 확인" in pkg
+    assert "구 PC에서 discover 로 확인" in pkg
 
 
 def test_checklist_package_mode_prints_program_count(env, tmp_path, monkeypatch, capsys):

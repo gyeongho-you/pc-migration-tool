@@ -166,7 +166,7 @@ def test_omitted_summary_line_and_all_option():
     assert "Autodesk 계열" not in out
     cl_all = build_checklist([], reg, wg("a.b"), show_all=True)
     out_all = render(cl_all)
-    assert "Autodesk 계열" in out_all and "(이 PC 에서 감지되지 않음)" in out_all
+    assert "Autodesk 계열" in out_all and "(이 PC에서 감지되지 않음)" in out_all
     assert "생략" not in out_all
     assert cl_all.omitted == []
 
@@ -192,7 +192,7 @@ def test_sections_order_summary_and_counts():
     reg = [P("Google Chrome"), P("Rhino 8"), P("LG Update"), P("Microsoft Office Standard 2016", "16.0")]
     cl = build_checklist([], reg, wg("Acme.Widget"))
     out = render(cl)
-    idx = [out.index(h) for h in ("요약", "1. 새 PC 에서 먼저 설치", "2. 로그인·인증", "3. 데이터 복사/기타", "참고")]
+    idx = [out.index(h) for h in ("요약", "1. 새 PC에서 먼저 설치", "2. 로그인·인증", "3. 데이터 복사/기타", "참고")]
     assert idx == sorted(idx)
     assert f"수동 설치 {len(cl.install)}건" in out and "winget 개별 설치 1건" in out
     assert f"2. 로그인·인증: {len(cl.login)}건" in out and "참고(설치 불필요 추정): 1건" in out

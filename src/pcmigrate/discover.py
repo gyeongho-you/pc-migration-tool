@@ -181,7 +181,7 @@ def _list_root(root: Root, expand: Expand) -> list[tuple[Root, Path, os.DirEntry
 # --------------------------------------------------------------------------- 프로그램 연결
 
 _TRAILING = re.compile(r"[\d.\-_ ]+$")
-_VERSION_STRIP = re.compile(r"v?\d+(\.\d+)+|(x64|x86|64-?bit|32-?bit)")
+_VERSION_STRIP = re.compile(r"\bv?\d+(\.\d+)+\b|\b(x64|x86|64-?bit|32-?bit)\b")
 _PAREN_STRIP = re.compile(r"\([^)]*\)")
 
 

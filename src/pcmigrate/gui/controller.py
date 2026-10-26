@@ -124,9 +124,25 @@ def _api_how(message: str) -> str:
     return T.ERR_API_HOW
 
 
+def _export_error_texts(message: str) -> tuple[str, str] | None:
+    """내보내기 때 자주 만나는 두 가지(같은 이름으로 이미 실행 중 / 만든 파일 재검사 실패)를 쉬운 말로 바꾼다."""
+    if "내보내기가 이미 실행 중" in message:
+        what, how = T.ERR_EXPORT_LOCK
+        m = re.search(r"같은 출력 파일\((.+?)\)", message)
+        return what.format(where=f"({m.group(1)})" if m else ""), how
+    if ".part.failed" in message or "다시 검사했더니 문제가 있어" in message:
+        what, how = T.ERR_EXPORT_CHECK_FAILED
+        m = re.search(r"임시 파일을 (.+?) 로 보존", message)
+        return what.format(kept=T.ERR_EXPORT_KEPT.format(path=m.group(1)) if m else ""), how
+    return None
+
+
 def friendly_error(exc: BaseException, tb: str = "") -> FriendlyError:
     """예외를 '무엇이 잘못됐는지 / 어떻게 하면 되는지' 두 줄로. traceback 은 detail 에만 둔다."""
     if isinstance(exc, real_api.ApiError):
+        special = _export_error_texts(exc.message)
+        if special:
+            return FriendlyError(T.ERR_TITLES["api"], special[0], special[1], tb)
         what = T.friendly_detail("\n".join([*exc.lines, exc.message]))
         return FriendlyError(T.ERR_TITLES["api"], what, _api_how(exc.message), tb)
     if isinstance(exc, DriveDisconnected):
@@ -683,10 +699,19 @@ class Controller:
         p = self.state.preview
         return sum(1 for it in p.plan.items if it.get("status") == "rejected") if p else 0
 
+    def preview_denied_count(self) -> int:
+        p = self.state.preview
+        return len(p.denied) if p else 0
+
     def preview_lines(self) -> list[str]:
         """미리보기 화면 위쪽 안내(복원되지 않을 항목)."""
         n = self.preview_rejected_count()
         return [T.PREV_REJECTED_NOTE.format(n=n)] if n else []
+
+    def denied_note(self) -> str:
+        """보안상 복원하지 않는 형식이 있으면 한 줄 안내(미리보기 요약/결과 화면 공용). 없으면 빈 문자열."""
+        n = self.preview_denied_count() if self.state.preview else self.import_summary().get("denied", 0)
+        return T.PREV_DENIED_NOTE.format(n=n) if n else ""
 
     def preview_problems(self) -> list[str]:
         p = self.state.preview
@@ -758,7 +783,7 @@ class Controller:
             return {}
         rep = r.report
         counts = rep.to_dict()["summary"]
-        return {"counts": counts, "rejected": counts.get("rejected", 0),
+        return {"counts": counts, "rejected": counts.get("rejected", 0), "denied": counts.get("denied", 0),
                 "failures": [(f.dst, T.friendly_detail(f.error)) for f in rep.failures],
                 "backups": [x.backup for x in rep.results if x.backup],
                 "warnings": [(w.get("name", ""), i) for w in r.plan.warnings for i in w.get("items", [])]}
@@ -771,7 +796,8 @@ class Controller:
     def import_counts(self) -> tuple[int, int, int]:
         """(성공, 건너뜀, 실패)"""
         c = self.import_summary().get("counts", {})
-        return c.get("copied", 0), c.get("skipped_identical", 0), c.get("failed", 0) + c.get("rejected", 0)
+        return (c.get("copied", 0), c.get("skipped_identical", 0) + c.get("denied", 0),
+                c.get("failed", 0) + c.get("rejected", 0))
 
     # ------------------------------------------------------------------ 대용량 복사: 방식/단계
     def set_transfer_flow(self, mode: str, stage: int = 1) -> None:

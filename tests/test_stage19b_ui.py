@@ -46,7 +46,7 @@ def test_pc_particles_are_attached_and_polite_phrases_unified():  # U-15
     import re
     from pcmigrate.gui.texts import HELP, TITLES
     blob = "\n".join(t for n in dir(T) if n.isupper() for t in _flat(getattr(T, n)))
-    assert not re.search(r"PC (에|로|의|를|가|는|도|와|만|까지|은|이)(?![가-힣])", blob.replace("(이 PC 에서 감지되지 않음)", ""))
+    assert not re.search(r"PC (에|로|의|를|가|는|도|와|만|까지|은|이)(?![가-힣])", blob)
     assert "하세요" not in blob and "고르세요" not in blob and "누르세요" not in blob
     assert HELP and TITLES
 

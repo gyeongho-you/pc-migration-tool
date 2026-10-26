@@ -1,6 +1,6 @@
 """수동 작업 체크리스트: 규칙의 manual_warnings + 공통 '자동 복원 불가' 항목 + winget 설치 분류.
 
-구성: 요약 / 1. 새 PC 에서 먼저 설치 / 2. 로그인·인증 / 3. 데이터 복사·기타 / 참고(설치 불필요 추정).
+구성: 요약 / 1. 새 PC에서 먼저 설치 / 2. 로그인·인증 / 3. 데이터 복사·기타 / 참고(설치 불필요 추정).
 이 모듈은 안내문만 만든다. winget import 등은 절대 자동 실행하지 않는다.
 데이터 표(공통 경고, 번들 패턴, 대표 앱)는 checklist_data.py 에 있다.
 """
@@ -332,7 +332,7 @@ def build_checklist(rule_warnings: list[tuple[str, list[str]]], registry: list[P
     for item in shown:
         line = item.text
         if item.id not in detected:
-            line += " (이 PC 에서 감지되지 않음)"
+            line += " (이 PC에서 감지되지 않음)"
         (cl.login if item.phase == "login" else cl.data).append(line)
 
     cl.winget_available = bool(winget)
@@ -361,9 +361,9 @@ def build_checklist(rule_warnings: list[tuple[str, list[str]]], registry: list[P
 def _summary_lines(cl: Checklist) -> list[str]:
     inst = len(cl.install) + len(cl.winget_cmd)
     return [
-        f"- 1. 새 PC 에서 먼저 설치: 수동 설치 {len(cl.install)}건, winget 개별 설치 {len(cl.winget_cmd)}건 "
+        f"- 1. 새 PC에서 먼저 설치: 수동 설치 {len(cl.install)}건, winget 개별 설치 {len(cl.winget_cmd)}건 "
         f"(winget import 로 자동 설치 {len(cl.winget_auto)}건 별도)" if inst or cl.winget_auto
-        else "- 1. 새 PC 에서 먼저 설치: 0건",
+        else "- 1. 새 PC에서 먼저 설치: 0건",
         f"- 2. 로그인·인증: {len(cl.login)}건",
         f"- 3. 데이터 복사/기타: {len(cl.data)}건",
         f"- 참고(설치 불필요 추정): {len(cl.reference)}건",
@@ -383,7 +383,7 @@ def render(cl: Checklist, fmt: str = "text") -> str:
     def checks(items: list[str]) -> None:
         lines.extend(f"- [ ] {i}" for i in items)
 
-    lines.append(h1("1. 새 PC 에서 먼저 설치"))
+    lines.append(h1("1. 새 PC에서 먼저 설치"))
     lines += [("    " + g) if g.startswith(("winget ", "pcmigrate ")) else g for g in WINGET_IMPORT_GUIDE]
     if cl.winget_auto:
         lines.append(f"→ winget import 로 자동 설치되는 앱 {len(cl.winget_auto)}건"
@@ -438,7 +438,7 @@ def render(cl: Checklist, fmt: str = "text") -> str:
     if cl.discovery is not None:
         n, m = cl.discovery
         lines.append(h1("규칙 없는 프로그램(요약)"))
-        extra = f", 설정 폴더 후보 {m}개" if m is not None else " (폴더 후보는 구 PC 에서 discover 로 확인)"
+        extra = f", 설정 폴더 후보 {m}개" if m is not None else " (폴더 후보는 구 PC에서 discover 로 확인)"
         lines.append(f"규칙 없는 설치 프로그램 {n}개{extra} — pcmigrate discover 로 확인하세요.")
         lines.append("규칙이 없는 프로그램의 설정은 자동으로 백업/복원되지 않으며 export 에 자동 포함되지도 않습니다. "
                      "필요한 것만 discover --output-selection 으로 골라 export --extra 로 포함하세요.")

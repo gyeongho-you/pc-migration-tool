@@ -1067,7 +1067,7 @@ def _verify_phase(report: Report, entries, scan: ScanInfo, dst: Path, state: Sta
             tracker.total_bytes = max(0, tracker.total_bytes - size * expected_reads(entry))
         elif strict and res.status == VERIFIED and _state_conflict(state, rel, size, mtime, res.sha256):
             res.status, res.reason = MISMATCH, "state_conflict"
-            res.error = "상태 파일의 검사 해시와 원본이 어긋남(크기/수정시각은 동일)"
+            res.error = "상태 파일의 검사 기록과 원본이 어긋남(크기/수정시각은 동일)"
         if not was_resumed:
             if res.status == PENDING_VERIFY:
                 state.record(rel, size, mtime, res.sha256, False, "pending")
@@ -1094,7 +1094,7 @@ def _verify_phase(report: Report, entries, scan: ScanInfo, dst: Path, state: Sta
     if unmatched_manifest:
         for rel, (size, sha) in unmatched_manifest.items():
             report.results.append(FileResult(f"[목록] {rel}", _join(dst_root, rel), MISSING, size, sha, reason="missing_in_source",
-                                             error="해시 목록에는 있지만 원본(외장 드라이브)에 이 파일이 없습니다. 복사가 덜 됐을 수 있습니다."))
+                                             error="검사 목록에는 있지만 원본(외장 드라이브)에 이 파일이 없습니다. 복사가 덜 됐을 수 있습니다."))
     report.meta["resumed_skipped"] = resumed[0]
     report.meta["trusted_state_files"] = resumed[0]  # 상태 파일의 이전 검사 결과를 믿고 다시 읽지 않은 파일 수(내용까지 다시 보려면 --strict)
     emit(True)

@@ -90,11 +90,11 @@ def unreadable_lines(items: list[dict], limit: int = 5) -> list[str]:
     """'읽지 못해 제외된 파일 N개' 안내(예시 경로는 limit 개까지). 없으면 빈 목록."""
     if not items:
         return []
-    lines = [f"[주의] 읽지 못해 제외된 파일 {len(items)}개 — 사용 중인 파일이라 패키지에 넣지 못했습니다"
+    lines = [f"[주의] 읽지 못해 제외된 파일 {len(items)}개 — 사용 중인 파일이라 설정 묶음 파일에 넣지 못했습니다"
              "(예: Chrome 같은 프로그램이 실행 중이면 닫고 다시 하세요)."]
     lines += [f"  - {f['src']}" for f in items[:limit]]
     if len(items) > limit:
-        lines.append(f"  … 외 {len(items) - limit}개(전체 목록은 패키지의 manifest 'failed' 항목에 있습니다)")
+        lines.append(f"  … 외 {len(items) - limit}개(전체 목록은 설정 묶음 파일 안의 목록 파일(manifest) 'failed' 항목에 있습니다)")
     return lines
 
 
@@ -439,7 +439,7 @@ def prepare_extras(extra: str | Path | None, allow_secrets: bool,
     if risky and not allow_secrets:
         lines = [f"비밀 정보 가능성: {it.path} ({', '.join(names) if names else '비밀 정보 검사를 끝내지 못함'})"
                  for it, names in risky]
-        raise ApiError("비밀 정보(키, 토큰, 쿠키, 비밀번호 등)가 들어 있을 수 있는 항목이 선택되었습니다. 패키지는 만들지 않았습니다. "
+        raise ApiError("비밀 정보(키, 토큰, 쿠키, 비밀번호 등)가 들어 있을 수 있는 항목이 선택되었습니다. 설정 묶음 파일은 만들지 않았습니다. "
                        "정말 포함하려면 내용을 확인한 뒤 --allow-secrets 를 붙여 다시 실행하세요.", lines=lines)
     return ExtraPrep(items, len(risky))
 
