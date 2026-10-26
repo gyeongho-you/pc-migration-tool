@@ -21,7 +21,7 @@ from typing import Callable, Iterator
 
 from . import __version__, failure
 from .cancel import Cancelled
-from .copier import (EXTRA, FAILED, MISMATCH, MISSING, VERIFIED, FileResult, IoStats, Report, sha256_file)
+from .copier import (EXTRA, FAILED, MISMATCH, MISSING, VERIFIED, FileResult, IoStats, Report, missing_dest, sha256_file)
 from .engine import clamp_workers, run_ordered
 from .fs import long_path
 from .progress import OK, ProgressInfo, ProgressTracker, categorize, format_info
@@ -247,13 +247,9 @@ def _check_row(row: dict, target: str, chunk: int | None, cancel, on_bytes, stat
         try:
             size = os.stat(long_path(dst)).st_size
         except FileNotFoundError:
-            res.status, res.reason = MISSING, failure.MISSING_DEST
-            res.error = failure.REASONS[failure.MISSING_DEST].text.replace("'실패한 것만 다시 시도'로 다시 복사하세요.", "새 PC 로 복사가 덜 됐을 수 있습니다.")
-            return res
+            return missing_dest(res, None, Path(dst), "새 PC 로 복사가 덜 됐을 수 있습니다.")
         if not os.path.isfile(long_path(dst)):
-            res.status, res.reason = MISSING, failure.MISSING_DEST
-            res.error = failure.REASONS[failure.MISSING_DEST].text
-            return res
+            return missing_dest(res, None, Path(dst))
         if size != row["size"]:
             res.status, res.reason = MISMATCH, failure.SIZE_MISMATCH
             res.error = f"{failure.REASONS[failure.SIZE_MISMATCH].text} (원본 {row['size']}바이트, 여기 {size}바이트)"
@@ -331,8 +327,16 @@ def verify_against_manifest(manifest: Path | str, target: Path | str, *, workers
     if not complete:
         report.results.append(FileResult(str(manifest), "", FAILED, reason="manifest_incomplete",
                                          error="목록 파일이 끝까지 만들어지지 않았습니다. 구 PC 에서 목록을 다시 만든 뒤 비교하세요."))
+    # 구 PC 에서 읽지 못해 목록에서 빠진 파일(footer.errors)이 있으면 '실패 0'으로 보이면 안 된다(A-5).
+    footer_errors = reader.footer.get("errors") if reader.footer else 0
+    if isinstance(footer_errors, int) and not isinstance(footer_errors, bool) and footer_errors > 0:
+        f = failure.REASONS[failure.MANIFEST_ERRORS]
+        report.results.append(FileResult(str(manifest), "", FAILED, reason=f.code,
+                                         error=f"{f.text} (목록에 빠진 파일 {footer_errors}개)"))
+    else:
+        footer_errors = 0
     emit(True)
-    report.meta.update(mode="verify", manifest=str(manifest), target=target, manifest_complete=complete,
+    report.meta.update(mode="verify", manifest_errors=footer_errors, manifest=str(manifest), target=target, manifest_complete=complete,
                        manifest_created=header.get("created", ""), source_root=header.get("source_root", ""),
                        source_layout=header.get("layout", {}), expected_files=len(expected), extra_files=extras,
                        seconds=round(clock() - t0, 2), io=stats.as_dict(), read_only=True)

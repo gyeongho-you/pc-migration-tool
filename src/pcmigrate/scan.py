@@ -24,6 +24,7 @@ FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS = 0x00400000
 CLOUD_ATTR_MASK = FILE_ATTRIBUTE_RECALL_ON_OPEN | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS
 ROOT_FILES_LABEL = "(최상위 파일)"
 MAX_LAYOUT_ENTRIES = 300
+MAX_LINK_PATHS = 200
 
 Entry = tuple[str, int, int]  # (상대 경로 posix, 크기, mtime_ns)
 
@@ -41,6 +42,7 @@ class ScanInfo:
     cloud_bytes: int = 0
     max_size: int = 0
     skipped_links: int = 0
+    skipped_link_paths: list[str] = field(default_factory=list)  # 건너뛴 링크/정션의 상대 경로(앞 MAX_LINK_PATHS 개)
     errors: list[tuple[str, str, str]] = field(default_factory=list)  # (상대 경로, 원인 코드, 쉬운 문구)
     seconds: float = 0.0
     _layout: dict[str, list[int]] = field(default_factory=dict)
@@ -58,6 +60,12 @@ class ScanInfo:
 
     def abs_path(self, rel: str) -> str:
         return os.path.join(self.root, *rel.split("/"))
+
+
+def _note_link(info: "ScanInfo", rel: str) -> None:
+    info.skipped_links += 1
+    if len(info.skipped_link_paths) < MAX_LINK_PATHS:
+        info.skipped_link_paths.append(rel)
 
 
 def scan_source_info(src: Path | str, attr_getter: Callable[[Path], int] | None = None,
@@ -89,13 +97,13 @@ def scan_source_info(src: Path | str, attr_getter: Callable[[Path], int] | None 
                 continue
             try:
                 if e.is_symlink():
-                    info.skipped_links += 1
+                    _note_link(info, rel)
                     continue
                 st = e.stat(follow_symlinks=False)
                 attrs = getattr(st, "st_file_attributes", 0)
                 if e.is_dir(follow_symlinks=False):
                     if attrs & FILE_ATTRIBUTE_REPARSE_POINT:  # 정션(robocopy /XJ 와 같은 기준)
-                        info.skipped_links += 1
+                        _note_link(info, rel)
                     else:
                         subdirs.append((os.path.join(path, e.name), rel))
                     continue

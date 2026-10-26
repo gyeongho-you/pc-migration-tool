@@ -32,8 +32,8 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Callable
 
 from .envpaths import expand_env
-from . import __version__, failure
-from .copier import (COPIED, FAILED, SKIPPED_SAME, WOULD_COPY, WOULD_OVERWRITE,
+from . import __version__, failure, fs
+from .copier import (COPIED, FAILED, REJECTED, SKIPPED_SAME, WOULD_COPY, WOULD_OVERWRITE,
                      FileResult, Report, _backup_path, copy_file, sha256_file)
 from .detect import Program
 from .discover_data import EXTRA_ROOTS, RESTORE_DENY_SUBSTRINGS, ROOTS
@@ -53,6 +53,21 @@ GLOBAL_EXCLUDE = RESTORE_EXCLUDE + LOCK_NAMES
 SPOOL_MAX = 64 * 1024 * 1024  # 이보다 작은 파일은 메모리에 두고, 큰 파일만 임시 폴더의 파일에 둔다
 STAGE_PREFIX = ".pcmigrate-stage-"
 WILDCARD = set("*?[")
+# 압축 폭탄/거대 패키지 방어(B-5). deflate 는 압축비가 약 1000:1 을 넘을 수 없으므로 압축 방식을 제한하고 선언 크기를 지킨다.
+MAX_MANIFEST_BYTES = 256 * 1024 * 1024
+MAX_ENTRIES = 1_000_000
+ALLOWED_COMPRESSION = (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED)
+# 복원 거부 목록(B-1/B-7/F-1): 규칙/extra 모두에 적용한다. 다음 로그인/실행 때 코드가 실행될 수 있는 파일들이다.
+# 확장자는 규칙 path 의 마지막 패턴이 그 확장자를 직접 적어 둔 경우(예: "*.exe")에만 그 규칙에서 허용한다.
+DENY_EXTENSIONS = frozenset({".exe", ".scr", ".com", ".pif", ".bat", ".cmd", ".ps1", ".psm1", ".psd1", ".ps1xml", ".vbs",
+                             ".vbe", ".js", ".jse", ".wsf", ".wsh", ".hta", ".lnk", ".url", ".reg", ".msi", ".msp", ".cpl"})
+# 셸/SSH 가 시작할 때 읽어 실행하는 설정(소문자 파일 이름 / 폴더 이름)
+DENY_FILE_NAMES = frozenset({".bashrc", ".bash_profile", ".bash_login", ".bash_logout", ".profile", ".zshrc", ".zprofile",
+                             ".zshenv", ".zlogin", ".cshrc", ".kshrc", "authorized_keys"})
+# .ssh 아래에서는 개인키가 아니라 접속 때 명령을 실행시킬 수 있는 파일(ProxyCommand 등)만 막는다
+SSH_DENY_FILES = frozenset({"config", "rc", "environment", "authorized_keys2"})
+_DEVICE_NAMES = frozenset({"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))})
+_BAD_CHARS = set('<>"|?*')
 
 Expand = Callable[[str], str]
 
@@ -98,6 +113,18 @@ def split_rule_path(path: str) -> tuple[str, str] | None:
     return str(PureWindowsPath(*parts[:idx])), "/".join(parts[idx:])
 
 
+def _bad_component(part: str) -> bool:
+    """Windows 에서 그 이름 그대로 만들 수 없거나 다른 파일로 바뀌는 경로 요소(예약 장치 이름, 끝의 점/공백, 제어/금지 문자)."""
+    if part != part.rstrip(" .") or any(ord(c) < 32 or c in _BAD_CHARS for c in part):
+        return True
+    return part.split(".", 1)[0].rstrip(" ").upper() in _DEVICE_NAMES
+
+
+def unsafe_name(rel: str) -> bool:
+    """상대 경로(posix)의 어느 요소라도 Windows 에서 쓸 수 없는 이름이면 True."""
+    return any(_bad_component(p) for p in PurePosixPath(rel).parts)
+
+
 def _safe_rel(rel: str) -> PurePosixPath:
     """패키지/manifest 의 상대 경로 검증. 위반 시 PackageError."""
     if not rel or "\\" in rel or ":" in rel or rel.startswith("/"):
@@ -105,6 +132,8 @@ def _safe_rel(rel: str) -> PurePosixPath:
     p = PurePosixPath(rel)
     if any(part in ("", ".", "..") for part in p.parts):
         raise PackageError(f"안전하지 않은 경로: {rel!r}")
+    if unsafe_name(rel):
+        raise PackageError(f"Windows 에서 쓸 수 없는 이름이 들어 있음: {rel!r}")
     return p
 
 
@@ -123,6 +152,7 @@ def _usable_base(base_path: Path) -> bool:
 
 def _excluded(name: str, rule: Rule | None, base: tuple | None = None) -> bool:
     extra = rule.exclude if rule is not None else ()
+    name = name.rstrip(" .")  # Windows 는 이름 끝의 점/공백을 지우므로 "x.lic " 도 x.lic 와 같다(F-9)
     return any(fnmatch.fnmatch(name.lower(), pat.lower()) for pat in (GLOBAL_EXCLUDE if base is None else base) + extra)
 
 
@@ -135,6 +165,22 @@ class Item:
     rule_id: str
     base: str  # 미확장 base (예: %APPDATA%\Autodesk)
     rel: str   # base 기준 상대 경로(posix)
+
+
+def _walk_files_no_links(top: Path, files: list[Path], skipped: list[dict], rule_id: str) -> None:
+    """top 아래 파일을 모은다. 정션/심볼릭 링크 폴더(reparse point)는 들어가지 않고 건너뛴 기록을 남긴다."""
+    for root, dirs, names in os.walk(top, followlinks=False):
+        dirs.sort()
+        keep = []
+        for d in dirs:
+            dp = Path(root) / d
+            if fs.is_reparse(dp):
+                skipped.append({"rule": rule_id, "path": str(dp), "reason": "심볼릭 링크/정션은 따라가지 않음"})
+            else:
+                keep.append(d)
+        dirs[:] = keep
+        for n in sorted(names):
+            files.append(Path(root) / n)
 
 
 def collect_items(rule: Rule, expand: Expand = expand_env
@@ -158,23 +204,24 @@ def collect_items(rule: Rule, expand: Expand = expand_env
             skipped.append({"rule": rule.id, "path": pr.path, "reason": "경로가 없음"})
             continue
         for m in matches:
-            if m.is_symlink():
-                skipped.append({"rule": rule.id, "path": str(m), "reason": "심볼릭 링크/정션은 따라가지 않음"})
+            link = fs.reparse_in_chain(base_path, m)  # 일치한 경로 자신과 그 위쪽 폴더(base 아래)가 링크/정션인지
+            if link:
+                skipped.append({"rule": rule.id, "path": link, "reason": "심볼릭 링크/정션은 따라가지 않음"})
                 continue
             files: list[Path] = []
             if m.is_file():
                 files = [m]
             else:
-                for root, dirs, names in os.walk(m, followlinks=False):
-                    dirs.sort()
-                    for n in sorted(names):
-                        files.append(Path(root) / n)
+                _walk_files_no_links(m, files, skipped, rule.id)
             for f in files:
                 if f.is_symlink() or _excluded(f.name, rule):
                     skipped.append({"rule": rule.id, "path": str(f),
                                     "reason": "제외 대상(라이선스/임시/링크)"})
                     continue
                 rel = f.relative_to(base_path).as_posix()
+                if unsafe_name(rel):
+                    skipped.append({"rule": rule.id, "path": str(f), "reason": "Windows 에서 쓸 수 없는 이름(예약 이름, 끝의 점/공백 등)"})
+                    continue
                 if pr.kind == "file" and not has_glob:
                     arc = f"data/{pr.dest}"
                 else:
@@ -191,17 +238,21 @@ def collect_extra_items(extras: list, expand: Expand = expand_env) -> tuple[list
     for ex in extras:
         top = Path(ex.path)
         files: list[Path] = []
+        if top.is_symlink() or (top.is_dir() and fs.is_reparse(top)):
+            skipped.append({"rule": EXTRA_ID, "path": str(top), "reason": "심볼릭 링크/정션은 따라가지 않음"})
+            continue
         if top.is_file():
             files = [top]
         else:
-            for root, dirs, names in os.walk(top, followlinks=False):
-                dirs.sort()
-                files.extend(Path(root) / n for n in sorted(names))
+            _walk_files_no_links(top, files, skipped, EXTRA_ID)
         for f in files:
             if f.is_symlink() or _excluded(f.name, None):
                 skipped.append({"rule": EXTRA_ID, "path": str(f), "reason": "제외 대상(라이선스/임시/링크)"})
                 continue
             rel = ex.rel if f == top else f"{ex.rel}/{f.relative_to(top).as_posix()}"
+            if unsafe_name(rel):
+                skipped.append({"rule": EXTRA_ID, "path": str(f), "reason": "Windows 에서 쓸 수 없는 이름(예약 이름, 끝의 점/공백 등)"})
+                continue
             items.append(Item(f"data/{EXTRA_ID}/{keys[ex.root]}/{rel}", f, EXTRA_ID, ex.root, rel))
     return items, skipped
 
@@ -368,13 +419,16 @@ def export_package(rules: list[Rule], out: Path, programs: list[Program],
 
 # --------------------------------------------------------------------------- import
 
-def _hash_entry(zf: zipfile.ZipFile, name: str) -> tuple[int, str]:
+def _hash_entry(zf: zipfile.ZipFile, name: str, limit: int | None = None) -> tuple[int, str]:
+    """엔트리를 끝까지 읽어 (크기, sha256). limit 보다 많이 나오면 거기서 멈춘다(선언 크기보다 큰 엔트리/압축 폭탄 방어)."""
     h = hashlib.sha256()
     n = 0
     with zf.open(name) as f:
         while chunk := f.read(CHUNK):
             h.update(chunk)
             n += len(chunk)
+            if limit is not None and n > limit:
+                break
     return n, h.hexdigest()
 
 
@@ -418,18 +472,32 @@ def verify_package(path: Path) -> tuple[dict | None, list[str]]:
     except (zipfile.BadZipFile, OSError) as e:
         return None, [f"zip 을 열 수 없음: {e}"]
     with zf:
-        names = [i.filename for i in zf.infolist()]
+        infos = zf.infolist()
+        names = [i.filename for i in infos]
+        if len(names) > MAX_ENTRIES:
+            return None, [f"패키지에 엔트리가 너무 많습니다({len(names):,}개 > {MAX_ENTRIES:,}개). 손상되었거나 안전하지 않은 패키지입니다"]
         for n in names:  # 모든 엔트리가 패키지 루트 밖으로 나가지 않는지
             try:
                 _safe_rel(n.rstrip("/") if n.endswith("/") else n)
             except PackageError:
                 problems.append(f"경로 탈출/비정상 엔트리: {n!r}")
+        if len(set(names)) != len(names):  # 같은 이름이 두 번 있으면 어느 쪽이 검사되고 어느 쪽이 풀리는지 알 수 없다
+            problems.append("패키지에 같은 이름의 엔트리가 중복되어 있음")
+        for i in infos:
+            if i.compress_type not in ALLOWED_COMPRESSION:
+                problems.append(f"지원하지 않는 압축 방식(안전을 위해 거부): {i.filename!r}")
         if problems:
             return None, problems
         if MANIFEST not in names:
             return None, [f"{MANIFEST} 없음"]
+        if zf.getinfo(MANIFEST).file_size > MAX_MANIFEST_BYTES:
+            return None, [f"manifest 가 너무 큽니다(> {MAX_MANIFEST_BYTES // 1024 // 1024}MB). 안전하지 않은 패키지입니다"]
         try:
-            manifest = json.loads(zf.read(MANIFEST).decode("utf-8"))
+            with zf.open(MANIFEST) as mf_:
+                raw = mf_.read(MAX_MANIFEST_BYTES + 1)  # 헤더가 거짓이어도 상한까지만 읽는다
+            if len(raw) > MAX_MANIFEST_BYTES:
+                return None, ["manifest 가 너무 큽니다. 안전하지 않은 패키지입니다"]
+            manifest = json.loads(raw.decode("utf-8"))
         except (ValueError, RecursionError, zipfile.BadZipFile, zlib.error, RuntimeError, NotImplementedError,
                 OSError) as e:  # UnicodeDecodeError 는 ValueError, 깊게 중첩된 JSON 은 RecursionError
             return None, [f"manifest 오류: {type(e).__name__}"]
@@ -448,12 +516,18 @@ def verify_package(path: Path) -> tuple[dict | None, list[str]]:
                 problems.append(f"manifest 항목 오류: {str(f)[:80]}")
                 continue
             arc, size, digest = f["arc"], f["size"], f["sha256"]
+            if arc in listed:
+                problems.append(f"manifest 에 같은 패키지 경로가 중복됨: {arc}")
+                continue
             listed.add(arc)
             if arc not in names:
                 problems.append(f"패키지에 없음: {arc}")
                 continue
+            if zf.getinfo(arc).file_size != size:  # 선언과 다른 크기는 읽기 전에 거른다(거대 엔트리를 해시하느라 시간/디스크를 쓰지 않게)
+                problems.append(f"크기/해시 불일치: {arc}")
+                continue
             try:
-                n, h = _hash_entry(zf, arc)
+                n, h = _hash_entry(zf, arc, size)
             except (zipfile.BadZipFile, zlib.error, RuntimeError, NotImplementedError, OSError):
                 problems.append(f"엔트리를 읽을 수 없음(손상): {arc}")
                 continue
@@ -464,6 +538,47 @@ def verify_package(path: Path) -> tuple[dict | None, list[str]]:
         for e in sorted(extra):
             problems.append(f"manifest 에 없는 엔트리: {e}")
     return manifest, problems
+
+
+def rel_matches_rule(rule: Rule, base: str, rel: str) -> bool:
+    """복원하려는 rel(base 기준 posix 경로)이 규칙에 선언된 path 패턴 안에 드는지(B-1).
+
+    규칙 path 는 base + 패턴(요소별 glob). dir 은 패턴에 맞는 폴더 아래의 모든 파일, file 은 패턴에 맞는 파일 자신만 허용한다.
+    """
+    parts = rel.split("/")
+    for pr in rule.paths:
+        sp = split_rule_path(pr.path)
+        if sp is None or sp[0] != base:
+            continue
+        pat = sp[1].split("/")
+        if len(parts) < len(pat) or (pr.kind == "file" and len(parts) != len(pat)):
+            continue
+        if all(fnmatch.fnmatch(a.lower(), b.lower()) for a, b in zip(parts, pat)):
+            return True
+    return False
+
+
+def _rule_names_extension(rule: Rule | None, base: str, ext: str) -> bool:
+    """규칙 path 의 마지막 패턴이 그 확장자를 직접 적어 둔 경우(예: '*.exe')."""
+    for pr in (rule.paths if rule is not None else ()):
+        sp = split_rule_path(pr.path)
+        if sp and sp[0] == base and sp[1].split("/")[-1].lower().endswith(ext):
+            return True
+    return False
+
+
+def restore_denied(rel: str, target: Path, rule: Rule | None, base: str) -> str | None:
+    """복원이 금지된 파일이면 사유, 아니면 None. 시작 프로그램/쉘 프로필/PowerShell 프로필/실행 파일 확장자 등(규칙/extra 공통)."""
+    low = str(target).lower() + "\\"
+    if any(d in low for d in RESTORE_DENY_SUBSTRINGS):
+        return "복원이 금지된 위치(시작 프로그램/authorized_keys 등)"
+    parts = [x.lower() for x in PurePosixPath(rel).parts]
+    if parts[-1] in DENY_FILE_NAMES or (len(parts) >= 2 and parts[-2] == ".ssh" and parts[-1] in SSH_DENY_FILES):
+        return "복원이 금지된 설정 파일(쉘 시작 파일/SSH 설정)"
+    ext = os.path.splitext(parts[-1])[1]
+    if ext in DENY_EXTENSIONS and not _rule_names_extension(rule, base, ext):
+        return f"실행/스크립트 파일({ext})은 복원하지 않음(PowerShell 프로필 등)"
+    return None
 
 
 @dataclass
@@ -490,12 +605,20 @@ def plan_import(path: Path, rules: list[Rule], expand: Expand = expand_env) -> I
         raise PackageError(f"패키지 검증 실패: manifest 구조가 올바르지 않습니다({type(e).__name__})") from e
 
 
+def _rejected_item(f: dict, target: Path, link: str, is_extra: bool, base_path: Path) -> dict:
+    return {"entry": f["arc"], "target": str(target), "status": REJECTED, "backup": "", "size": f["size"],
+            "base_dir": str(base_path),
+            "sha256": f["sha256"], "extra": is_extra, "reason": failure.LINK_IN_PATH,
+            "error": f"{failure.REASONS[failure.LINK_IN_PATH].text} ({link})"}
+
+
 def _plan_import(path: Path, rules: list[Rule], expand: Expand) -> ImportPlan:
     manifest, problems = verify_package(path)
     plan = ImportPlan(manifest or {}, problems=list(problems))
     if manifest is None or problems:
         return plan
     by_id = {r.id: r for r in rules}
+    seen_targets: set[str] = set()
     allowed = {rid: {split_rule_path(p.path)[0] for p in r.paths if split_rule_path(p.path)}
                for rid, r in by_id.items()}
     for f in manifest["files"]:
@@ -514,11 +637,18 @@ def _plan_import(path: Path, rules: list[Rule], expand: Expand) -> ImportPlan:
         elif base not in allowed[rid]:
             plan.problems.append(f"규칙 {rid} 에 허용되지 않은 복원 위치: {base}")
             continue
+        elif not rel_matches_rule(by_id[rid], base, f["rel"]):
+            plan.problems.append(f"규칙 {rid} 에 선언된 경로 패턴 밖의 파일(복원 거부): {f['rel']}")
+            continue
         base_path = Path(expand(base))
         if not _usable_base(base_path):
             plan.problems.append(f"복원 위치의 환경변수를 확장할 수 없거나 상대 경로임: {base}")
             continue
         target = base_path.joinpath(*PurePosixPath(f["rel"]).parts)
+        link = fs.reparse_in_chain(base_path, target)  # 복원 위치가 링크/정션을 거치면 링크 너머에 쓰게 되므로 따라가지 않는다(F-5)
+        if link:
+            plan.items.append(_rejected_item(f, target, link, is_extra, base_path))
+            continue
         if not _within(target, base_path):
             plan.problems.append(f"복원 대상이 허용 루트 밖: {target}")
             continue
@@ -527,9 +657,15 @@ def _plan_import(path: Path, rules: list[Rule], expand: Expand) -> ImportPlan:
         if _excluded(target.name, None if is_extra else by_id[rid], RESTORE_EXCLUDE):
             plan.problems.append(f"복원 제외 대상(라이선스 등): {f['rel']}")
             continue
-        if is_extra and any(d in str(target).lower() + "\\" for d in RESTORE_DENY_SUBSTRINGS):
-            plan.problems.append(f"복원이 금지된 위치(시작 프로그램/authorized_keys 등): {target}")
+        why = restore_denied(f["rel"], target, None if is_extra else by_id[rid], base)
+        if why:
+            plan.problems.append(f"{why}: {target}")
             continue
+        key = os.path.normcase(str(target))
+        if key in seen_targets:  # 대소문자만 다른 경로 등 같은 파일로 가는 두 항목: 뒤 항목이 앞 항목을 .bak 으로 밀어낸다(B-6)
+            plan.problems.append(f"같은 대상으로 복원되는 중복 항목: {target}")
+            continue
+        seen_targets.add(key)
         backup = ""
         if target.is_file() and target.stat().st_size == f["size"] and sha256_file(target) == f["sha256"]:
             status = SKIPPED_SAME
@@ -540,7 +676,7 @@ def _plan_import(path: Path, rules: list[Rule], expand: Expand) -> ImportPlan:
             status = WOULD_COPY
         plan.items.append({"entry": f["arc"], "target": str(target), "status": status,
                            "backup": backup, "size": f["size"], "sha256": f["sha256"],
-                           "extra": is_extra})
+                           "extra": is_extra, "base_dir": str(base_path)})
     return plan
 
 
@@ -573,19 +709,58 @@ def apply_import(path: Path, plan: ImportPlan,
             if it["status"] == SKIPPED_SAME:
                 done(FileResult(it["entry"], it["target"], SKIPPED_SAME, it["size"], it["sha256"]))
                 continue
+            target = Path(it["target"])
+            link = it["error"] if it["status"] == REJECTED else ""
+            if not link and it.get("base_dir"):  # 계획 이후에 링크가 생겼을 수도 있으니 쓰기 직전에 다시 확인한다
+                found = fs.reparse_in_chain(it["base_dir"], target)
+                link = f"{failure.REASONS[failure.LINK_IN_PATH].text} ({found})" if found else ""
+            if link:
+                done(FileResult(it["entry"], it["target"], REJECTED, it["size"], it["sha256"], error=link,
+                                reason=failure.LINK_IN_PATH))
+                continue
             staged = Path(tmp) / "entry"
             try:
-                with zf.open(it["entry"]) as fin, open(staged, "wb") as fout:
-                    while chunk := fin.read(CHUNK):
-                        fout.write(chunk)
-                res = copy_file(staged, Path(it["target"]))
-                if res.status != FAILED and res.sha256 != it["sha256"]:
-                    res.status, res.error = FAILED, "manifest 해시와 불일치"
-                res.src = it["entry"]
+                bad = _stage_entry(zf, it, staged, tmp)
+                if bad is not None:  # 해시/크기가 다르면 대상은 건드리지 않는다(B-4)
+                    res = bad
+                else:
+                    res = copy_file(staged, target)
+                    if res.status != FAILED and res.sha256 != it["sha256"]:
+                        res.status, res.error = FAILED, "manifest 해시와 불일치"
+                    res.src = it["entry"]
             except OSError as e:
                 res = FileResult(it["entry"], it["target"], FAILED, error=f"{type(e).__name__}: {e}",
                                  reason=failure.classify(e, it["target"]).code)
+            except (KeyError, zipfile.BadZipFile, zlib.error, RuntimeError, NotImplementedError) as e:
+                res = FileResult(it["entry"], it["target"], FAILED, error=f"패키지에서 읽을 수 없음({type(e).__name__}): manifest 해시와 불일치할 수 있음",
+                                 reason=failure.OTHER)
             done(res)
             staged.unlink(missing_ok=True)
     emit(True)
     return report
+
+
+def _stage_entry(zf: zipfile.ZipFile, it: dict, staged: Path, tmp: str) -> FileResult | None:
+    """zip 엔트리를 임시 파일로 풀면서 크기/해시를 계산한다. 선언과 다르면 실패 결과를, 맞으면 None 을 돌려준다.
+
+    선언 크기보다 많이 나오면 거기서 멈춘다. 대상 파일을 바꾸기 전에 확인하므로 검사~적용 사이에 zip 이 바뀌어도 잘못된 파일이 설치되지 않는다.
+    """
+    size = it["size"]
+    free = shutil.disk_usage(tmp).free
+    if free < size:
+        f = failure.REASONS[failure.DISK_FULL]
+        return FileResult(it["entry"], it["target"], FAILED, error=f"{f.text} (임시 폴더 여유 {free}바이트 < 필요 {size}바이트)", reason=f.code)
+    h = hashlib.sha256()
+    n = 0
+    with zf.open(it["entry"]) as fin, open(staged, "wb") as fout:
+        while chunk := fin.read(CHUNK):
+            n += len(chunk)
+            if n > size:
+                break
+            h.update(chunk)
+            fout.write(chunk)
+    if n != size or h.hexdigest() != it["sha256"]:
+        staged.unlink(missing_ok=True)
+        return FileResult(it["entry"], it["target"], FAILED, error="manifest 해시와 불일치(패키지가 검사 뒤에 바뀌었을 수 있음, 대상은 바꾸지 않음)",
+                          reason=failure.MISMATCH)
+    return None

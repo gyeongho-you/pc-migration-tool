@@ -2,12 +2,16 @@
 from __future__ import annotations
 
 import errno
+import os
 import re
 from dataclasses import dataclass
+
+from .fs import long_path
 
 IN_USE, PERMISSION, PATH_TOO_LONG = "in_use", "permission", "path_too_long"
 DISK_FULL, DISCONNECTED, NOT_FOUND, OTHER = "disk_full", "disconnected", "not_found", "other"
 MISMATCH, MISSING_DEST, SIZE_MISMATCH = "mismatch", "missing_dest", "size_mismatch"
+DEST_IS_DIR, LINK_IN_PATH, MANIFEST_ERRORS = "dest_is_dir", "link_in_path", "manifest_errors"
 NET_NOT_FOUND, NET_LOGON, NET_CONFLICT, NET_DENIED = "net_not_found", "net_logon", "net_conflict", "net_denied"
 
 
@@ -49,6 +53,12 @@ REASONS: dict[str, Failure] = {f.code: f for f in (
     Failure(MISMATCH, "내용이 원본과 다릅니다", "'실패한 것만 다시 시도'로 다시 복사하세요."),
     Failure(SIZE_MISMATCH, "크기가 원본과 다릅니다", "'실패한 것만 다시 시도'로 다시 복사하세요."),
     Failure(MISSING_DEST, "대상에 파일이 없습니다", "'실패한 것만 다시 시도'로 다시 복사하세요."),
+    Failure(DEST_IS_DIR, "대상에 같은 이름의 폴더가 있습니다",
+            "그 폴더의 이름을 바꾸거나 옮긴 뒤 '실패한 것만 다시 시도'를 실행하세요(폴더는 도구가 지우지 않습니다)."),
+    Failure(LINK_IN_PATH, "복원 위치가 바로가기(정션/심볼릭 링크)를 거칩니다",
+            "링크 너머의 폴더는 따라가지 않으므로 복원하지 않았습니다. 링크를 없애거나 실제 폴더로 바꾼 뒤 다시 시도하세요."),
+    Failure(MANIFEST_ERRORS, "구 PC 에서 읽지 못해 목록에서 빠진 파일이 있습니다",
+            "구 PC 의 해시 목록 만들기/전송 결과에서 실패한 파일을 확인하고, 해당 파일을 닫은 뒤 다시 복사/목록 만들기를 하세요."),
     # 네트워크(공유 폴더) 접속
     Failure(NET_NOT_FOUND, "공유 폴더를 찾을 수 없습니다",
             "새 PC 의 IP 주소와 공유 이름이 맞는지, 두 PC 가 같은 공유기/스위치(또는 랜선으로 직접)에 연결돼 있는지, "
@@ -78,6 +88,27 @@ def network_failure(code: int) -> Failure | None:
     return REASONS[key] if key else None
 
 
+def _sharing_violation(path: str) -> bool:
+    """Python 의 open() 은 '다른 프로그램이 파일을 잡고 있음'(공유 위반)도 winerror 없는 EACCES 로 알린다. Windows 에서 읽기 전용으로
+    다시 한 번 열어 보며 실제 오류 번호(32/33)를 확인한다. 열리면 False. 파일 내용은 읽지 않고 곧바로 닫는다."""
+    if os.name != "nt" or not path:
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+        k = ctypes.WinDLL("kernel32", use_last_error=True)
+        k.CreateFileW.restype = wintypes.HANDLE
+        k.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID, wintypes.DWORD,
+                                  wintypes.DWORD, wintypes.HANDLE]
+        h = k.CreateFileW(long_path(path), 0x80000000, 7, None, 3, 0, None)
+        if h in (None, wintypes.HANDLE(-1).value, 0xFFFFFFFF, -1):
+            return ctypes.get_last_error() in _WIN_IN_USE
+        k.CloseHandle(h)
+    except Exception:  # 확인용일 뿐이므로 어떤 오류도 '모름'으로 둔다
+        return False
+    return False
+
+
 def classify(exc: BaseException, path: str = "") -> Failure:
     """예외를 원인 분류로 바꾼다. 경로가 260자 이상인데 '없음'이면 경로 길이 문제로 본다."""
     if not isinstance(exc, OSError):
@@ -88,6 +119,8 @@ def classify(exc: BaseException, path: str = "") -> Failure:
     code = exc.errno
     shown = path or (exc.filename if isinstance(getattr(exc, "filename", None), str) else "")
     if win in _WIN_IN_USE:
+        return REASONS[IN_USE]
+    if win is None and isinstance(exc, PermissionError) and _sharing_violation(shown):
         return REASONS[IN_USE]
     if win in _WIN_TOO_LONG or code == errno.ENAMETOOLONG:
         return REASONS[PATH_TOO_LONG]

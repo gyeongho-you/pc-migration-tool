@@ -18,6 +18,7 @@ from typing import Callable
 
 from . import failure
 from .cancel import Cancelled
+from . import fs
 from .fs import long_path
 
 CHUNK = 1024 * 1024  # 읽기 청크(바이트). transfer 에서 벤치마크로 정한 값을 chunk 인자로 넘긴다
@@ -36,7 +37,8 @@ MISSING = "missing"
 CLOUD_ONLY = "cloud_only"  # OneDrive 온디맨드 파일: 기본 건너뜀(실패 아님)
 PENDING_VERIFY = "pending_verify"  # 복사는 끝났고 대상 검사는 새 PC 에서 verify 로 하기로 미룸(실패 아님)
 EXTRA = "extra"  # verify: 목록에 없는 추가 파일(실패 아님, 알림)
-FAIL_STATUSES = (FAILED, MISMATCH, MISSING)
+REJECTED = "rejected"  # 복원 안전 규칙(링크를 거치는 위치 등) 때문에 일부러 복원하지 않은 파일(실패와 같이 센다)
+FAIL_STATUSES = (FAILED, MISMATCH, MISSING, REJECTED)
 
 
 class IoStats:
@@ -137,9 +139,12 @@ class Report:
         counts: dict[str, int] = dict(self.counts)
         for r in self.results:
             counts[r.status] = counts.get(r.status, 0) + 1
-        return {"dry_run": self.dry_run, "summary": counts,
-                "failed_count": len(self.failures), **self.meta,
-                "results": [asdict(r) for r in self.results]}
+        d = {"dry_run": self.dry_run, "summary": counts,
+             "failed_count": len(self.failures), **self.meta,
+             "results": [asdict(r) for r in self.results]}
+        if "verification_complete" in self.meta:  # 검증이 끝나지 않았으면(대상 검사를 미룸, 미리보기) 성공이라고 하지 않는다
+            d["success"] = bool(self.meta["verification_complete"]) and not self.failures
+        return d
 
     def write(self, path: Path) -> None:
         Path(path).write_text(json.dumps(self.to_dict(), ensure_ascii=False, indent=2),
@@ -155,12 +160,42 @@ def _backup_path(dst: Path) -> Path:
     return cand
 
 
+def _refuse_dir(dst: Path, res: FileResult, lp: Callable[[Path], str] = os.fspath) -> bool:
+    """대상 이름 자리에 폴더가 있으면 결과를 실패(dest_is_dir)로 채우고 True. 폴더를 통째로 .bak 으로 옮기지 않는다."""
+    if os.path.isdir(lp(dst)) and not os.path.islink(lp(dst)):
+        f = failure.REASONS[failure.DEST_IS_DIR]
+        res.status, res.reason, res.error = FAILED, f.code, f"{f.text} ({dst})"
+        return True
+    return False
+
+
+def _install(tmp: Path, dst: Path, res: FileResult, lp: Callable[[Path], str] = os.fspath) -> None:
+    """검증이 끝난 임시 파일을 dst 로 교체한다. 기존 dst 는 .bak 으로 옮기고, 교체가 실패하면 .bak 을 원래 이름으로 되돌린다."""
+    bak = None
+    if os.path.lexists(lp(dst)):
+        bak = _backup_path(dst)
+        os.replace(lp(dst), lp(bak))
+        res.backup = str(bak)
+    try:
+        os.replace(lp(tmp), lp(dst))
+    except BaseException:
+        if bak is not None:
+            try:
+                os.replace(lp(bak), lp(dst))  # 롤백: 원래 이름이 비어 있는 채로 두지 않는다
+                res.backup = ""
+            except OSError:
+                pass  # 되돌리지 못했으면 backup 경로를 남겨 사용자가 직접 복구할 수 있게 한다
+        raise
+
+
 def copy_file(src: Path, dst: Path, dry_run: bool = False) -> FileResult:
     src, dst = Path(src), Path(dst)
     res = FileResult(str(src), str(dst), FAILED)
     tmp = dst.with_name(dst.name + PART_SUFFIX)
     try:
         res.size = src.stat().st_size
+        if _refuse_dir(dst, res):
+            return res
         res.sha256 = sha256_file(src)
         exists = dst.exists()
         if exists and dst.stat().st_size == res.size and sha256_file(dst) == res.sha256:
@@ -177,11 +212,7 @@ def copy_file(src: Path, dst: Path, dry_run: bool = False) -> FileResult:
         shutil.copystat(src, tmp, follow_symlinks=True)
         if tmp.stat().st_size != res.size or sha256_file(tmp) != res.sha256:
             raise OSError("복사 후 크기/해시 검증 실패")
-        if exists:
-            bak = _backup_path(dst)
-            os.replace(dst, bak)
-            res.backup = str(bak)
-        os.replace(tmp, dst)
+        _install(tmp, dst, res)
         res.status = COPIED
     except Exception as e:  # 파일 단위로 격리: 하나 실패해도 계속 진행
         res.status = FAILED
@@ -195,13 +226,41 @@ def copy_file(src: Path, dst: Path, dry_run: bool = False) -> FileResult:
     return res
 
 
+def _probe_source(src: Path) -> OSError | None:
+    """원본을 열어 첫 바이트를 읽어 본다. 읽을 수 없으면 그 예외(원인 분류용), 읽히면 None. 읽기 전용."""
+    try:
+        with open(long_path(src), "rb", buffering=0) as f:
+            failure.read_chunk(f.read, 1)
+    except OSError as e:
+        return e
+    return None
+
+
+def missing_dest(res: FileResult, src: Path, dst: Path, hint: str = "") -> FileResult:
+    """대상 파일이 없을 때 실제 원인을 가른다(E-2): 대상 자리에 폴더가 있음 / 원본을 못 읽어 복사가 안 됨(사용 중, 권한, 경로 길이 등) /
+    그 밖에는 단순히 복사가 안 된 것(missing_dest). 대상 쪽이 비어 있는 이유가 원본 쪽 문제인 경우가 대부분이다."""
+    if os.path.isdir(long_path(dst)):
+        f = failure.REASONS[failure.DEST_IS_DIR]
+        res.status, res.reason, res.error = MISSING, f.code, f"{f.text} ({dst})"
+        return res
+    cause = _probe_source(src) if src else None
+    if cause is not None:
+        f = failure.classify(cause, str(src))
+        res.status, res.reason, res.error = FAILED, f.code, f"{f.text} ({src})"
+        return res
+    res.status, res.reason = MISSING, failure.MISSING_DEST
+    res.error = failure.REASONS[failure.MISSING_DEST].text.replace(
+        "'실패한 것만 다시 시도'로 다시 복사하세요.", hint) if hint else failure.REASONS[failure.MISSING_DEST].text
+    return res
+
+
 def verify_file(src: Path, dst: Path, *, chunk: int | None = None, cancel: Callable[[], bool] | None = None,
                 on_bytes: Callable[[int], None] | None = None, src_hash: str | None = None,
                 stats: IoStats | None = None, check_dest: bool = True) -> FileResult:
     """이미 복사된 dst 를 원본과 크기 + SHA-256 으로 비교한다(양쪽 읽기 전용).
 
     src_hash 를 주면 원본을 다시 읽지 않고 그 값을 쓴다(원본이 안 바뀐 것을 호출자가 확인한 경우).
-    대상은 항상 다시 읽어 비교한다(check_dest=False 는 대상 검사를 새 PC 로 미루는 목록 만들기 전용: 원본 해시만 계산).
+    대상은 항상 다시 읽어 비교한다(check_dest=False 는 대상 내용 검사를 새 PC 로 미루는 목록 만들기 전용: 원본 해시만 계산하고, 대상은 존재/크기만 본다).
     읽기 실패는 원인별로 분류해 reason/error 에 기록한다(사용 중, 권한, 경로 길이, 연결 끊김 등).
     """
     src, dst = Path(src), Path(dst)
@@ -209,22 +268,19 @@ def verify_file(src: Path, dst: Path, *, chunk: int | None = None, cancel: Calla
     where = str(src)
     try:
         res.size = os.stat(long_path(src)).st_size
-        if check_dest:
-            where = str(dst)
-            try:
-                dst_size = os.stat(long_path(dst)).st_size
-            except FileNotFoundError:
-                res.status, res.reason = MISSING, failure.MISSING_DEST
-                res.error = failure.REASONS[failure.MISSING_DEST].text
-                return res
-            if not os.path.isfile(long_path(dst)):
-                res.status, res.reason = MISSING, failure.MISSING_DEST
-                res.error = failure.REASONS[failure.MISSING_DEST].text
-                return res
-            if dst_size != res.size:
-                res.status, res.reason = MISMATCH, failure.SIZE_MISMATCH
-                res.error = f"{failure.REASONS[failure.SIZE_MISMATCH].text} (대상 {dst_size}바이트)"
-                return res
+        # 대상 존재/크기는 읽기 없이 확인하는 가벼운 검사라 검사를 미루는 경우(check_dest=False)에도 한다:
+        # 복사가 안 된 파일을 '검사 미룸(정상)'으로 보고하지 않기 위해서다(A-4).
+        where = str(dst)
+        try:
+            dst_size = os.stat(long_path(dst)).st_size
+        except FileNotFoundError:
+            return missing_dest(res, src, dst)
+        if not os.path.isfile(long_path(dst)):
+            return missing_dest(res, src, dst)
+        if dst_size != res.size:
+            res.status, res.reason = MISMATCH, failure.SIZE_MISMATCH
+            res.error = f"{failure.REASONS[failure.SIZE_MISMATCH].text} (대상 {dst_size}바이트)"
+            return res
         where = str(src)
         if src_hash:
             res.sha256 = src_hash
@@ -276,6 +332,8 @@ def copy_verified(src: Path, dst: Path, *, chunk: int | None = None, cancel: Cal
     where = str(src)
     try:
         res.size = os.stat(long_path(src)).st_size
+        if _refuse_dir(dst, res, long_path):
+            return res
         os.makedirs(long_path(dst.parent), exist_ok=True)
         h = hashlib.sha256()
         buf = bytearray(size)
@@ -309,11 +367,11 @@ def copy_verified(src: Path, dst: Path, *, chunk: int | None = None, cancel: Cal
         if stats is not None:
             stats.file_read("dst")
         where = str(dst)
-        if os.path.exists(long_path(dst)):
-            bak = _backup_path(dst)
-            os.replace(long_path(dst), long_path(bak))
-            res.backup = str(bak)
-        os.replace(long_path(tmp), long_path(dst))
+        if _same_content(dst, res, chunk, cancel):  # 이미 같은 내용이면 .bak 을 만들지 않고 그대로 둔다(A-1)
+            _rm(tmp)
+            res.status = SKIPPED_SAME
+            return res
+        _install(tmp, dst, res, long_path)
         res.status = COPIED
     except Cancelled:
         _rm(tmp)
@@ -326,6 +384,15 @@ def copy_verified(src: Path, dst: Path, *, chunk: int | None = None, cancel: Cal
         _rm(tmp)
         raise
     return res
+
+
+def _same_content(dst: Path, res: FileResult, chunk: int | None, cancel) -> bool:
+    try:
+        if os.stat(long_path(dst)).st_size != res.size or not os.path.isfile(long_path(dst)):
+            return False
+        return sha256_file(dst, chunk, cancel) == res.sha256
+    except OSError:
+        return False
 
 
 def _rm(path: Path) -> None:
@@ -346,20 +413,20 @@ def repair_file(src: Path, dst: Path) -> FileResult:
     tmp = dst.with_name(dst.name + PART_SUFFIX)
     try:
         res.size = os.stat(long_path(src)).st_size
+        if _refuse_dir(dst, res, long_path):
+            return res
         res.sha256 = sha256_file(src)
         shutil.copyfile(long_path(src), long_path(tmp))
         shutil.copystat(long_path(src), long_path(tmp), follow_symlinks=True)
         if os.stat(long_path(tmp)).st_size != res.size or sha256_file(tmp) != res.sha256:
             raise OSError("재복사 후 크기/해시 검증 실패")
-        if os.path.exists(long_path(dst)):
-            bak = _backup_path(dst)
-            os.replace(long_path(dst), long_path(bak))
-            res.backup = str(bak)
-        os.replace(long_path(tmp), long_path(dst))
+        _install(tmp, dst, res, long_path)
         res.status = COPIED
     except Exception as e:
         res.status = FAILED
         res.error = f"{type(e).__name__}: {e}"
+        if isinstance(e, OSError):
+            res.reason = failure.classify(e, str(dst)).code
         try:
             os.unlink(long_path(tmp))
         except OSError:
@@ -398,6 +465,7 @@ def copy_tree(src: Path, dst: Path, dry_run: bool = False,
 
     for root, dirs, files in os.walk(src, onerror=on_error):
         dirs.sort()
+        dirs[:] = [d for d in dirs if not fs.is_reparse(os.path.join(root, d))]  # 정션/링크 폴더는 따라가지 않는다
         rel = Path(root).relative_to(src)
         for name in sorted(files):
             if name.endswith(PART_SUFFIX):

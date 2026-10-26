@@ -490,7 +490,9 @@ def transfer(src: Path, dst: Path, *, dry_run: bool = False, include_cloud: bool
     report = Report(dry_run=dry_run)
     mode = "dry-run" if dry_run else "verify-only" if verify_only else "retry-failed" if retry_failed else "copy"
     report.meta.update(mode=mode, strict=strict, dest_kind=dest.kind, dest_fs=dest.fs, workers=workers, copy_threads=threads, chunk_bytes=chunk,
-                       copy_mode=copy_mode, dest_verification="deferred" if defer else "now")
+                       copy_mode=copy_mode, dest_verification="deferred" if defer else "now",
+                       # 대상 내용 검사가 이 실행에서 끝났는지. 미룬 경우(랜선/네트워크 + 해시 목록) 새 PC 에서 verify 를 해야 끝난다.
+                       verification_complete=not defer and not dry_run)
 
     # ---- 원본 조사(총 용량/파일 수/최상위 구조)
     say("원본 파일을 조사하는 중입니다… 파일이 많으면 몇 분 걸릴 수 있습니다.")
@@ -513,7 +515,7 @@ def transfer(src: Path, dst: Path, *, dry_run: bool = False, include_cloud: bool
         report.results.append(FileResult(scan.abs_path(rel), "", FAILED, reason=code, error=f"{text} ({rel})"))
     report.meta.update(cloud_only_count=len(scan.cloud), include_cloud=include_cloud, total_files=len(entries),
                        total_bytes=total_bytes, source_root=scan.root, source_layout=scan.layout(),
-                       scan_seconds=round(scan.seconds, 2), skipped_links=scan.skipped_links,
+                       scan_seconds=round(scan.seconds, 2), skipped_links=scan.skipped_links, skipped_link_paths=list(scan.skipped_link_paths),
                        results_truncated=not detail_ok)
     say(f"원본 조사 완료: 파일 {len(entries):,}개, 총 {fmt_bytes(total_bytes)} (조사 {scan.seconds:.0f}초).")
 
@@ -725,6 +727,7 @@ def _copy_with_robocopy(src: Path, dst: Path, log: Path, cloud: list, runner: Ru
         if cancel is not None and cancel():
             raise Cancelled()
         dirs.sort()
+        dirs[:] = [d for d in dirs if not fs.is_reparse(os.path.join(root, d))]  # robocopy /XJ 와 같은 기준: 정션/링크는 따라가지 않는다
         relp = os.path.relpath(root, src)
         key = "" if relp == "." else relp.replace(os.sep, "/")
         args = base_args(Path(root), dst / ("" if relp == "." else relp), log, False, copy_mode, retries, wait, threads)
@@ -792,11 +795,16 @@ def _verify_phase(report: Report, entries, scan: ScanInfo, dst: Path, state: Sta
         prior = state.files.get(rel)
         if retry and not (prior and (prior[3] or prior[4] == "pending")):
             res = copy_verified(s_path, d_path, chunk=chunk, cancel=cancel, on_bytes=on_bytes, stats=stats)
-            if res.status == "copied":
+            if res.status in ("copied", SKIPPED_SAME):  # 이미 같은 내용이면 건너뜀(.bak 을 만들지 않음)
                 res.status = VERIFIED
             return res, False
         res = verify_file(s_path, d_path, chunk=chunk, cancel=cancel, on_bytes=on_bytes, stats=stats,
                           src_hash=reuse_hash(rel, size, mtime), check_dest=check_dest)
+        if retry and res.status in (MISSING, MISMATCH):  # 검사를 미뤘거나 이전에 통과했어도 대상이 비었거나 다르면 다시 복사한다
+            res = copy_verified(s_path, d_path, chunk=chunk, cancel=cancel, on_bytes=on_bytes, stats=stats)
+            if res.status in ("copied", SKIPPED_SAME):
+                res.status = VERIFIED
+            return res, False
         if strict and res.status == MISMATCH:
             res = _repair_and_reverify(Path(s_path), Path(d_path), res, report, chunk=chunk, cancel=cancel, on_bytes=on_bytes,
                                        stats=stats, check_dest=check_dest)

@@ -19,6 +19,7 @@ from typing import Callable
 
 from .cancel import Cancelled
 from .checklist import _norm, _norm_company, _norm_display, bundle_reason
+from . import fs
 from .envpaths import expand_env
 from .detect import Program
 from .discover_data import (BROWSER_VENDOR_DIRS, DOT_HINTS, DOT_SKIP, EXTRA_ROOTS, ROOTS, SECRET_PATTERNS, SKIP_NAMES,
@@ -266,6 +267,8 @@ def scan_tree(path: Path, deadline: float, clock: Callable[[], float]) -> tuple[
                         if e.is_symlink():
                             continue
                         if e.is_dir(follow_symlinks=False):
+                            if getattr(e.stat(follow_symlinks=False), "st_file_attributes", 0) & fs.FILE_ATTRIBUTE_REPARSE_POINT:
+                                continue  # 정션(reparse point)도 따라가지 않는다: 링크 너머의 크기를 세지 않는다
                             stack.append(e.path)
                         else:
                             st = e.stat(follow_symlinks=False)

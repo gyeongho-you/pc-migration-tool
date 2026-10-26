@@ -7,6 +7,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
+FILE_ATTRIBUTE_REPARSE_POINT = 0x400  # 정션/심볼릭 링크/마운트 지점 등(OneDrive 자리표시 파일도 이 속성을 가진다)
 FAT4G = 4 * 1024 ** 3 - 1  # FAT32 가 저장할 수 있는 파일 하나의 최대 크기
 
 
@@ -109,3 +110,38 @@ def free_space(path: str | os.PathLike) -> int | None:
         return shutil.disk_usage(p).free
     except OSError:
         return None
+
+
+def is_reparse(path: str | os.PathLike) -> bool:
+    """경로(링크 자체, 따라가지 않음)가 심볼릭 링크 또는 정션 등 reparse point 인지. 없거나 읽을 수 없으면 False.
+
+    폴더에 쓰는 기준이다. 파일은 OneDrive 클라우드 전용 자리표시 파일도 reparse 속성을 가지므로 파일에는 쓰지 않는다(is_symlink 만 본다).
+    """
+    try:
+        st = os.lstat(long_path(path))
+    except OSError:
+        return False
+    import stat as _stat
+    return _stat.S_ISLNK(st.st_mode) or bool(getattr(st, "st_file_attributes", 0) & FILE_ATTRIBUTE_REPARSE_POINT)
+
+
+def reparse_in_chain(base: str | os.PathLike, target: str | os.PathLike) -> str | None:
+    """base 아래에서 target 까지(target 포함) 지나는 폴더/파일 중 링크(reparse point)인 첫 경로. 없으면 None.
+
+    base 자체는 검사하지 않는다(사용자가 정한 루트). 이미 있는 구성 요소만 검사한다(없는 것은 링크일 수 없다).
+    """
+    base_s, target_s = os.path.abspath(os.fspath(base)), os.path.abspath(os.fspath(target))
+    try:
+        rel = os.path.relpath(target_s, base_s)
+    except ValueError:
+        return None
+    if rel == "." or rel.startswith(".."):
+        return None
+    cur = base_s
+    for part in rel.split(os.sep):
+        cur = os.path.join(cur, part)
+        if not os.path.lexists(cur):
+            return None
+        if os.path.islink(cur) or (os.path.isdir(cur) and is_reparse(cur)):  # 파일은 심볼릭 링크만(클라우드 자리표시 파일 제외)
+            return cur
+    return None
