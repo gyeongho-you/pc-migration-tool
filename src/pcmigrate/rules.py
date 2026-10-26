@@ -141,14 +141,22 @@ def load_rule_file(path: Path) -> Rule:
 
 def load_rules(rules_dir: Path) -> list[Rule]:
     """디렉터리의 *.json 을 모두 로드한다. id 중복은 오류."""
+    rules_dir = Path(rules_dir)
+    if not rules_dir.is_dir():
+        raise RuleError(f"규칙 폴더를 찾을 수 없습니다: {rules_dir} "
+                        "(프로그램 폴더의 rules 폴더가 지워졌거나 --rules 경로가 잘못됐을 수 있습니다. "
+                        "프로그램을 다시 내려받아 주세요)")
     rules: list[Rule] = []
     seen: set[str] = set()
-    for f in sorted(Path(rules_dir).glob("*.json")):
+    for f in sorted(rules_dir.glob("*.json")):
         rule = load_rule_file(f)
         if rule.id in seen:
             raise RuleError(f"{f}: 중복된 규칙 id '{rule.id}'")
         seen.add(rule.id)
         rules.append(rule)
+    if not rules:
+        raise RuleError(f"규칙 폴더에 규칙 파일(*.json)이 하나도 없습니다: {rules_dir} "
+                        "(규칙이 없으면 어떤 프로그램도 감지하지 못합니다. 프로그램을 다시 내려받아 주세요)")
     return rules
 
 

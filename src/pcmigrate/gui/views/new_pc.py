@@ -180,7 +180,7 @@ class ConfirmView(BaseView):
         self.check.focus_set()
 
     def on_event(self, kind, payload) -> None:
-        if kind == "confirm_changed":
+        if kind in ("confirm_changed", "busy"):
             self._update()
 
     def _checked_changed(self) -> None:

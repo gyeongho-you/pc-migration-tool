@@ -1,4 +1,5 @@
 """컨트롤러 + 실제 api 를 가짜 환경(tmp_path, 환경변수 치환)에서 끝까지 돌린다(헤드리스)."""
+from conftest import make_rules_dir
 import json
 import zipfile
 from pathlib import Path
@@ -17,8 +18,7 @@ from test_stage4 import WINGET
 
 
 def make_controller(tmp_path, registry):
-    rd = tmp_path / "rules"
-    rd.mkdir(exist_ok=True)
+    rd = make_rules_dir(tmp_path / "rules")
     deps = api.Deps(registry=lambda: registry, winget_export=lambda: WINGET, winget_list=lambda: None,
                     summarize=lambda rules, programs: (0, 0))
     c = Controller(deps=deps, runner=Runner(sync=True), rules_dir=rd)

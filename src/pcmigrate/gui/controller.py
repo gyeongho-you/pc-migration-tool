@@ -13,6 +13,7 @@ import errno
 import inspect
 import logging
 import os
+import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -205,12 +206,34 @@ class Controller:
         self.checklist_marks: set[tuple[str, str]] = set()  # 체크한 항목(탭, 문구): 화면을 오가도 유지
         self._dest_cache: dict[str, Any] = {}
         self.roadmap_marks: set[str] = set()  # 전체 이전 순서에서 체크한 항목(창을 닫았다 열어도 유지)
+        self._in_listener_error = False
+        if hasattr(self.runner, "on_callback_error"):
+            self.runner.on_callback_error = self._callback_failed
 
     # ------------------------------------------------------------------ 이벤트/실행
     def emit(self, kind: str, payload: Any = None) -> None:
         self.log.info("event %s", kind)  # 내용(목록/경로)은 로그에 남기지 않는다
         if self.listener:
-            self.listener(kind, payload)
+            try:
+                self.listener(kind, payload)
+            except Exception as e:  # noqa: BLE001 - 화면 갱신 오류가 작업 상태 정리를 막지 않게(이후 이벤트는 계속 전달)
+                self._callback_failed(e, traceback.format_exc(), kind)
+
+    def _callback_failed(self, exc: BaseException, tb: str = "", kind: str = "") -> None:
+        """화면/콜백에서 난 예외를 로그에 남기고 오류 대화상자로 알린다(재귀 방지)."""
+        self.log.error("callback failed: %s (%s)", kind or "task", type(exc).__name__)
+        if self._in_listener_error or not self.listener:
+            self.report_error(exc, kind or T.TASK_UI, tb)
+            return
+        self._in_listener_error = True
+        try:
+            fe = self.report_error(exc, kind or T.TASK_UI, tb)
+            try:
+                self.listener("error", fe)
+            except Exception:  # noqa: BLE001 - 대화상자마저 실패해도 앱은 계속
+                pass
+        finally:
+            self._in_listener_error = False
 
     def pump(self) -> int:
         return self.runner.pump()
@@ -237,7 +260,7 @@ class Controller:
         return self.api.system_info()
 
     def _run(self, label: str, fn: Callable[[Callable[[str], None], Any], Any], done: Callable[[Any], None],
-             cancellable: bool = False) -> None:
+             cancellable: bool = False, on_fail: Callable[[], None] | None = None) -> None:
         if self.state.busy:
             raise GuardError(T.G_BUSY)
         token = CancelToken() if cancellable else None
@@ -266,6 +289,8 @@ class Controller:
             finish()
             self.log.error("task failed: %s (%s)", label, type(exc).__name__)
             fe = self.report_error(exc, label, tb)
+            if on_fail:
+                on_fail()
             self.status.failed(fe.what)
             self.emit("busy", None)
             self.emit("status", self.status)
@@ -274,6 +299,8 @@ class Controller:
         def on_cancel() -> None:
             finish()
             self.log.info("task cancelled: %s", label)
+            if on_fail:
+                on_fail()
             self.status.cancelled()
             self.emit("busy", None)
             self.emit("status", self.status)
@@ -489,6 +516,10 @@ class Controller:
             raise GuardError(T.G_NEED_EXPORT_CONFIRM)
         if not output:
             raise GuardError(T.G_NEED_SAVE_PATH)
+        if real_api.check_unexpanded(output=output):
+            raise GuardError(T.G_OUTPUT_UNEXPANDED)
+        if os.path.isdir(output):
+            raise GuardError(T.G_OUTPUT_IS_DIR)
         sel = self.selected_rows()
         has_secret = any(r.secret for r in sel)
         if has_secret and not self.state.secrets_ack:
@@ -589,9 +620,10 @@ class Controller:
 
         def done(res):
             self.state.import_result = res
-            self._reset_confirms()  # 확정은 한 번만 유효
+            self.state.preview = None  # 확정은 한 번만 유효: 다시 복원하려면 미리보기부터
+            self._reset_confirms()
             self.emit("import_done", res)
-        self._run(T.TASK_APPLY, work, done)
+        self._run(T.TASK_APPLY, work, done, on_fail=self._reset_confirms)  # 실패/취소 뒤에도 확인 표시를 지운다
 
     def import_summary(self) -> dict:
         r = self.state.import_result
@@ -620,8 +652,17 @@ class Controller:
         if (s.transfer_mode, s.transfer_stage) != (mode, stage):
             s.transfer_mode, s.transfer_stage = mode, stage
             s.transfer_report, s.transfer_preview_key, s.transfer_blocked = None, None, ""
+            s.transfer_preview_opts = None
             s.transfer_was_dry_run = True
         self.emit("transfer_flow", (mode, stage))
+
+    def set_transfer_options(self, include_cloud: bool, strict: bool) -> None:
+        """옵션 체크 상태를 알린다. 미리보기 때와 달라지면 미리보기를 무효로 돌려, 보지 않은 내용으로 복사하지 못하게 한다."""
+        s = self.state
+        s.transfer_options = (bool(include_cloud), bool(strict))
+        if s.transfer_preview_opts is not None and s.transfer_preview_opts != s.transfer_options:
+            s.transfer_preview_key, s.transfer_preview_opts, s.transfer_blocked = None, None, ""
+            self.emit("selection_changed")  # 버튼 상태 다시 계산
 
     def flow(self) -> tuple[str, int]:
         return self.state.transfer_mode, self.state.transfer_stage
@@ -781,6 +822,8 @@ class Controller:
                 raise GuardError(T.G_TRANSFER_CONFIRM)
             if s.transfer_preview_key != key:
                 raise GuardError(T.G_TRANSFER_NEED_PREVIEW)
+            if s.transfer_preview_opts is not None and s.transfer_preview_opts != (bool(include_cloud), bool(strict)):
+                raise GuardError(T.G_TRANSFER_OPTIONS_CHANGED)  # 미리보기에 없던 내용(예: 클라우드 파일 내려받기)이 생길 수 있다
             if s.transfer_blocked:
                 raise GuardError(s.transfer_blocked)
         extra: dict = {}
@@ -807,6 +850,7 @@ class Controller:
             s.transfer_report, s.transfer_was_dry_run = rep, dry_run
             if dry_run:
                 s.transfer_preview_key = key
+                s.transfer_preview_opts = (bool(include_cloud), bool(strict))
                 meta = getattr(rep, "meta", {}) or {}
                 s.transfer_blocked = (T.WHY_SPACE if meta.get("space_blocked") else T.WHY_FAT32 if meta.get("fat32_blocked") else "")
             else:

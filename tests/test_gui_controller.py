@@ -364,6 +364,11 @@ def test_transfer_requires_preview_then_confirmation(env, tmp_path):
     with pytest.raises(GuardError):
         c.start_transfer(dry_run=False, write_confirmed=True)
     c.state.transfer_dst = str(tmp_path / "dst")
+    with pytest.raises(GuardError, match="옵션"):  # C-8: 미리보기 때와 옵션이 다르면 시작 불가
+        c.start_transfer(dry_run=False, write_confirmed=True, strict=True)
+    with pytest.raises(GuardError, match="옵션"):
+        c.start_transfer(dry_run=False, write_confirmed=True, include_cloud=True)
+    c.start_transfer(dry_run=True, strict=True)  # 바뀐 옵션으로 미리보기를 다시 하면 가능
     c.start_transfer(dry_run=False, write_confirmed=True, strict=True)
     assert api.calls[-1] == ("transfer", False, False, True)  # 클라우드 전용 포함은 기본 꺼짐
     sm = c.transfer_summary()

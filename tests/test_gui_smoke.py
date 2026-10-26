@@ -428,7 +428,12 @@ def test_transfer_view_reasons_gating_and_result_summary(ctx, tmp_path):
     v._go()
     assert len([x for x in api.calls if x[0] == "transfer"]) == 1
     ctx.answers["askokcancel"] = True
-    v.strict_var.set(True)
+    v.strict_var.set(True)  # 옵션을 바꾸면 미리보기가 무효가 되어 다시 해야 한다
+    app.update()
+    assert "disabled" in v.go_btn.state() and v.go_reason.cget("text") == T.WHY_PREVIEW_FIRST
+    v._dry()
+    app.update()
+    assert "disabled" not in v.go_btn.state()
     v._go()
     app.update()
     assert api.calls[-1] == ("transfer", False, False, True)
