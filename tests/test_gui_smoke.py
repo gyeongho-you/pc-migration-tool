@@ -321,6 +321,30 @@ def test_export_view_reason_requires_path_and_confirmation_and_shows_summary(ctx
     assert v.summary.ok_label.cget("text") == f"{T.ICON_OK} {T.RESULT_OK} 0"
 
 
+def test_export_view_shows_resume_hint_and_restart_choice(ctx, tmp_path, monkeypatch):
+    v = ctx.app.views[S.OLD_EXPORT]
+    ctx.c.go(S.OLD_EXPORT)
+    out = str(tmp_path / "p.zip")
+    v.path_var.set(out)
+    v._update_resume()
+    assert not v._resume_shown  # 이어받을 임시 파일이 없으면 안내/선택이 보이지 않는다
+    monkeypatch.setattr(ctx.c, "export_resume_hint", lambda o: T.EXP_RESUME_HINT.format(n=3, size="1.0KB"))
+    v._update_resume()
+    ctx.app.update()
+    assert v._resume_shown and "이어서" in v.resume_lbl.cget("text")
+    seen = []
+    monkeypatch.setattr(ctx.c, "start_export", lambda o, write_confirmed=False, resume=True: seen.append(resume))
+    ctx.answers["askokcancel"] = True
+    v._export()
+    assert seen == [True]  # 기본은 이어서 하기
+    v.restart_var.set(True)
+    v._export()
+    assert seen == [True, False]  # 처음부터 선택 + 확인 문구 후
+    ctx.answers["askokcancel"] = False
+    v._export()
+    assert seen == [True, False]
+
+
 # --------------------------------------------------------------------- 신 PC 화면
 
 def test_new_pc_flow_preview_confirm_and_result_summary(ctx):

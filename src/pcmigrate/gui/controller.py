@@ -25,6 +25,7 @@ from ..checklist import write_output
 from ..discover import fmt_size, items_from_selection
 from ..manifest import DEFAULT_NAME as MANIFEST_NAME
 from ..manifest import ManifestError
+from ..package import inspect_savepoint
 from ..progress import ProgressInfo, fmt_bytes, format_info
 from ..rules import default_rules_dir
 from ..scan import skipped_links_view
@@ -514,7 +515,23 @@ class Controller:
             return T.WHY_BUSY
         return "" if output.strip() else T.WHY_NEED_OUTPUT
 
-    def start_export(self, output: str, write_confirmed: bool = False) -> None:
+    def export_resume_hint(self, output: str) -> str:
+        """같은 저장 위치로 이어받을 수 있는 임시 파일이 있으면 안내 한 줄(없으면 빈 문자열). 읽기 전용."""
+        if not output.strip():
+            return ""
+        try:
+            info = inspect_savepoint(output.strip())
+        except (OSError, ValueError):
+            return ""
+        if info is None:
+            return ""
+        if not info["usable"]:
+            return T.EXP_RESUME_BROKEN.format(why=info["reason"])
+        if not info["files"]:
+            return ""
+        return T.EXP_RESUME_HINT.format(n=info["files"], size=fmt_bytes(info["bytes"]))
+
+    def start_export(self, output: str, write_confirmed: bool = False, resume: bool = True) -> None:
         if not write_confirmed:
             raise GuardError(T.G_NEED_EXPORT_CONFIRM)
         if not output:
@@ -533,7 +550,7 @@ class Controller:
         def work(progress, token):
             return self.api.run_export(self.state.rules_dir, output, extra_items=items or None,
                                        allow_secrets=has_secret, deps=self.deps,
-                                       **_supported(self.api.run_export, progress_info=progress))
+                                       **_supported(self.api.run_export, progress_info=progress, resume=resume))
 
         def done(res):
             self.state.export_result, self.state.export_output = res, output

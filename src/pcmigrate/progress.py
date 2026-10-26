@@ -59,6 +59,7 @@ class ProgressInfo:
     unreadable: int = 0
     failed: int = 0
     problems: tuple = ()  # ((분류, 경로), ...)
+    resumed: int = 0  # 내보내기: 저장점에서 이어받아 다시 담지 않은 파일 수
 
     @property
     def fraction(self) -> float:
@@ -118,6 +119,7 @@ class ProgressTracker:
         self._samples: deque[tuple[float, int]] = deque([(self._start, 0)])
         self._slow_since: float | None = None
         self.current = ""
+        self.resumed = 0
         self.counts = {k: 0 for k in KINDS}
         self._new_problems: list[tuple[str, str]] = []
 
@@ -168,4 +170,4 @@ class ProgressTracker:
             else:
                 self._slow_since = None
         return ProgressInfo(self.phase, done, self.total_bytes, nfiles, self.total_files, speed, eta, hint, message,
-                            self.current, counts[OK], counts[SKIPPED], counts[UNREADABLE], counts[FAILED_KIND], problems)
+                            self.current, counts[OK], counts[SKIPPED], counts[UNREADABLE], counts[FAILED_KIND], problems, self.resumed)

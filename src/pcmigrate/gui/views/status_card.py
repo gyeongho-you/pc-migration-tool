@@ -68,6 +68,8 @@ class StatusCard(tk.Frame):
             chip.bind("<Button-1>", lambda _e, k=kind: self.open_list(k))
             self.chips[kind] = chip
             self.chip_tips[kind] = Tooltip(chip, "")
+        self.resumed = tk.Label(self, text="", bg=INFO_BG, fg=OK_FG, anchor="w", justify="left")
+        self.resumed.pack(fill="x", pady=(6, 0))
         self.problem = tk.Label(self, text="", anchor="w", justify="left", padx=8, pady=4)
         self.problem.pack(fill="x", pady=(8, 0))
         autowrap(self.problem, 30)
@@ -116,6 +118,7 @@ class StatusCard(tk.Frame):
             lbl.configure(text=f"{chip.icon} {chip.label} {chip.count:,}", bg=bg, fg=fg,
                           cursor="hand2" if chip.clickable else "arrow")
             self.chip_tips[chip.key].text = chip.tip
+        self.resumed.configure(text=snap.resumed_line)
         bg, fg = (SECRET_BG, SECRET_FG) if snap.has_problem else (OK_BG, OK_FG)
         self.problem.configure(text=f"{T.CARD_PROBLEM_LABEL} {snap.problem_line}", bg=bg, fg=fg)
         self.last.configure(text=f"{T.CARD_LAST}: {snap.last_message}")

@@ -66,6 +66,7 @@ class Snapshot:
     last_message: str
     fraction: float | None  # 0~1, 알 수 없으면 None(막대는 '작업 중' 표시)
     stage_text: str  # 예: '② 복사'
+    resumed_line: str = ""  # 예: '저장점에서 이어받음 120개 파일'(이어받지 않았으면 빈 문자열)
 
 
 def _circled(i: int) -> str:
@@ -86,6 +87,7 @@ class StatusModel:
         self.step_index = 0
         self.started = self.ended = 0.0
         self.info_last: ProgressInfo | None = None
+        self.resumed = 0
         self.last_message = ""
         self.phase_counts: dict[str, dict[str, int]] = {}
         self.final_counts: dict[str, int] | None = None
@@ -108,6 +110,7 @@ class StatusModel:
         if self.state != RUNNING:
             return
         self.info_last = info
+        self.resumed = max(self.resumed, info.resumed)
         idx = self.phase_map.get(info.phase)
         if idx is not None:
             self.step_index = max(self.step_index, min(idx, len(self.steps) - 1))
@@ -287,7 +290,8 @@ class StatusModel:
             stage = f"{_circled(self.step_index)} {self.steps[min(self.step_index, len(self.steps) - 1)]}"
         return Snapshot(self.state, self.task, self._headline(), self._steps_view() if self.state != IDLE else (),
                         self._metrics() if self.state != IDLE else (), current, T.ellipsize_path(current, CURRENT_SHORT_LIMIT) if current else T.CARD_CURRENT_NONE,
-                        chips, problem, has_problem, self.last_message or T.CARD_LAST_NONE, self._fraction(), stage)
+                        chips, problem, has_problem, self.last_message or T.CARD_LAST_NONE, self._fraction(), stage,
+                        T.CARD_RESUMED.format(n=self.resumed) if self.resumed else "")
 
 
 def list_dialog_text(model: StatusModel, kind: str) -> tuple[str, str]:

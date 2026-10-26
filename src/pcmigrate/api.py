@@ -28,7 +28,8 @@ from .detect import (Program, match_rules, parse_winget_export, read_registry_pr
 from .discover import (Discovery, ExtraItem, SelectionError, build_selection, discover, items_from_selection,
                        load_selection,
                        program_has_rule, secret_names, summarize)
-from .package import (ImportPlan, PackageError, apply_import, export_package, plan_import,
+import inspect
+from .package import (COMPRESS_MODES, ImportPlan, PackageError, apply_import, export_package, plan_import,
                       verify_package)
 from .rules import Rule, RuleError, load_rules
 from . import fs
@@ -436,10 +437,18 @@ class ExportResult:
         """읽기 실패가 아닌 실패(중복 경로 등). 이것이 있으면 CLI 는 실패 코드로 끝낸다."""
         return [f for f in self.manifest["failed"] if not f.get("reason")]
 
+    @property
+    def resume(self) -> dict:
+        """저장점 이어받기 결과({resumed, kept_files, kept_bytes, dropped, reason}). 정보가 없으면 빈 dict."""
+        return self.manifest.get("resume") or {}
+
     def summary_dict(self, output: str) -> dict:
         m = self.manifest
-        return {"output": output, "rules": [r["id"] for r in m["rules"]], "files": len(m["files"]),
-                "skipped": len(m["skipped"]), "failed": len(m["failed"]), "unreadable": len(self.unreadable)}
+        d = {"output": output, "rules": [r["id"] for r in m["rules"]], "files": len(m["files"]),
+             "skipped": len(m["skipped"]), "failed": len(m["failed"]), "unreadable": len(self.unreadable)}
+        if self.resume.get("resumed"):
+            d["resumed_files"] = self.resume["kept_files"]
+        return d
 
     def unreadable_lines(self, limit: int = 5) -> list[str]:
         return unreadable_lines(self.unreadable, limit)
@@ -448,9 +457,17 @@ class ExportResult:
 def run_export(rules_dir: str | Path, output: str | Path, *, extra: str | Path | None = None,
                allow_secrets: bool = False, deps: Deps | None = None,
                extra_items: list[ExtraItem] | None = None,
-               progress_info: Callable[[ProgressInfo], None] | None = None) -> ExportResult:
-    """설정 패키지 내보내기. OSError(출력 경로 문제)는 전파, 나머지 실패는 ApiError."""
+               progress_info: Callable[[ProgressInfo], None] | None = None,
+               resume: bool = True, compress: str = "auto",
+               notice: Callable[[str], None] | None = None) -> ExportResult:
+    """설정 패키지 내보내기. OSError(출력 경로 문제)는 전파, 나머지 실패는 ApiError.
+
+    resume=True 면 같은 출력 경로의 이전 저장점(.part)을 이어받고, False 면 이전 임시물을 지우고 처음부터 만든다.
+    compress 는 auto/always/never. notice 는 '이어서 하는 중' 같은 안내 문장을 받는다.
+    """
     deps = deps or Deps()
+    if compress not in COMPRESS_MODES:
+        raise ApiError(f"--compress 는 {', '.join(COMPRESS_MODES)} 중 하나여야 합니다: {compress}")
     extras = prepare_extras(extra, allow_secrets, items=extra_items)
     rules = load_rules_checked(rules_dir)
     winget_text = deps.winget_export()
@@ -465,6 +482,15 @@ def run_export(rules_dir: str | Path, output: str | Path, *, extra: str | Path |
         notes.append("경고: winget export 실패 - 레지스트리 목록만 포함됩니다.")
     try:
         kw = {"progress_info": progress_info} if progress_info else {}
+        # 기본값이 아닌 선택만 넘기고, 받지 못하는(예전/가짜) export 구현에는 넘기지 않는다
+        want = {"resume": resume, "compress": compress, "notice": notice}
+        defaults = {"resume": True, "compress": "auto", "notice": None}
+        try:
+            params = inspect.signature(deps.export).parameters
+            varkw = any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+        except (TypeError, ValueError):
+            params, varkw = {}, False
+        kw.update({k: v for k, v in want.items() if v != defaults[k] and (varkw or k in params)})
         manifest = deps.export(matched, Path(output), registry, winget_text, winget_list_text=list_text,
                                extras=extras.items, **kw)
     except PackageError as e:

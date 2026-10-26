@@ -223,6 +223,15 @@ EXP_RULES = "포함된 규칙: {rules}"
 EXP_NO_RULES = "(없음)"
 EXP_COUNTS = "파일 {files}개, 건너뜀 {skipped}개, 실패 {failed}개"
 EXP_FAILED_HEAD = f"{ICON_WARN} 읽지 못해 제외된 파일이 있습니다(아래 예시). Chrome 같은 프로그램이 실행 중이면 닫고 다시 만들어 보세요."
+EXP_RESUME_HINT = ("이전에 중단된 같은 저장 위치의 내보내기가 있습니다(저장점까지 파일 {n:,}개, {size}). "
+                   "같은 선택이면 이어서 합니다.")
+EXP_RESUME_BROKEN = "이전에 중단된 임시 파일이 있지만 기록을 쓸 수 없어({why}) 처음부터 만듭니다."
+EXP_RESTART_CHECK = "처음부터 다시 만들기(이전에 만들던 내용을 버립니다)"
+EXP_RESTART_TITLE = "처음부터 다시 만들기"
+EXP_RESTART_CONFIRM = ("이전에 중단된 임시 파일(.part)과 진행 기록을 지우고 처음부터 다시 만듭니다.\n\n"
+                       "완성된 패키지와 원본 파일은 건드리지 않습니다. 계속하시겠습니까?")
+EXP_RESUMED_DONE = "저장점에서 이어받음: {n:,}개 파일은 다시 담지 않았습니다."
+EXP_RESTART_REASON = "처음부터 만든 이유: {why}"
 EXP_TODO = "새 PC 에서 직접 해야 할 일(일부):"
 
 # --------------------------------------------------------------------------- 신 PC
@@ -541,6 +550,7 @@ CARD_PROBLEM_NONE = f"{ICON_OK} 지금까지 문제 없음"
 CARD_PROBLEM_SOME = f"{{icon}} {{parts}} — 위 칸을 누르면 목록을 볼 수 있습니다"
 CARD_PROBLEM_PART = "{label} {n:,}개"
 CARD_LAST = "마지막 메시지"
+CARD_RESUMED = "저장점에서 이어받음: {n:,}개 파일은 다시 담지 않았습니다"
 CARD_LAST_NONE = "—"
 CARD_LIST_TITLE = "{label} 목록"
 CARD_LIST_NONE = "해당하는 항목이 없습니다."

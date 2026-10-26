@@ -397,7 +397,8 @@ def _cmd_export(args: argparse.Namespace) -> int:
         return 1
     try:
         r = run_export(args.rules, args.output, extra=args.extra, allow_secrets=args.allow_secrets,
-                       deps=_deps(), progress_info=_cli_info_progress())
+                       deps=_deps(), progress_info=_cli_info_progress(), resume=args.resume and not args.restart,
+                       compress=args.compress, notice=lambda m: _err(f"[이어받기] {m}"))
     except ApiError as e:
         return _fail(e)
     except OSError as e:
@@ -544,6 +545,12 @@ def build_parser() -> argparse.ArgumentParser:
     e.add_argument("--allow-secrets", action="store_true",
                    help="선택 항목에 비밀 정보 가능성이 있어도 포함(내용을 확인한 경우에만)")
     e.add_argument("--rules", default=str(default_rules_dir()), help="규칙 JSON 폴더")
+    e.add_argument("--resume", action=argparse.BooleanOptionalAction, default=True,
+                   help="이전에 중단된 같은 내보내기(<출력>.part)가 있으면 저장점부터 이어서 합니다(기본 켬). "
+                        "--no-resume 은 이전 임시 파일(.part/.part.journal)을 지우고 처음부터 만듭니다(완성본은 건드리지 않음)")
+    e.add_argument("--restart", action="store_true", help="--no-resume 과 같음: 처음부터 다시 만들기")
+    e.add_argument("--compress", choices=("auto", "always", "never"), default="auto",
+                   help="압축 방식. auto(기본): 사진/영상/zip/pdf 등 이미 압축된 형식은 압축 생략, always: 모두 압축, never: 모두 생략")
     e.set_defaults(func=_cmd_export)
 
     i = sub.add_parser("import", help="설정 패키지 가져오기(--dry-run 먼저 권장)")

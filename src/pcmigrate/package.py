@@ -37,7 +37,7 @@ from .copier import (COPIED, FAILED, REJECTED, SKIPPED_SAME, WOULD_COPY, WOULD_O
                      FileResult, Report, _backup_path, copy_file, sha256_file)
 from .detect import Program
 from .discover_data import EXTRA_ROOTS, RESTORE_DENY_SUBSTRINGS, ROOTS
-from .progress import FAILED_KIND, OK, SKIPPED, UNREADABLE, ProgressInfo, ProgressTracker, categorize
+from .progress import FAILED_KIND, OK, SKIPPED, UNREADABLE, ProgressInfo, ProgressTracker, categorize, fmt_bytes
 from .rules import Rule
 
 FORMAT_VERSION = 1
@@ -257,18 +257,93 @@ def collect_extra_items(extras: list, expand: Expand = expand_env) -> tuple[list
     return items, skipped
 
 
+# --------------------------------------------------------------------------- 압축 방식
+
+COMPRESS_MODES = ("auto", "always", "never")
+# 이미 압축된 형식이라 deflate 를 다시 해도 거의 줄지 않고 시간만 든다(이 확장자는 auto 에서 STORED).
+# 사진/영상/음악 코덱, 압축 파일, zip 기반 문서(OOXML/ODF), 내부 스트림이 압축된 PDF 가 근거다.
+# 반대로 .rvt/.dwg/.3dm/.skp/.pln 등 CAD/BIM 형식은 목록에 두지 않는다: 압축률이 형식/버전마다 달라 확신할 수 없으므로
+# 큰 파일은 아래 표본 검사로 실제 압축 효과를 보고 정한다.
+ALREADY_COMPRESSED_EXTS = frozenset({
+    ".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif", ".avif",
+    ".mp4", ".m4v", ".mov", ".mkv", ".avi", ".wmv", ".webm",
+    ".mp3", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".wma",
+    ".zip", ".7z", ".rar", ".gz", ".tgz", ".bz2", ".xz", ".zst", ".cab",
+    ".pdf", ".docx", ".xlsx", ".pptx", ".odt", ".ods", ".odp", ".jar", ".apk", ".vsix", ".nupkg", ".whl",
+})
+SAMPLE_MIN_SIZE = 8 * 1024 * 1024   # 이보다 큰 '모르는 확장자'는 표본으로 압축 효과를 본다
+SAMPLE_BYTES = 256 * 1024
+SAMPLE_RATIO = 0.90                 # 표본이 10% 이상 줄지 않으면 STORED
+
+
+def _looks_incompressible(spool, size: int) -> bool:
+    """spool(이미 읽어 둔 내용)의 앞/가운데/끝 표본을 빠르게 압축해 보고 거의 줄지 않으면 True."""
+    raw = packed = 0
+    for pos in (0, max(0, size // 2 - SAMPLE_BYTES // 2), max(0, size - SAMPLE_BYTES)):
+        spool.seek(pos)
+        chunk = spool.read(SAMPLE_BYTES)
+        if chunk:
+            raw += len(chunk)
+            packed += len(zlib.compress(chunk, 1))
+    spool.seek(0)
+    return raw > 0 and packed / raw >= SAMPLE_RATIO
+
+
+def choose_method(arc: str, size: int, compress: str, spool=None) -> int:
+    """zip 압축 방식(STORED/DEFLATED)을 정한다. never/always 는 그대로, auto 는 확장자와 표본으로 판단."""
+    if compress == "never":
+        return zipfile.ZIP_STORED
+    if compress == "always":
+        return zipfile.ZIP_DEFLATED
+    if os.path.splitext(arc)[1].lower() in ALREADY_COMPRESSED_EXTS:
+        return zipfile.ZIP_STORED
+    if spool is not None and size >= SAMPLE_MIN_SIZE and _looks_incompressible(spool, size):
+        return zipfile.ZIP_STORED
+    return zipfile.ZIP_DEFLATED
+
+
+METHOD_NAMES = {zipfile.ZIP_STORED: "stored", zipfile.ZIP_DEFLATED: "deflated"}
+
+
+class _PartZip(zipfile.ZipFile):
+    """내보내기 중인 .part zip. 압축 옵션과 방금 쓴 엔트리의 기록(meta)을 _write_entry 와 주고받는다."""
+    compress = "auto"
+    last_meta: dict | None = None
+
+
+def _zi_dump(zi: zipfile.ZipInfo) -> dict:
+    """저장점 기록용: 중앙 디렉터리를 나중에 다시 쓰는 데 필요한 ZipInfo 필드."""
+    return {"fn": zi.filename, "dt": list(zi.date_time), "ct": zi.compress_type, "ex": zi.extra.hex(),
+            "cm": zi.comment.hex(), "cs": zi.create_system, "cv": zi.create_version, "xv": zi.extract_version,
+            "fl": zi.flag_bits, "ia": zi.internal_attr, "ea": zi.external_attr, "ho": zi.header_offset,
+            "crc": zi.CRC, "csz": zi.compress_size, "fsz": zi.file_size}
+
+
+def _zi_load(d: dict) -> zipfile.ZipInfo:
+    zi = zipfile.ZipInfo(d["fn"], tuple(d["dt"]))
+    zi.compress_type, zi.extra, zi.comment = d["ct"], bytes.fromhex(d["ex"]), bytes.fromhex(d["cm"])
+    zi.create_system, zi.create_version, zi.extract_version = d["cs"], d["cv"], d["xv"]
+    zi.flag_bits, zi.internal_attr, zi.external_attr = d["fl"], d["ia"], d["ea"]
+    zi.header_offset, zi.CRC, zi.compress_size, zi.file_size = d["ho"], d["crc"], d["csz"], d["fsz"]
+    return zi
+
+
 def _write_entry(zf: zipfile.ZipFile, arc: str, src: Path, stage_dir: str | None = None) -> tuple[int, str]:
     """원본을 읽기 전용으로 끝까지 읽어 (크기, sha256)을 구한 뒤에만 zip 엔트리를 만든다.
 
     다른 프로세스가 바이트 범위를 잠근 파일은 읽는 도중에 PermissionError 가 난다. zip 엔트리를 먼저 열면 반쯤 쓰인
     엔트리가 남아 패키지 검증이 깨지므로, 먼저 임시 저장소(작은 파일은 메모리, 큰 파일은 stage_dir 의 임시 파일)에
     읽어 두고 성공했을 때만 zip 에 쓴다. 읽기 실패는 SourceUnreadable 로, zip/임시 저장소 쓰기 실패는 OSError 로 전파한다.
+
+    압축 방식은 zf.compress(auto/always/never)로 정한다. zf 가 _PartZip 이면 저장점 기록(zf.last_meta)도 남긴다.
     """
     h = hashlib.sha256()
     n = 0
+    compress = getattr(zf, "compress", "auto")
     try:
-        size = src.stat().st_size
-        mtime = _zip_time(src)
+        st = src.stat()
+        size = st.st_size
+        mtime = _zip_time_st(st)
         fin = open(src, "rb")
     except OSError as e:
         raise SourceUnreadable(src, e) from e
@@ -285,36 +360,354 @@ def _write_entry(zf: zipfile.ZipFile, arc: str, src: Path, stage_dir: str | None
             spool.write(chunk)
         spool.seek(0)
         info = zipfile.ZipInfo(arc, date_time=mtime)
-        info.compress_type = zipfile.ZIP_DEFLATED
+        info.compress_type = choose_method(arc, n, compress, spool)
         with zf.open(info, "w", force_zip64=max(size, n) > ZIP64_THRESHOLD) as fout:
             shutil.copyfileobj(spool, fout, CHUNK)
+    if isinstance(zf, _PartZip):
+        zf.last_meta = {"ssize": size, "mtime_ns": st.st_mtime_ns, "method": METHOD_NAMES[info.compress_type],
+                        "off": info.header_offset, "end": zf.fp.tell(), "zi": _zi_dump(info)}
     return n, h.hexdigest()
 
 
-def _zip_time(path: Path) -> tuple:
-    t = datetime.fromtimestamp(path.stat().st_mtime)
+def _zip_time_st(st: os.stat_result) -> tuple:
+    t = datetime.fromtimestamp(st.st_mtime)
     return (max(t.year, 1980), t.month, t.day, t.hour, t.minute, t.second)
 
+
+def _zip_time(path: Path) -> tuple:
+    return _zip_time_st(path.stat())
+
+
+# --------------------------------------------------------------------------- 저장점(이어받기)
+
+PART_SUFFIX = ".part"
+JOURNAL_SUFFIX = ".part.journal"
+JOURNAL_VERSION = 1
+SAVEPOINT_BYTES = 256 * 1024 * 1024
+SAVEPOINT_SECONDS = 60.0
+_GRACEFUL_SAVEPOINT = True  # 오류/취소로 끝날 때 마지막으로 완성된 엔트리까지 저장점을 한 번 더 찍는다(전원 차단 모의 시험은 끈다)
+
+
+def part_paths(out: Path) -> tuple[Path, Path]:
+    """(임시 zip, 진행 기록) 경로. 둘 다 이 도구가 만드는 임시물이다."""
+    out = Path(out)
+    return out.with_name(out.name + PART_SUFFIX), out.with_name(out.name + JOURNAL_SUFFIX)
+
+
+def is_unfinished_part(path: Path | str) -> bool:
+    return str(path).lower().endswith(PART_SUFFIX)
+
+
+def _fingerprint(rules: list[Rule], extras: list | None, compress: str) -> tuple[str, dict]:
+    info = {"tool": __version__, "format": FORMAT_VERSION, "compress": compress,
+            "rules": [[r.id, str(r.version)] for r in rules],
+            "extras": sorted([e.root, e.rel] for e in (extras or []))}
+    raw = json.dumps(info, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest(), info
+
+
+def _fp_reason(old: dict, new: dict) -> str:
+    if old.get("rules") is not None and [r[0] for r in old["rules"]] != [r[0] for r in new["rules"]]:
+        return "선택한 프로그램(규칙)이 달라졌습니다"
+    if old.get("rules") != new["rules"]:
+        return "프로그램 규칙의 버전이 달라졌습니다"
+    if old.get("extras") != new["extras"]:
+        return "직접 고른 추가 항목이 달라졌습니다"
+    if old.get("compress") != new["compress"]:
+        return "압축 설정이 달라졌습니다"
+    if old.get("tool") != new["tool"]:
+        return "도구 버전이 달라졌습니다"
+    return "내보내기 설정이 달라졌습니다"
+
+
+class _Journal:
+    """진행 기록(JSON lines). 줄마다 쓰고, sync() 때만 디스크에 확정(fsync)한다."""
+
+    def __init__(self, path: Path, mode: str) -> None:
+        self.f = open(path, mode)
+
+    def write(self, obj: dict) -> None:
+        self.f.write((json.dumps(obj, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8"))
+
+    def sync(self) -> None:
+        self.f.flush()
+        os.fsync(self.f.fileno())
+
+    def close(self) -> None:
+        try:
+            self.f.close()
+        except OSError:
+            pass
+
+
+_ENTRY_INT = ("ssize", "mtime_ns", "off", "end", "size")
+_ENTRY_STR = ("arc", "src", "sha256", "rule", "base", "rel", "method")
+_ZI_KEYS = ("fn", "dt", "ct", "ex", "cm", "cs", "cv", "xv", "fl", "ia", "ea", "ho", "crc", "csz", "fsz")
+
+
+def _entry_shape_ok(e: dict) -> bool:
+    if not all(isinstance(e.get(k), str) for k in _ENTRY_STR):
+        return False
+    if not all(isinstance(e.get(k), int) and not isinstance(e.get(k), bool) and e[k] >= 0 for k in _ENTRY_INT):
+        return False
+    zi = e.get("zi")
+    if not isinstance(zi, dict) or not all(k in zi for k in _ZI_KEYS):
+        return False
+    try:
+        _zi_load(zi)
+    except (TypeError, ValueError, KeyError):
+        return False
+    return e["end"] > e["off"] and zi["fn"] == e["arc"]
+
+
+def read_journal(path: Path) -> dict:
+    """진행 기록을 읽는다. 저장점 이후의 줄과 마지막의 끊긴 줄은 버린다.
+
+    반환: {"head": dict|None, "entries": [저장점까지 확정된 엔트리], "zip_size": int, "error": str}
+    error 가 비어 있지 않으면 기록이 손상된 것이다(이어받지 않는다).
+    """
+    out = {"head": None, "entries": [], "zip_size": 0, "error": ""}
+    try:
+        data = path.read_bytes()
+    except OSError as e:
+        out["error"] = f"저장점 기록을 읽을 수 없습니다({type(e).__name__})"
+        return out
+    lines = data.split(b"\n")
+    lines.pop()  # 마지막 조각: 줄바꿈으로 끝났으면 빈 값, 아니면 쓰다 끊긴 줄(믿지 않는다)
+    pending: list[dict] = []
+    seen: set[str] = set()
+    try:
+        for i, raw in enumerate(lines):
+            obj = json.loads(raw.decode("utf-8"))
+            if not isinstance(obj, dict):
+                raise ValueError("not an object")
+            kind = obj.get("t")
+            if i == 0:
+                if kind != "head" or obj.get("v") != JOURNAL_VERSION or not isinstance(obj.get("fp"), str) \
+                        or not isinstance(obj.get("info"), dict):
+                    raise ValueError("bad head")
+                out["head"] = obj
+            elif kind == "e":
+                if not _entry_shape_ok(obj) or obj["arc"] in seen:
+                    raise ValueError("bad entry")
+                seen.add(obj["arc"])
+                pending.append(obj)
+            elif kind == "sp":
+                z = obj.get("zip")
+                if not isinstance(z, int) or isinstance(z, bool) or z < out["zip_size"]:
+                    raise ValueError("bad savepoint")
+                out["entries"] += pending
+                pending = []
+                out["zip_size"] = z
+            elif kind != "f":
+                raise ValueError("unknown line")
+    except (ValueError, UnicodeDecodeError, RecursionError):
+        out.update(head=None, entries=[], zip_size=0, error="저장점 기록이 손상되었습니다")
+        return out
+    if out["head"] is None:
+        out["error"] = "저장점 기록이 비어 있습니다"
+    return out
+
+
+def inspect_savepoint(out: Path | str) -> dict | None:
+    """같은 이름으로 다시 내보낼 때 이어받을 수 있는 임시 파일이 있는지 본다(읽기 전용, GUI 안내용).
+
+    없으면 None, 있으면 {"files": 저장점까지 파일 수, "bytes": 바이트, "usable": 기록이 온전한지, "reason": 사유}.
+    규칙/선택이 같은지는 실제로 내보낼 때 확인한다.
+    """
+    part, jpath = part_paths(Path(out))
+    try:
+        if not part.is_file() or not jpath.is_file():
+            return None
+        j = read_journal(jpath)
+        if j["error"] or part.stat().st_size < j["zip_size"]:
+            return {"files": 0, "bytes": 0, "usable": False, "reason": j["error"] or "임시 파일이 기록과 맞지 않습니다"}
+        return {"files": len(j["entries"]), "bytes": sum(e["size"] for e in j["entries"]), "usable": True, "reason": ""}
+    except OSError:
+        return None
+
+
+def discard_partial(out: Path | str) -> None:
+    """이 도구가 만든 임시물(.part, .part.journal, 정리 중 남은 .new)만 지운다. 완성본은 건드리지 않는다."""
+    part, jpath = part_paths(Path(out))
+    for p in (part, jpath, part.with_name(part.name + ".new"), jpath.with_name(jpath.name + ".new")):
+        if p.is_file() or p.is_symlink():
+            p.unlink()
+
+
+def _headers_ok(part: Path, entries: list[dict]) -> bool:
+    """저장점까지의 각 엔트리 위치에 올바른 지역 헤더(PK\\x03\\x04 + 이름)가 있는지 본다."""
+    try:
+        with open(part, "rb") as f:
+            for e in entries:
+                f.seek(e["off"])
+                head = f.read(30)
+                if len(head) < 30 or head[:4] != b"PK\x03\x04":
+                    return False
+                nlen = int.from_bytes(head[26:28], "little")
+                name = f.read(nlen)
+                enc = "utf-8" if e["zi"]["fl"] & 0x800 else "cp437"
+                if name.decode(enc, "replace") != e["arc"]:
+                    return False
+    except OSError:
+        return False
+    return True
+
+
+def _compact(part: Path, keep: list[dict]) -> int:
+    """바뀐/없어진 엔트리를 빼고 남길 엔트리의 바이트 구간만 새 파일로 옮긴다(압축을 다시 하지 않는다). 새 크기 반환."""
+    new = part.with_name(part.name + ".new")
+    try:
+        with open(part, "rb") as src, open(new, "wb") as dst:
+            for e in keep:
+                src.seek(e["off"])
+                pos = dst.tell()
+                left = e["end"] - e["off"]
+                while left > 0:
+                    chunk = src.read(min(CHUNK, left))
+                    if not chunk:
+                        raise OSError("임시 파일이 기록보다 짧습니다")
+                    dst.write(chunk)
+                    left -= len(chunk)
+                e["off"], e["end"] = pos, dst.tell()
+                e["zi"]["ho"] = pos
+            dst.flush()
+            os.fsync(dst.fileno())
+            size = dst.tell()
+        os.replace(new, part)
+        return size
+    finally:
+        new.unlink(missing_ok=True)
+
+
+def _write_journal(jpath: Path, head: dict, entries: list[dict], zip_size: int) -> _Journal:
+    """깨끗한 진행 기록을 새로 쓰고(원자적 교체) 이어쓰기용으로 연다."""
+    tmp = jpath.with_name(jpath.name + ".new")
+    j = _Journal(tmp, "wb")
+    try:
+        j.write(head)
+        for e in entries:
+            j.write(e)
+        j.write({"t": "sp", "zip": zip_size, "n": len(entries)})
+        j.sync()
+    finally:
+        j.close()
+    os.replace(tmp, jpath)
+    return _Journal(jpath, "ab")
+
+
+@dataclass
+class _Resumed:
+    kept: dict = field(default_factory=dict)   # arc -> 확정된 엔트리 기록
+    dropped: int = 0                           # 원본이 바뀌어 다시 담을 엔트리 수
+    reason: str = ""                           # 이어받지 않고 처음부터 하는 이유
+    zip_size: int = 0
+    journal: object = None
+
+
+def _source_unchanged(e: dict, item: "Item | None") -> bool:
+    if item is None or str(item.src) != e["src"] or item.rule_id != e["rule"] or item.base != e["base"] or item.rel != e["rel"]:
+        return False
+    try:
+        st = item.src.stat()
+    except OSError:
+        return False
+    return st.st_size == e["ssize"] and st.st_mtime_ns == e["mtime_ns"]
+
+
+def _prepare_part(part: Path, jpath: Path, head: dict, info: dict, items: dict, resume: bool) -> _Resumed:
+    """이어받을 수 있으면 .part 를 저장점까지 되돌려 두고 보존할 엔트리를 돌려준다. 아니면 임시물을 지우고 처음부터."""
+    existed = part.exists() or jpath.exists()
+    r = _Resumed()
+    if not resume:
+        if existed:
+            r.reason = "'처음부터 다시 만들기'를 골라 이전 임시 파일을 지우고 새로 만듭니다"
+    elif part.is_file() and not jpath.is_file():
+        r.reason = "저장점 기록이 없어 처음부터 만듭니다"
+    elif jpath.is_file() and not part.is_file():
+        r.reason = "임시 패키지 파일이 없어 처음부터 만듭니다"
+    elif part.is_file() and jpath.is_file():
+        j = read_journal(jpath)
+        if j["error"]:
+            r.reason = j["error"] + "(처음부터 만듭니다)"
+        elif j["head"]["fp"] != head["fp"]:
+            r.reason = _fp_reason(j["head"]["info"], info) + "(처음부터 만듭니다)"
+        elif part.stat().st_size < j["zip_size"] or any(e["end"] > j["zip_size"] for e in j["entries"]) \
+                or not _headers_ok(part, j["entries"]):
+            r.reason = "임시 패키지 파일이 기록과 맞지 않아 처음부터 만듭니다"
+        elif j["entries"]:
+            keep = [e for e in j["entries"] if _source_unchanged(e, items.get(e["arc"]))]
+            r.dropped = len(j["entries"]) - len(keep)
+            size = j["zip_size"]
+            if r.dropped:
+                size = _compact(part, keep)
+            elif part.stat().st_size > size:
+                with open(part, "r+b") as f:  # 저장점 뒤에 쓰던 부분은 믿지 않고 잘라낸다
+                    f.truncate(size)
+                    f.flush()
+                    os.fsync(f.fileno())
+            if keep:
+                r.kept = {e["arc"]: e for e in keep}
+                r.zip_size = size
+                r.journal = _write_journal(jpath, j["head"], keep, size)
+                return r
+    discard_partial(part.with_name(part.name[:-len(PART_SUFFIX)]))
+    return r
+
+
+class _ResumeVerifyFailed(Exception):
+    """이어받은 내용을 포함한 .part 가 최종 검사를 통과하지 못함. 임시물을 지우고 처음부터 다시 만든다."""
+
+
+# --------------------------------------------------------------------------- export
 
 def export_package(rules: list[Rule], out: Path, programs: list[Program],
                    winget_text: str | None, expand: Expand = expand_env,
                    winget_list_text: str | None = None, extras: list | None = None,
                    now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
-                   progress_info: Callable[[ProgressInfo], None] | None = None) -> dict:
+                   progress_info: Callable[[ProgressInfo], None] | None = None, *,
+                   resume: bool = True, compress: str = "auto",
+                   savepoint_bytes: int = SAVEPOINT_BYTES, savepoint_seconds: float = SAVEPOINT_SECONDS,
+                   notice: Callable[[str], None] | None = None,
+                   clock: Callable[[], float] = time.monotonic) -> dict:
     """감지된 프로그램의 규칙(rules)으로 설정 패키지를 만든다. manifest dict 반환.
 
     progress_info 가 있으면 파일 찾기 -> 담기 -> 검사 단계의 진행(파일 수, 현재 파일, 분류별 개수)을 알린다(GUI 현황 카드용).
 
-    out 이 이미 있으면 .bak 으로 옮겨 보존한다. 파일 단위 실패는 manifest["failed"] 에 기록.
+    만드는 동안에는 최종 이름이 아니라 '<out>.part'(zip)와 '<out>.part.journal'(진행 기록)에 쓰고, 검사를 통과한 뒤에만
+    최종 이름으로 바꾼다(out 이 이미 있으면 .bak 으로 보존). 저장점(기본 256MB 또는 60초마다)까지는 실패/종료 뒤에도 남아,
+    같은 out 과 같은 설정으로 다시 내보내면(resume=True) 저장점까지는 다시 담지 않는다. 실패/취소 시 .part 와 journal 은
+    남기고 성공하면 지운다. resume=False 면 이전 .part/journal 을 지우고 처음부터 만든다.
+    compress: auto(이미 압축된 형식은 STORED) / always(모두 deflate) / never(모두 STORED).
+    반환 manifest 에는 패키지에 저장되지 않는 "resume" 항목({resumed, kept_files, kept_bytes, dropped, reason})이 추가된다.
+    파일 단위 실패는 manifest["failed"] 에 기록(읽지 못한 파일은 다음 시도에서 다시 읽는다).
     """
+    if compress not in COMPRESS_MODES:
+        raise ValueError(f"compress 는 {', '.join(COMPRESS_MODES)} 중 하나여야 합니다: {compress!r}")
     out = Path(out)
     if out.is_dir():  # 기존 폴더를 .bak 으로 옮기고 같은 이름의 파일을 만들게 되므로 시작하지 않는다
         raise IsADirectoryError(errno.EISDIR, "대상이 폴더입니다", str(out))
-    tmp = out.with_name(out.name + ".pcmigrate-part")
+    args = (rules, out, programs, winget_text, expand, winget_list_text, extras, now, progress_info)
+    kw = dict(compress=compress, savepoint_bytes=savepoint_bytes, savepoint_seconds=savepoint_seconds,
+              notice=notice, clock=clock)
+    try:
+        return _export_once(*args, resume=resume, **kw)
+    except _ResumeVerifyFailed:
+        if notice:
+            notice("이어받은 내용이 최종 검사를 통과하지 못해 처음부터 다시 만듭니다.")
+        m = _export_once(*args, resume=False, **kw)
+        m["resume"]["reason"] = "이어받은 내용이 최종 검사를 통과하지 못해 처음부터 다시 만들었습니다"
+        return m
+
+
+def _export_once(rules, out, programs, winget_text, expand, winget_list_text, extras, now, progress_info, *,
+                 resume, compress, savepoint_bytes, savepoint_seconds, notice, clock) -> dict:
+    part, jpath = part_paths(out)
     manifest: dict = {
         "format": FORMAT_VERSION,
         "tool_version": __version__,
         "created": now().isoformat(timespec="seconds"),
+        "compress": compress,
         "rules": [], "files": [], "skipped": [], "failed": [],
         "programs": {"registry": "programs/registry.json",
                      "winget": "programs/winget.json" if winget_text else None,
@@ -323,6 +716,11 @@ def export_package(rules: list[Rule], out: Path, programs: list[Program],
     }
     out.parent.mkdir(parents=True, exist_ok=True)
     stage = tempfile.mkdtemp(prefix=STAGE_PREFIX, dir=out.parent)  # 큰 파일을 읽어 두는 전용 임시 폴더(항상 삭제)
+    zf: _PartZip | None = None
+    fobj = None
+    journal: _Journal | None = None
+    finished = False
+    st = {"end": 0}  # 마지막으로 완전히 쓴 엔트리의 끝 위치(저장점 위치)
     try:
         if progress_info:
             progress_info(ProgressInfo("find", 0, 0, 0, 0, message="패키지에 담을 파일을 찾는 중입니다…"))
@@ -353,68 +751,177 @@ def export_package(rules: list[Rule], out: Path, programs: list[Program],
                         pass
         tracker = ProgressTracker("pack", total_bytes, total_files)
         tracker.counts[SKIPPED] = len(manifest["skipped"])
+        tracker.resumed = 0
         last_emit = [0.0]
 
         def emit(force: bool = False) -> None:
             if progress_info is None:
                 return
-            now = time.monotonic()
-            if force or now - last_emit[0] >= 0.5:
-                last_emit[0] = now
+            t = time.monotonic()
+            if force or t - last_emit[0] >= 0.5:
+                last_emit[0] = t
                 progress_info(tracker.snapshot())
 
-        with zipfile.ZipFile(tmp, "w", allowZip64=True) as zf:
-            seen: set[str] = set()
+        fp, fp_info = _fingerprint(rules, extras, compress)
+        head = {"t": "head", "v": JOURNAL_VERSION, "fp": fp, "info": fp_info}
+        by_arc: dict[str, Item] = {}
+        for g in groups:
+            for it in g:
+                by_arc.setdefault(it.arc, it)
+        rs = _prepare_part(part, jpath, head, fp_info, by_arc, resume)
+        kept_bytes = sum(e["size"] for e in rs.kept.values())
+        resume_info = {"resumed": bool(rs.kept), "kept_files": len(rs.kept), "kept_bytes": kept_bytes,
+                       "dropped": rs.dropped, "reason": rs.reason}
+        if rs.kept:
+            msg = f"이어서 하는 중: 저장점까지 {len(rs.kept)}개 파일({fmt_bytes(kept_bytes)})을 보존했습니다."
+            if rs.dropped:
+                msg += f" 원본이 바뀐 {rs.dropped}개 파일은 다시 담습니다."
+        else:
+            msg = rs.reason
+        if msg and notice:
+            notice(msg)
+        if rs.kept:
+            journal = rs.journal
+            fobj = open(part, "r+b")
+            fobj.seek(0, os.SEEK_END)
+            zf = _PartZip(fobj, "w", allowZip64=True)
+            for e in rs.kept.values():
+                zi = _zi_load(e["zi"])
+                zf.filelist.append(zi)
+                zf.NameToInfo[zi.filename] = zi
+            st["end"] = rs.zip_size
+            tracker.resumed = len(rs.kept)
+            for e in rs.kept.values():
+                tracker.note(OK)
+                tracker.add(e["size"], 1)
+        else:
+            fobj = open(part, "wb")
+            zf = _PartZip(fobj, "w", allowZip64=True)
+            journal = _Journal(jpath, "wb")
+            journal.write(head)
+            journal.sync()
+        zf.compress = compress
+        if msg and progress_info:
+            progress_info(ProgressInfo("pack", tracker.done_bytes, total_bytes, tracker.done_files, total_files, message=msg,
+                                       ok=tracker.counts[OK], skipped=tracker.counts[SKIPPED], resumed=tracker.resumed))
 
-            def add_items(items: list[Item]) -> None:
-                for it in items:
-                    tracker.set_current(str(it.src))
-                    if it.arc in seen:
-                        manifest["failed"].append({"src": str(it.src), "error": f"중복된 패키지 경로 {it.arc}"})
-                        tracker.note(FAILED_KIND, str(it.src))
-                        tracker.add(0, 1)
-                        continue
-                    seen.add(it.arc)
-                    try:
-                        size, digest = _write_entry(zf, it.arc, it.src, stage)  # 2) 담기
-                    except SourceUnreadable as e:  # zip 에는 아무 흔적도 남지 않았다
-                        manifest["failed"].append(unreadable_entry(e))
-                        tracker.note(UNREADABLE if e.failure.code == failure.IN_USE else FAILED_KIND, str(it.src))
-                        tracker.add(0, 1)
-                        emit()
-                        continue
-                    manifest["files"].append({"arc": it.arc, "size": size, "sha256": digest,
-                                              "rule": it.rule_id, "base": it.base, "rel": it.rel})
-                    tracker.note(OK)
-                    tracker.add(size, 1)
+        last_sp = [clock(), 0]  # 마지막 저장점 시각, 그 뒤 새로 담은 바이트
+        done: dict[str, dict] = {}  # 이번에 새로 담은 엔트리
+        seen: set[str] = set()
+
+        def savepoint() -> None:
+            """zip 을 디스크에 확정(fsync)한 뒤에 '여기까지 확정' 기록을 남기고 fsync 한다. 이 순서가 중요하다."""
+            fobj.flush()
+            os.fsync(fobj.fileno())
+            journal.write({"t": "sp", "zip": st["end"], "n": len(rs.kept) + len(done)})
+            journal.sync()
+            last_sp[0], last_sp[1] = clock(), 0
+
+        def add_items(items: list[Item]) -> None:
+            for it in items:
+                tracker.set_current(str(it.src))
+                if it.arc in seen:
+                    manifest["failed"].append({"src": str(it.src), "error": f"중복된 패키지 경로 {it.arc}"})
+                    tracker.note(FAILED_KIND, str(it.src))
+                    tracker.add(0, 1)
+                    continue
+                seen.add(it.arc)
+                if it.arc in rs.kept:  # 저장점에서 보존된 파일: 다시 담지 않는다
+                    e = rs.kept[it.arc]
+                    manifest["files"].append({"arc": it.arc, "size": e["size"], "sha256": e["sha256"], "rule": it.rule_id,
+                                              "base": it.base, "rel": it.rel, "method": e["method"]})
+                    continue
+                zf.last_meta = None
+                try:
+                    size, digest = _write_entry(zf, it.arc, it.src, stage)  # 2) 담기
+                except SourceUnreadable as e:  # zip 에는 아무 흔적도 남지 않았다
+                    manifest["failed"].append(unreadable_entry(e))
+                    journal.write({"t": "f", "src": str(it.src), "error": manifest["failed"][-1]["error"]})
+                    tracker.note(UNREADABLE if e.failure.code == failure.IN_USE else FAILED_KIND, str(it.src))
+                    tracker.add(0, 1)
                     emit()
+                    continue
+                meta = zf.last_meta or {"ssize": size, "mtime_ns": 0, "method": "deflated", "off": st["end"],
+                                        "end": fobj.tell(), "zi": _zi_dump(zf.NameToInfo[it.arc])}
+                rec = {"arc": it.arc, "size": size, "sha256": digest, "rule": it.rule_id, "base": it.base,
+                       "rel": it.rel, "method": meta["method"]}
+                manifest["files"].append(rec)
+                done[it.arc] = rec
+                journal.write({"t": "e", "src": str(it.src), **rec, "ssize": meta["ssize"], "mtime_ns": meta["mtime_ns"],
+                               "off": meta["off"], "end": meta["end"], "zi": meta["zi"]})
+                st["end"] = meta["end"]
+                last_sp[1] += size
+                if last_sp[1] >= savepoint_bytes or clock() - last_sp[0] >= savepoint_seconds:
+                    savepoint()
+                tracker.note(OK)
+                tracker.add(size, 1)
+                emit()
 
-            for items in groups:
-                add_items(items)
-            emit(True)
-            zf.writestr("programs/registry.json", json.dumps([asdict(p) for p in programs],
-                                                             ensure_ascii=False, indent=2))
-            if winget_text:
-                zf.writestr("programs/winget.json", winget_text)
-            if winget_list_text:
-                zf.writestr("programs/winget-list.txt", winget_list_text)
-            zf.writestr(MANIFEST, json.dumps(manifest, ensure_ascii=False, indent=2))
+        for items in groups:
+            add_items(items)
+        emit(True)
+        savepoint()  # 마무리 단계가 실패해도 담은 파일은 다시 담지 않도록
+        journal.close()
+        journal = None
+        zf.writestr("programs/registry.json", json.dumps([asdict(p) for p in programs],
+                                                         ensure_ascii=False, indent=2))
+        if winget_text:
+            zf.writestr("programs/winget.json", winget_text)
+        if winget_list_text:
+            zf.writestr("programs/winget-list.txt", winget_list_text)
+        zf.writestr(MANIFEST, json.dumps(manifest, ensure_ascii=False, indent=2))
+        zf.close()
+        fobj.flush()
+        os.fsync(fobj.fileno())
+        fobj.close()
+        zf = fobj = None
         if progress_info:  # 3) 만든 패키지를 다시 읽어 검사
             progress_info(ProgressInfo("check", total_bytes, total_bytes, total_files, total_files,
                                        message="만든 패키지를 다시 읽어 검사하는 중입니다…", ok=tracker.counts[OK],
                                        skipped=tracker.counts[SKIPPED], unreadable=tracker.counts[UNREADABLE],
-                                       failed=tracker.counts[FAILED_KIND]))
-        problems = verify_package(tmp)[1]
+                                       failed=tracker.counts[FAILED_KIND], resumed=tracker.resumed))
+        problems = verify_package(part)[1]
         if problems:
+            finished = True
+            discard_partial(out)  # 검사를 통과하지 못한 임시물은 다시 쓸 수 없다
+            if resume_info["resumed"]:
+                raise _ResumeVerifyFailed()
             raise PackageError("만든 패키지를 다시 검사했더니 문제가 있어 저장하지 않았습니다(원본은 그대로입니다). "
                                "문제: " + "; ".join(problems[:3]))
         if out.exists():
             os.replace(out, _backup_path(out))
-        os.replace(tmp, out)
+        os.replace(part, out)
+        finished = True
+        jpath.unlink(missing_ok=True)
+        manifest["resume"] = resume_info
+    except BaseException:
+        if not finished:
+            _abandon(zf, fobj, journal, st["end"])
+        raise
     finally:
-        tmp.unlink(missing_ok=True)
+        if journal is not None:
+            journal.close()
         shutil.rmtree(stage, ignore_errors=True)
     return manifest
+
+
+def _abandon(zf, fobj, journal, end: int) -> None:
+    """실패/취소 때: 중앙 디렉터리를 쓰지 않고 닫는다. 가능하면 마지막으로 완성된 엔트리까지 저장점을 한 번 더 찍는다."""
+    try:
+        if _GRACEFUL_SAVEPOINT and fobj is not None and journal is not None and end:
+            fobj.flush()
+            os.fsync(fobj.fileno())
+            journal.write({"t": "sp", "zip": end, "n": 0})
+            journal.sync()
+    except (OSError, ValueError):
+        pass
+    if zf is not None:
+        zf.fp = None  # ZipFile.close() 가 .part 끝에 중앙 디렉터리를 쓰지 않게 한다
+    if fobj is not None:
+        try:
+            fobj.close()
+        except OSError:
+            pass
 
 
 # --------------------------------------------------------------------------- import
@@ -613,6 +1120,9 @@ def _rejected_item(f: dict, target: Path, link: str, is_extra: bool, base_path: 
 
 
 def _plan_import(path: Path, rules: list[Rule], expand: Expand) -> ImportPlan:
+    if is_unfinished_part(path):  # 만드는 중/중단된 임시 파일: 완성본이 아니다
+        raise PackageError("이 파일(.part)은 아직 완성되지 않은 임시 파일입니다. 내보내기를 같은 저장 위치로 다시 실행해 "
+                           "끝내거나(이어서 합니다), 완성된 .zip 파일을 선택하세요.")
     manifest, problems = verify_package(path)
     plan = ImportPlan(manifest or {}, problems=list(problems))
     if manifest is None or problems:

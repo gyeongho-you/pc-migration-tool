@@ -271,6 +271,8 @@ pcmigrate.exe import E:\이전\설정.zip --yes</pre><button class="copy" type="
       <ul>
         <li><strong>내보내기 결과의 "읽지 못해 제외된 파일 N개"</strong>: 실행 중인 프로그램(예: Chrome의 LOCK 파일)이 잠근 파일은 읽을 수 없어 패키지에서 빠지고, 결과에 개수와 예시 경로 5개가 나옵니다. 오류가 아니라 안내이며 패키지는 검증을 통과한 상태입니다. 해당 프로그램을 닫고 다시 내보내면 줄어듭니다. 실제로 쓸모없는 잠금 파일(<code>LOCK</code>, <code>SingletonLock</code> 등)은 늘 제외됩니다.</li>
         <li><strong>진행 표시</strong>: 파일이 많으면 <code>export</code>와 <code>import --yes</code>는 몇 분 걸립니다. 10초마다 <code>[진행]</code> 줄이 나옵니다. <code>import</code>는 시작할 때 패키지 전체를 먼저 검사하므로 그동안은 줄이 없을 수 있습니다. 화면(GUI)에서는 현황 카드로 보입니다.</li>
+        <li><strong>내보내기가 중간에 끊겨도 같은 저장 위치로 다시 하면 이어서 합니다</strong>: 내보내는 동안에는 저장 위치 옆에 <code>설정.zip.part</code>(만드는 중인 파일)와 <code>설정.zip.part.journal</code>(진행 기록)이 생기고, 다 만들어 검사를 통과해야 <code>설정.zip</code> 이라는 이름이 됩니다. 그래서 <code>설정.zip</code> 이 보이면 완성본입니다(<code>.part</code> 는 가져오기가 거부합니다). 오류, 취소, 정전으로 끊긴 뒤 같은 명령(또는 화면의 같은 저장 위치)으로 다시 하면 마지막 저장점(256MB 또는 60초마다)까지는 다시 만들지 않고 이어서 합니다. 선택한 프로그램이나 압축 설정이 달라졌거나 기록이 깨졌으면 이유를 알려 주고 처음부터 합니다. 처음부터 다시 하고 싶으면 명령에 <code>--no-resume</code>을 붙이거나 화면의 "처음부터 다시 만들기"를 체크하세요(임시 파일만 지우고 완성본은 건드리지 않습니다). 파일 하나가 매우 크면 그 파일은 끊긴 지점에서가 아니라 처음부터 다시 담습니다.</li>
+        <li><strong>압축 생략(<code>--compress</code>)</strong>: 기본(<code>auto</code>)은 사진, 영상, zip, pdf 처럼 이미 압축된 파일은 압축하지 않아 더 빨리 끝납니다. <code>always</code> 는 모두 압축, <code>never</code> 는 모두 압축 없이 담습니다. 가져오기는 어느 쪽이든 똑같이 처리합니다.</li>
         <li><strong>규칙 폴더 오류</strong>: "규칙 폴더를 찾을 수 없습니다" 또는 "규칙 파일이 하나도 없습니다"가 나오면 exe 옆 <code>_internal\rules</code> 폴더가 지워진 것입니다. 이 상태로는 아무 프로그램도 감지하지 못하므로 도구가 종료 코드 1로 멈춥니다. 다시 내려받아 압축을 풀어 주세요.</li>
       </ul>
       <h3>대용량 복사</h3>

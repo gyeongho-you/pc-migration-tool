@@ -8,7 +8,7 @@ from tkinter import filedialog, messagebox, ttk
 from .. import state as S
 from .. import texts as T
 from ...api import unreadable_lines
-from .common import (INFO_BG, MUTED_FG, SECRET_BG, SECRET_FG, WARN_FG, BaseView, ResultSummary, TreeTooltip, add_tooltip,
+from .common import (INFO_BG, MUTED_FG, OK_FG, SECRET_BG, SECRET_FG, WARN_FG, BaseView, ResultSummary, TreeTooltip, add_tooltip,
                      autowrap, clear, make_text, make_tree, open_location, set_text, sort_tree)
 
 
@@ -332,6 +332,15 @@ class ExportView(BaseView):
         self.plan = ttk.Label(self, text="", justify="left")
         self.plan.pack(anchor="w", fill="x", pady=8)
         autowrap(self.plan)
+        self.resume_box = ttk.Frame(self)  # 이어받을 수 있을 때만 보인다
+        self.resume_lbl = ttk.Label(self.resume_box, text="", justify="left", foreground=OK_FG)
+        self.resume_lbl.pack(anchor="w", fill="x")
+        autowrap(self.resume_lbl)
+        self.restart_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(self.resume_box, text=T.EXP_RESTART_CHECK, variable=self.restart_var).pack(anchor="w")
+        self._resume_shown = False
+        entry.bind("<FocusOut>", lambda e: self._update_resume())
+        entry.bind("<Return>", lambda e: self._update_resume())
         act = ttk.Frame(self)
         act.pack(fill="x")
         self.go_btn = ttk.Button(act, text=T.BTN_EXPORT, command=self._export)
@@ -349,6 +358,18 @@ class ExportView(BaseView):
         self.path_var.trace_add("write", lambda *a: self._update_reason())
         self.finish()
 
+    def _update_resume(self) -> None:
+        hint = self.c.export_resume_hint(self.path_var.get())
+        if hint:
+            self.resume_lbl.configure(text=hint)
+            if not self._resume_shown:
+                self.resume_box.pack(anchor="w", fill="x", before=self.go_btn.master)
+                self._resume_shown = True
+        elif self._resume_shown:
+            self.resume_box.pack_forget()
+            self._resume_shown = False
+            self.restart_var.set(False)
+
     def _update_reason(self) -> None:
         why = self.c.export_reason(self.path_var.get())
         self.reason.configure(text=why)
@@ -365,6 +386,7 @@ class ExportView(BaseView):
             text += T.EXP_PLAN_NONE
         self.plan.configure(text=text)
         self._update_reason()
+        self._update_resume()
         self.go_btn.focus_set()
 
     def _browse(self) -> None:
@@ -372,16 +394,21 @@ class ExportView(BaseView):
                                          filetypes=[("설정 패키지", "*.zip")], initialfile="pcmigrate-settings.zip")
         if p:
             self.path_var.set(p)
+            self._update_resume()
 
     def _export(self) -> None:
         out = self.path_var.get().strip()
         if not out:
             messagebox.showwarning(T.EXP_NEED_PATH_TITLE, T.EXP_NEED_PATH, parent=self)
             return
+        self._update_resume()
         exists = T.EXP_EXISTS if os.path.exists(out) else ""
         if not messagebox.askokcancel(T.EXP_CONFIRM_TITLE, T.EXP_CONFIRM.format(path=out, exists=exists), parent=self):
             return
-        self.guarded(self.c.start_export, out, write_confirmed=True)
+        restart = bool(self._resume_shown and self.restart_var.get())
+        if restart and not messagebox.askokcancel(T.EXP_RESTART_TITLE, T.EXP_RESTART_CONFIRM, parent=self):
+            return
+        self.guarded(self.c.start_export, out, write_confirmed=True, resume=not restart)
 
     def on_event(self, kind, payload) -> None:
         if kind != "export_done":
@@ -390,9 +417,14 @@ class ExportView(BaseView):
         failed = len(m["failed"])
         self.summary.show(len(m["files"]), len(m["skipped"]), failed, T.EXP_DONE.format(path=self.c.state.export_output),
                           T.EXP_FAILED_HEAD)
-        lines = [T.EXP_DONE.format(path=self.c.state.export_output), "",
-                 T.EXP_RULES.format(rules=", ".join(r["id"] for r in m["rules"]) or T.EXP_NO_RULES),
-                 T.EXP_COUNTS.format(files=len(m["files"]), skipped=len(m["skipped"]), failed=failed)]
+        rs = getattr(payload, "resume", None) or {}
+        lines = [T.EXP_DONE.format(path=self.c.state.export_output), ""]
+        if rs.get("resumed"):
+            lines += [T.EXP_RESUMED_DONE.format(n=rs["kept_files"]), ""]
+        elif rs.get("reason"):
+            lines += [T.EXP_RESTART_REASON.format(why=rs["reason"]), ""]
+        lines += [T.EXP_RULES.format(rules=", ".join(r["id"] for r in m["rules"]) or T.EXP_NO_RULES),
+                  T.EXP_COUNTS.format(files=len(m["files"]), skipped=len(m["skipped"]), failed=failed)]
         lines += [T.friendly_detail(x) for x in unreadable_lines([f for f in m["failed"] if f.get("reason")], 5)]
         lines += [f"  - {f['src']}: {T.friendly_detail(f['error'])}" for f in m["failed"] if not f.get("reason")][:20]
         lines += ["", T.EXP_TODO]
