@@ -32,7 +32,7 @@ from .discover import (Discovery, ExtraItem, SelectionError, build_selection, di
 import inspect
 from .install_check import InstallCheck, NewState, check_install, read_new_state
 from .package import (COMPRESS_MODES, ImportPlan, PackageError, apply_import, export_package, extract_winget,
-                      is_unfinished_part, plan_import, verify_package)
+                      is_unfinished_part, plan_import, retry_failed_export, verify_package)
 from .rules import Rule, RuleError, load_rules
 from . import fs
 from .manifest import build_manifest, verify_against_manifest
@@ -71,6 +71,7 @@ class Deps:
     manifest: Callable = build_manifest
     verify: Callable = verify_against_manifest
     describe_destination: Callable = fs.describe_destination
+    retry_export: Callable = retry_failed_export
 
 
 # --------------------------------------------------------------------------- 공통 보조
@@ -577,6 +578,83 @@ def run_export(rules_dir: str | Path, output: str | Path, *, extra: str | Path |
     cl = build_checklist(manifest_warning_pairs(manifest), registry, winget, list_text,
                          rule_ids=[r["id"] for r in manifest["rules"]])
     return ExportResult(manifest, extras, matched, notes, cl, discovery_summary(rules, registry, deps))
+
+
+# --------------------------------------------------------------------------- export: 읽지 못해 제외된 파일만 다시 담기
+
+@dataclass
+class RetryResult:
+    """run_export_retry 결과. manifest 는 갱신된 묶음의 목록(ExportResult 와 같은 모양이라 화면/요약이 그대로 쓴다)."""
+    manifest: dict
+    output: str
+
+    @property
+    def info(self) -> dict:
+        return self.manifest.get("retry") or {}
+
+    @property
+    def added(self) -> list[dict]:
+        return self.info.get("added", [])
+
+    @property
+    def still_failed(self) -> list[dict]:
+        """이번에도 읽지 못했거나 다시 담지 않은 파일(여전히 묶음 목록의 failed 에 있다)."""
+        return [f for f in self.manifest["failed"] if f.get("reason")]
+
+    unreadable = still_failed
+
+    @property
+    def unchanged(self) -> bool:
+        return bool(self.info.get("unchanged", True))
+
+    @property
+    def denied(self) -> list[dict]:
+        return [s for s in self.manifest["skipped"] if s.get("denied")]
+
+    @property
+    def hard_failures(self) -> list[dict]:
+        return [f for f in self.manifest["failed"] if not f.get("reason")]
+
+    @property
+    def resume(self) -> dict:
+        return {}
+
+    def unreadable_lines(self, limit: int = 5) -> list[str]:
+        return unreadable_lines(self.still_failed, limit)
+
+    def summary_dict(self) -> dict:
+        i, m = self.info, self.manifest
+        return {"output": self.output, "retried": i.get("total", 0), "added": len(self.added),
+                "still_failed": len(self.still_failed), "gone": len(i.get("gone", [])), "files": len(m["files"]),
+                "unchanged": self.unchanged, "backup": i.get("backup", ""),
+                "reasons": {code: sum(1 for f in self.still_failed if f.get("reason") == code)
+                            for code in sorted({f.get("reason") for f in self.still_failed})},
+                "missing_rules": i.get("missing_rules", [])}
+
+
+def run_export_retry(rules_dir: str | Path, output: str | Path, *, deps: Deps | None = None,
+                     progress_info: Callable[[ProgressInfo], None] | None = None,
+                     notice: Callable[[str], None] | None = None,
+                     stage_dir: str | Path | None = None) -> RetryResult:
+    """이미 만든 설정 묶음에서 '읽지 못해 제외된 파일'만 다시 읽어 그 묶음에 추가한다(새로 만들지 않는다).
+
+    묶음이 없거나 끝나지 않은 임시 파일(.part)이거나 검사에 실패하면 ApiError. 기존 묶음은 .bak 으로 보존되고,
+    실패/취소 때는 바뀌지 않는다. OSError(저장 위치 문제)는 전파한다.
+    """
+    deps = deps or Deps()
+    rules = load_rules_checked(rules_dir)
+    kw: dict = {}
+    if progress_info:
+        kw["progress_info"] = progress_info
+    if notice:
+        kw["notice"] = notice
+    if stage_dir:
+        kw["stage_dir"] = str(stage_dir)
+    try:
+        manifest = deps.retry_export(Path(output), rules, **kw)
+    except PackageError as e:
+        raise ApiError(f"다시 담기 실패: {e}") from e
+    return RetryResult(manifest, str(output))
 
 
 # --------------------------------------------------------------------------- import

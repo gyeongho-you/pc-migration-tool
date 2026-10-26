@@ -832,6 +832,48 @@ class Controller:
             self.emit("export_done", res)
         self._run(T.TASK_EXPORT, work, done)
 
+    # ------------------------------------------------------------------ 구 PC 4) 읽지 못해 제외된 파일만 다시 담기
+    def export_unreadable(self) -> list[dict]:
+        """마지막 내보내기(또는 다시 담기) 결과에서 읽지 못해 제외된 파일(사유 코드가 있는 failed 항목)."""
+        m = getattr(self.state.export_result, "manifest", None)
+        if not isinstance(m, dict):
+            return []
+        return [f for f in m.get("failed", []) if f.get("reason")]
+
+    def retry_export_reason(self) -> str:
+        """'이 파일들만 다시 담기' 가 막혀 있는 이유(없으면 빈 문자열)."""
+        if self.state.busy:
+            return T.WHY_BUSY
+        if not self.state.export_output:
+            return T.G_RETRY_NO_PACKAGE
+        return "" if self.export_unreadable() else T.G_RETRY_NOTHING
+
+    def retry_export_failed(self, write_confirmed: bool = False) -> None:
+        """이미 만든 설정 묶음에서 읽지 못해 제외된 파일만 다시 읽어 추가한다(새로 만들지 않는다). 취소할 수 있다."""
+        if not write_confirmed:
+            raise GuardError(T.G_NEED_RETRY_CONFIRM)
+        if self.state.busy:
+            raise GuardError(T.G_BUSY)
+        why = self.retry_export_reason()
+        if why:
+            raise GuardError(why)
+        output = self.state.export_output
+        if not os.path.isfile(output):
+            raise GuardError(T.G_PACKAGE_MISSING.format(path=output))
+
+        def work(progress, token):
+            def info(i):
+                token.raise_if_set()  # 진행 보고 때마다 취소 확인(기존 취소 흐름)
+                progress(i)
+            info(T.PROGRESS[T.TASK_EXPORT_RETRY])
+            return self.api.run_export_retry(self.state.rules_dir, output, deps=self.deps,
+                                             **_supported(self.api.run_export_retry, progress_info=info))
+
+        def done(res):
+            self.state.export_result = res  # manifest/resume/denied 를 가진 결과(화면의 개수와 요약이 새 상태가 된다)
+            self.emit("export_retry_done", res)
+        self._run(T.TASK_EXPORT_RETRY, work, done, cancellable=True)
+
     # ------------------------------------------------------------------ 신 PC
     def set_package(self, path: str) -> None:
         self.state.package = path

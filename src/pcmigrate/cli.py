@@ -12,7 +12,7 @@ from pathlib import Path
 from . import __version__, envpaths, errorlog, failure, fs, summary
 from .api import (NEEDS_CONFIRM, ApiError, Deps, check_outputs_outside, check_path_forms, check_unexpanded, clean_path_arg,
                   clean_state_files, format_write_error, load_rules_checked, report_inside, run_checklist, run_copy,
-                  run_discover, run_export, run_import, run_install_check, run_join, run_manifest, run_scan, run_transfer,
+                  run_discover, run_export, run_export_retry, run_import, run_install_check, run_join, run_manifest, run_scan, run_transfer,
                   run_verify, run_winget_extract, same_file, selection_json)
 from .checklist import write_output
 from .detect import read_registry_programs, winget_export_raw, winget_list_raw
@@ -22,7 +22,7 @@ from .progress import ProgressInfo, format_info
 from .scan import skipped_links_view
 from .discover import render as render_discovery
 from .discover import summarize
-from .package import export_package, plan_import
+from .package import export_package, plan_import, retry_failed_export
 from .rules import default_rules_dir
 from .transfer import TransferError, transfer
 
@@ -31,7 +31,8 @@ def _deps() -> Deps:
     """이 모듈의 현재 이름들을 주입한다(테스트가 cli.<이름> 을 바꿔치기할 수 있도록 호출 시점에 조회)."""
     return Deps(registry=read_registry_programs, winget_export=winget_export_raw,
                 winget_list=winget_list_raw, summarize=summarize, export=export_package,
-                plan=plan_import, transfer=transfer, manifest=build_manifest, verify=verify_against_manifest)
+                plan=plan_import, transfer=transfer, manifest=build_manifest, verify=verify_against_manifest,
+                retry_export=retry_failed_export)
 
 
 def _err(*lines: str) -> None:
@@ -522,7 +523,34 @@ def _export_output(output: str) -> str:
     return output
 
 
+def _cmd_export_retry(args: argparse.Namespace) -> int:
+    """export --retry-failed: 새로 만들지 않고 기존 묶음에서 읽지 못해 제외된 파일만 다시 담는다."""
+    if _unexpanded(output=args.output, stage_dir=args.stage_dir):
+        return 1
+    conflict = [flag for flag, on in (("--extra", args.extra), ("--allow-secrets", args.allow_secrets),
+                                      ("--restart/--no-resume", args.restart or not args.resume),
+                                      ("--compress", args.compress != "auto")) if on]
+    if conflict:
+        _err(f"--retry-failed 는 기존 묶음만 갱신하므로 {', '.join(conflict)} 와 함께 쓸 수 없습니다. "
+             "처음부터 새로 만들려면 --retry-failed 를 빼고 실행하세요.")
+        return 1
+    try:
+        r = run_export_retry(args.rules, args.output, deps=_deps(), progress_info=_cli_info_progress(),
+                             notice=lambda m: _err(f"[안내] {m}"), stage_dir=args.stage_dir)
+    except ApiError as e:
+        return _fail(e)
+    except OSError as e:
+        return _write_failed(args.output, e)
+    if args.json:
+        _json_out(r.summary_dict())
+    else:
+        _print_lines(summary.retry_lines(r, args.output))
+    return 1 if r.hard_failures else 0  # 계속 못 담은 파일은 안내만 하고 성공으로 끝낸다(묶음은 검사를 통과했다)
+
+
 def _cmd_export(args: argparse.Namespace) -> int:
+    if args.retry_failed:
+        return _cmd_export_retry(args)
     if _unexpanded(output=args.output, extra=args.extra, stage_dir=args.stage_dir) or _output_is_dir(output=args.output):
         return 1
     args.output = _export_output(args.output)
@@ -731,6 +759,9 @@ def build_parser() -> argparse.ArgumentParser:
     e.add_argument("--stage-dir", type=_path_arg,
                    help="64MB 넘는 파일을 담기 전에 임시로 읽어 두는 폴더의 위치(기본: 출력 파일이 있는 폴더). 출력이 느린 외장/네트워크 드라이브일 때 "
                         "로컬 디스크 폴더를 지정. 원본 폴더 안은 거부, 끝나면 임시 폴더는 항상 지움")
+    e.add_argument("--retry-failed", action="store_true",
+                   help="새로 만들지 않고, 이미 만든 --output 묶음에서 '읽지 못해 제외된 파일'만 다시 읽어 그 묶음에 추가합니다"
+                        "(해당 프로그램을 닫은 뒤 실행. 이전 묶음은 .bak 으로 보관, 규칙 밖/보안상 거부 파일은 다시 담지 않음)")
     e.add_argument("--json", action="store_true", help="사람이 읽는 요약 대신 JSON 으로 출력")
     e.set_defaults(func=_cmd_export)
 

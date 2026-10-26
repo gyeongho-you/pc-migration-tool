@@ -12,6 +12,7 @@ from .common import (DANGER_BG, DANGER_FG, INFO_BG, INFO_FG, LIST_BG, MUTED_FG, 
                      bind_alt,
                      Collapsible, PathField, ResultSummary, ScrollBody, TreeTooltip, autowrap, clear, clean_path, make_text,
                      make_tree, open_location, set_text, sort_tree, table_hint)
+from .retry_panel import RetryPanel
 
 
 class ScanView(BaseView):
@@ -360,7 +361,7 @@ class ExportView(BaseView):
         self.reason = ttk.Label(self.bar_right, text="", foreground=WARN_FG, justify="right")
         self.reason.pack(side="right", padx=10)
         self.header(T.EXP_HEADING, T.EXP_SUB)
-        self.add_status_card({T.TASK_EXPORT})
+        self.add_status_card({T.TASK_EXPORT, T.TASK_EXPORT_RETRY})
         scroll = ScrollBody(self)
         scroll.pack(fill="both", expand=True)
         self.scroll = scroll
@@ -392,6 +393,8 @@ class ExportView(BaseView):
         self.stage_field.pack(fill="x")
         self.summary = ResultSummary(body)
         self.summary.pack(fill="x", pady=6)
+        self.retry_panel = RetryPanel(body, self.c, self.guarded)  # 읽지 못해 제외된 파일이 있을 때만 보이는 '다시 담기' 상자
+        self.retry_panel.pack(fill="x")
         # 끝난 뒤: 큰 '다음에 할 일' 상자와 결과 위치 열기
         self.next_box = tk.Frame(body, bg=INFO_BG, highlightbackground=INFO_FG, highlightthickness=1, padx=12, pady=8)
         tk.Label(self.next_box, text=T.NEXT_TITLE, bg=INFO_BG, fg=INFO_FG, font=SUB_FONT, anchor="w").pack(anchor="w")
@@ -462,6 +465,7 @@ class ExportView(BaseView):
             self.next_box.pack_forget()
             self.more.pack_forget()
             self.summary.clear()
+            self.retry_panel.reset()
 
     def _browse(self) -> None:
         p = filedialog.asksaveasfilename(parent=self, title=T.EXP_SAVE_TITLE, defaultextension=".zip",
@@ -493,7 +497,8 @@ class ExportView(BaseView):
                      **({"stage_dir": stage} if (stage := clean_path(self.stage_var.get())) else {}))
 
     def on_event(self, kind, payload) -> None:
-        if kind != "export_done":
+        self.retry_panel.on_event(kind, payload)
+        if kind not in ("export_done", "export_retry_done"):
             return
         m = payload.manifest
         failed = len(m["failed"])

@@ -591,6 +591,12 @@ python -m pcmigrate discover --output-selection <폴더>\selection.json
   남긴 채 끝까지 진행하며, 결과에 "읽지 못해 제외된 파일 N개(예: Chrome 실행 중이면 닫고 다시 하세요)"와 예시 경로 5개를 보여 줍니다.
   패키지를 만든 직후 다시 검사해 문제가 있으면 임시 파일을 남기지 않고 어떤 항목이 문제인지 알려 줍니다.
   `LOCK`, `lockfile`, `parent.lock`, `SingletonLock`, `SingletonCookie`, `SingletonSocket` 은 복사할 가치가 없어 항상 제외합니다.
+- **읽지 못해 제외된 파일만 다시 담기(`export --retry-failed`)**: 해당 프로그램(예: Chrome)을 닫은 뒤 `pcmigrate export --output 묶음.zip --retry-failed`
+  (GUI: 결과 영역의 "이 파일들만 다시 담기")를 실행하면 새로 만들지 않고, **이미 만든 묶음**의 `manifest['failed']` 항목만 현재 원본에서 다시 읽어 그 묶음에 추가합니다.
+  담을 대상은 묶음에 적힌 규칙 id 와 직접 고른 항목(`extras`)으로 다시 찾으므로(이 PC 의 `--rules` 폴더에 같은 규칙이 있어야 함) 규칙 밖이거나 보안상 거부 대상인 파일은 다시 담지 않습니다.
+  기존 묶음 내용은 재압축 없이 `<묶음>.retry` 로 그대로 옮기고 추가분을 담아 전체 검사를 통과해야만 교체하며, 이전 묶음은 `.bak` 으로 보존합니다(실패/취소/계속 잠긴 경우 원래 묶음은 바뀌지 않음).
+  처음 내보낸 뒤 원본이 바뀌었어도 **지금 원본의 내용**을 담습니다. 담긴 파일은 `manifest['files']` 에 추가되고 `failed` 에서 빠지며(`retries` 기록이 남음), 계속 못 담은 파일은 `failed` 에 남고 원인(사용 중/권한/경로 길이 등)과 함께 표시됩니다.
+  `--extra/--allow-secrets/--restart/--compress` 와는 함께 쓸 수 없고, 묶음이 없거나 `.part`(끝나지 않은 임시 파일)이거나 검사에 실패하면 쉬운 오류로 멈춥니다. `--json` 지원. 같은 이름의 내보내기와 동시에 실행되지 않도록 `.part.lock` 을 씁니다.
 - `--chunk-mb`(0.25~1024), `--workers`(1~8), `--copy-threads`(1~16)는 범위를 벗어나면 조용히 바꾸지 않고 종료 코드 2 와 한국어 오류를 냅니다.
 - 깨졌거나 UTF-8 이 아닌 해시 목록(`.jsonl`)과 패키지 `manifest.json` 은 traceback 없이 "해시 목록 오류" / "패키지 검증 실패" 로 안내합니다.
 - 원본 폴더 안에는 아무것도 쓰지 않습니다: `transfer` 의 `--report/--log/--state-file/--manifest-out`, `manifest --out`, `copy --report` 가 원본 폴더 안

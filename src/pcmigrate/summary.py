@@ -168,3 +168,39 @@ def transfer_lines(d: dict, rep, src: str, dst: str) -> list[str]:
         lines.append("다음 할 일: 검사까지 통과했습니다. 대상 폴더의 .pcmigrate-* 기록 파일은 지워도 됩니다"
                      "(--clean-state 로 자동 삭제). 원본 정리는 충분히 확인한 뒤 판단하세요.")
     return lines
+
+
+def retry_lines(r, output: str) -> list[str]:
+    """'읽지 못해 제외된 파일만 다시 담기' 결과 요약(다시 담김 N개, 아직 못 담음 M개와 이유, 다음 할 일)."""
+    from .failure import REASONS
+    info = r.info
+    out = fs.plain_path_text(str(output))
+    if info.get("total", 0) == 0:
+        return [f"다시 담을 파일이 없습니다(읽지 못해 제외된 파일이 없습니다): {out}",
+                f"다음 할 일: 새 PC 로 옮긴 뒤 pcmigrate import {_q(output)} --dry-run 으로 미리 확인하세요."]
+    added, still, gone = len(r.added), r.still_failed, info.get("gone", [])
+    lines = [f"설정 묶음 파일에 다시 담았습니다: {out}" if added or gone else f"설정 묶음 파일을 바꾸지 않았습니다: {out}",
+             f"- 다시 담김 {added}개, 아직 못 담음 {len(still)}개" + (f", 원본이 없어져 목록에서 뺌 {len(gone)}개" if gone else "")
+             + f" (묶음 전체 {len(r.manifest['files'])}개 파일)"]
+    if added:
+        lines.append("- 다시 담은 파일은 지금 원본의 내용입니다(처음 내보낸 뒤 바뀌었을 수 있습니다).")
+    if info.get("backup"):
+        lines.append(f"- 이전 묶음은 {fs.plain_path_text(info['backup'])} 로 보관했습니다.")
+    if still:
+        by: dict[str, int] = {}
+        for f in still:
+            by[f.get("reason", "other")] = by.get(f.get("reason", "other"), 0) + 1
+        lines.append("- 못 담은 이유: " + ", ".join(
+            f"{REASONS[c].label if c in REASONS else c} {n}개" for c, n in by.items()))
+        lines += [f"    · {f['src']}" for f in still[:5]]
+        if len(still) > 5:
+            lines.append(f"    … 외 {len(still) - 5}개")
+    for f in info.get("not_retried", [])[:5]:
+        lines.append(f"- 다시 담지 않음: {f['src']} ({f.get('note', '')})")
+    if info.get("missing_rules"):
+        lines.append("- 이 PC 의 규칙 폴더에 없는 규칙이라 다시 찾지 못함: " + ", ".join(info["missing_rules"]))
+    if still:
+        lines.append("다음 할 일: 해당 프로그램(예: Chrome)을 닫은 뒤 같은 명령(--retry-failed)을 다시 실행하세요.")
+    else:
+        lines.append(f"다음 할 일: 새 PC 로 옮긴 뒤 pcmigrate import {_q(output)} --dry-run 으로 미리 확인하고, 이상 없으면 --yes 로 복원하세요.")
+    return lines

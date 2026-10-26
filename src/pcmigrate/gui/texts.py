@@ -1034,3 +1034,29 @@ def ellipsize_path(path: str, limit: int = 60) -> str:
         return path
     head = max(10, limit // 3)
     return path[:head] + "…" + path[-(limit - head - 1):]
+
+
+# --------------------------------------------------------------------------- 읽지 못해 제외된 파일만 다시 담기
+TASK_EXPORT_RETRY = "읽지 못한 파일 다시 담기"
+PROGRESS[TASK_EXPORT_RETRY] = ("읽지 못해 제외된 파일만 다시 읽어 담는 중… 보통 몇 초에서 몇 분 걸립니다. "
+                               "원본은 읽기만 하고, 이전 설정 묶음 파일은 백업 파일(.bak)로 남깁니다.")
+TASK_STEPS[TASK_EXPORT_RETRY] = ("파일 찾기", "담기", "검사")
+BTN_EXP_RETRY = "이 파일들만 다시 담기"
+EXP_RETRY_HEAD = f"{ICON_WARN} 읽지 못해 제외된 파일 {{n}}개"
+EXP_RETRY_ALL_DONE = f"{ICON_OK} 읽지 못해 제외된 파일이 이제 없습니다"
+EXP_RETRY_HINT = "사용 중인 프로그램(예: Chrome)을 닫고 눌러 주세요. 읽지 못한 파일만 다시 읽어 이미 만든 설정 묶음 파일에 추가합니다."
+EXP_RETRY_CONFIRM_TITLE = "읽지 못한 파일 다시 담기"
+EXP_RETRY_CONFIRM = ("다음 설정 묶음 파일에서 읽지 못해 제외된 파일 {n}개만 다시 담습니다:\n{path}\n\n"
+                     "원본은 읽기만 합니다. 이전 설정 묶음 파일은 백업 파일(.bak)로 남기고, 검사를 통과한 경우에만 바꿉니다. "
+                     "다시 담는 파일은 지금 원본의 내용입니다.")
+EXP_RETRY_DONE = f"{ICON_OK} 다시 담았습니다: {{added}}개 담김, 아직 못 담음 {{still}}개."
+EXP_RETRY_NO_CHANGE = f"{ICON_WARN} 아직 읽지 못했습니다. 설정 묶음 파일은 바꾸지 않았습니다(아직 못 담음 {{still}}개)."
+EXP_RETRY_REASONS = "못 담은 이유: {reasons}"
+EXP_RETRY_GONE = "원본이 없어져 목록에서 뺀 파일: {n}개"
+EXP_RETRY_NOT_RETRIED = "자동 목록 밖이거나 보안상 담지 않는 파일이라 다시 담지 않은 것: {n}개"
+EXP_RETRY_FRESH = "다시 담은 파일은 지금 원본의 내용입니다(처음 만든 뒤 바뀌었을 수 있습니다)."
+EXP_RETRY_BACKUP = "이전 설정 묶음 파일은 {path} 로 보관했습니다."
+EXP_RETRY_AGAIN = "프로그램을 닫은 뒤 '이 파일들만 다시 담기'를 다시 눌러 주세요."
+G_NEED_RETRY_CONFIRM = "읽지 못한 파일을 다시 담기 전에 확인하는 단계가 필요합니다."
+G_RETRY_NO_PACKAGE = "다시 담을 설정 묶음 파일이 없습니다. 먼저 설정 묶음 파일을 만들어 주세요."
+G_RETRY_NOTHING = "다시 담을 파일이 없습니다."

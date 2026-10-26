@@ -30,6 +30,7 @@ PHASE_MAP = {
     T.TASK_VERIFY_AGAIN: {"scan": 0, "verify": 1},
     T.TASK_RETRY: {"scan": 0, "verify": 1, "copy": 1},
 }
+PHASE_MAP[T.TASK_EXPORT_RETRY] = PHASE_MAP[T.TASK_EXPORT]  # 읽지 못한 파일 다시 담기: 같은 단계(찾기/담기/검사)
 MAX_KEPT_PER_KIND = 2000  # 분류별로 창에 보관하는 문제 항목 상한(메모리 보호)
 CURRENT_SHORT_LIMIT = 70
 
