@@ -160,3 +160,11 @@ def test_license_notice_is_prominent():
     assert len(T.START_INTRO.splitlines()) <= 3  # 첫 화면 설명은 3줄 이내
     for title, desc, btn, target in T.START_CHOICES:
         assert desc.endswith("니다.") and target in SCREENS
+
+
+def test_card_head_texts_polite_and_without_circled_numbers():  # stage36
+    for name in ("CARD_HEAD_RUNNING", "CARD_HEAD_DONE", "CARD_STEP_DONE"):
+        value = getattr(T, name)
+        assert not any(0x2460 <= ord(ch) <= 0x2473 for ch in value), name
+        assert not banned_in(value), name
+    assert T.CARD_HEAD_RUNNING.format(step="복사").endswith("중") and T.CARD_HEAD_DONE == "완료"
