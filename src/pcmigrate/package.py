@@ -393,6 +393,8 @@ def collect_extra_items(extras: list, expand: Expand = expand_env, *, avoid: Cal
             c = _path_coverage(Rule(EXTRA_ID, coverage.EXTRA_PROGRAM), PathRule(where, EXTRA_ID, "dir", where),
                                items, skipped, failed, snap, top.exists())
             c["name"] = f"{coverage.EXTRA_PROGRAM}: {ex.rel}"
+            if getattr(ex, "self_transfer", None):
+                c["self_transfer"] = dict(ex.self_transfer)  # 확인표에 '자체 이전 필요' 를 덧붙인다
             mine = [x for x in skipped[snap[1]:] if x.get("cache")]
             if mine:
                 c.update(cache_dirs=len(mine), cache_files=sum(x["files"] for x in mine), cache_bytes=sum(x["bytes"] for x in mine))
@@ -1140,7 +1142,8 @@ def _export_once(rules, out, programs, winget_text, expand, winget_list_text, ex
                                                  include_caches=include_caches, cov=manifest["coverage"],
                                                  extra_mode=extra_mode)
             manifest["skipped"] += skipped
-            manifest["extras"] = [{"root": e.root, "rel": e.rel} for e in extras]
+            manifest["extras"] = [{"root": e.root, "rel": e.rel, **({"self_transfer": e.self_transfer["id"]} if getattr(e, "self_transfer", None) else {})}
+                                  for e in extras]  # self_transfer 는 덧붙이는 표시(이전 버전은 무시)
             manifest["extra_mode"] = extra_mode
             if extra_mode == settings_filter.EXTRA_MODE_CONFIG:
                 lim = settings_filter.default_limits()

@@ -1227,3 +1227,13 @@ AUTO_DONE_RETRY_OK = f"{ICON_OK} 읽지 못했던 파일을 모두 담았습니�
 G_AUTO_RETRY_NA = "다시 시도할 수 있는 상태가 아닙니다. 처음 화면에서 다시 시작해 주세요."
 DISC_COL_FILES_ALL = "파일 수(폴더 전체)"
 DISC_COL_SIZE_FULL = "용량(폴더 전체)"
+
+# 자체 이전이 필요한 프로그램(카카오톡, 금융보안, 백신, 드라이버, Office, Adobe 등): 폴더를 복사해서 옮길 수 없는 프로그램은 표 아래 접힌 구역에 모은다
+DISC_SELF_TOGGLE, DISC_SELF_TOGGLE_OPEN = "자체 이전이 필요한 프로그램 {n}개 ▸", "자체 이전이 필요한 프로그램 {n}개 ▾"
+DISC_SELF_HINT = ("폴더를 복사해서는 옮길 수 없는 프로그램입니다. 줄을 고르면 아래에 대신 할 일이 나옵니다. "
+                  "체크할 수는 있지만 새 PC에서 제대로 동작하지 않을 수 있습니다. 위의 '전체 선택'은 이 구역을 선택하지 않습니다.")
+DISC_SELF_COLS = ("선택", "구분", "프로그램", "대신 할 일")
+DISC_SELF_BADGE = "자체 이전 필요"
+DISC_SELF_DETAIL = "이 프로그램은 폴더를 복사해서 옮길 수 없습니다. {reason} {todo}"
+DISC_SELF_TITLE = "안내"
+DISC_SELF_CHECK = DISC_SELF_DETAIL + "\n\n체크는 그대로 두었습니다. 필요하지 않다면 체크를 해제해 주세요."

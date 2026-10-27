@@ -10,7 +10,7 @@
 - PyInstaller 는 전역 Python 환경에 설치하지 않는다. 임시 폴더(기본 %TEMP%\\pcm-build)에 새 가상환경을 만들어 거기에만 설치한다.
 - 빌드가 끝나면 가상환경과 중간 산출물(build/, *.spec)을 지운다(--keep-work 로 남길 수 있음).
 - 만든 exe 의 SHA-256 을 출력한다. 받는 사람이 같은 값인지 확인할 수 있게 함께 전달한다.
-- 코드는 정적 분석으로 따라가므로 외부 패키지가 없는 이 프로젝트에서는 rules/ 폴더(--add-data)와 tkinter 만 신경 쓰면 된다.
+- 코드는 정적 분석으로 따라가므로 외부 패키지가 없는 이 프로젝트에서는 rules/·selftransfer/ 폴더(--add-data)와 tkinter 만 신경 쓰면 된다.
 """
 from __future__ import annotations
 
@@ -37,8 +37,8 @@ ENTRIES = {  # exe 이름 -> (진입 스크립트, 창 모드 여부)
 
 
 SPEC_TEMPLATE = '''# 자동 생성(packaging/build_exe.py). 커밋하지 않는다.
-a_gui = Analysis([r"{gui}"], pathex=[r"{src}"], datas=[(r"{rules}", "rules")], excludes=[], noarchive=False)
-a_cli = Analysis([r"{cli}"], pathex=[r"{src}"], datas=[(r"{rules}", "rules")], excludes=[], noarchive=False)
+a_gui = Analysis([r"{gui}"], pathex=[r"{src}"], datas=[(r"{rules}", "rules"), (r"{selftransfer}", "selftransfer")], excludes=[], noarchive=False)
+a_cli = Analysis([r"{cli}"], pathex=[r"{src}"], datas=[(r"{rules}", "rules"), (r"{selftransfer}", "selftransfer")], excludes=[], noarchive=False)
 MERGE((a_gui, "pcmigrate-gui", "pcmigrate-gui"), (a_cli, "pcmigrate", "pcmigrate"))
 pyz_gui = PYZ(a_gui.pure)
 pyz_cli = PYZ(a_cli.pure)
@@ -130,7 +130,7 @@ def build(args: argparse.Namespace) -> list[Path]:
         # 두 exe 가 한 폴더(dist/pcmigrate/)의 런타임(_internal)을 함께 쓰도록 spec 을 만들어 한 번에 빌드한다(.spec 은 커밋하지 않음).
         spec = work / "spec" / "pcmigrate.spec"
         spec.parent.mkdir(parents=True, exist_ok=True)
-        spec.write_text(SPEC_TEMPLATE.format(root=str(ROOT), src=str(ROOT / "src"), rules=str(ROOT / "rules"),
+        spec.write_text(SPEC_TEMPLATE.format(root=str(ROOT), src=str(ROOT / "src"), rules=str(ROOT / "rules"), selftransfer=str(ROOT / "selftransfer"),
                                              gui=str(ROOT / "packaging" / "gui_entry.py"), cli=str(ROOT / "packaging" / "cli_entry.py")),
                         encoding="utf-8")
         t0 = time.time()
@@ -142,6 +142,7 @@ def build(args: argparse.Namespace) -> list[Path]:
                "--name", name,
                "--paths", str(ROOT / "src"),
                "--add-data", f"{ROOT / 'rules'}{os.pathsep}rules",  # rules.default_rules_dir() 이 _MEIPASS/rules 를 찾는다
+               "--add-data", f"{ROOT / 'selftransfer'}{os.pathsep}selftransfer",  # selftransfer.default_dir() 이 _MEIPASS/selftransfer 를 찾는다
                "--distpath", str(out), "--workpath", str(work / "build"), "--specpath", str(work / "spec"),
                "--console" if console else "--noconsole", "--onefile"]
         # tkinter(Tcl/Tk 데이터 포함)는 PyInstaller 기본 hook 이 모은다. 외부 패키지는 쓰지 않는다.
@@ -160,12 +161,16 @@ def smoke_test(cli_exe: Path, run=subprocess.run) -> tuple[bool, str]:
     msg = f"{cli_exe.name} --version -> {r.stdout.strip()}"
     r = run([str(cli_exe), "check-rules"], capture_output=True, text=True, timeout=120)
     try:
-        n = int(json.loads(r.stdout.strip().splitlines()[-1])["rules"])
-    except (ValueError, KeyError, IndexError, TypeError):
-        n = 0
+        out = json.loads(r.stdout.strip().splitlines()[-1])
+        n = int(out["rules"])
+        n_st = int(out.get("self_transfer", 1))  # 구 출력(키 없음)은 통과로 본다
+    except (ValueError, KeyError, IndexError, TypeError, AttributeError):
+        n, n_st = 0, 0
     if r.returncode or n < 1:
         return False, msg + f"\n규칙 파일이 exe 에 들어 있지 않거나 읽을 수 없습니다(check-rules rc={r.returncode}, 규칙 {n}개)"
-    return True, msg + f", 번들 규칙 {n}개 확인"
+    if n_st < 1:
+        return False, msg + "\n자체 이전 필요 목록(selftransfer/*.json)이 exe 에 들어 있지 않거나 비어 있습니다"
+    return True, msg + f", 번들 규칙 {n}개, 자체 이전 목록 {n_st}개 확인"
 
 
 def smoke_test_gui(gui_exe: Path, run=subprocess.run) -> tuple[bool, str]:

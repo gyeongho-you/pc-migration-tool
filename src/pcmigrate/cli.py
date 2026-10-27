@@ -11,13 +11,14 @@ from pathlib import Path
 
 from . import __version__, envpaths, errorlog, failure, fs, summary
 from .api import (NEEDS_CONFIRM, ApiError, Deps, check_outputs_outside, check_path_forms, check_unexpanded, clean_path_arg,
-                  clean_state_files, format_write_error, load_rules_checked, report_inside, run_checklist, run_copy,
+                  clean_state_files, format_write_error, load_rules_checked, load_self_transfer_checked, report_inside, run_checklist, run_copy,
                   run_discover, run_export, run_export_retry, run_find_program, run_import, run_install_check, run_join, run_manifest,
                   run_scan, run_transfer,
                   run_undo_import, run_verify, run_winget_extract, same_file, selection_json)
 from .checklist import write_output
 from .detect import read_registry_programs, winget_export_raw, winget_list_raw
 from . import install_check as ic
+from . import selftransfer
 from .manifest import ManifestError, build_manifest, verify_against_manifest
 from .progress import ProgressInfo, format_info
 from .scan import skipped_links_view
@@ -514,7 +515,12 @@ def _cmd_check_rules(args: argparse.Namespace) -> int:
     if not rules:
         _err(f"규칙 파일이 하나도 없습니다: {args.rules}")
         return 1
-    print(json.dumps({"rules": len(rules), "dir": str(args.rules)}, ensure_ascii=False))
+    try:
+        st_items = load_self_transfer_checked(args.self_transfer)
+    except ApiError as e:
+        return _fail(e)
+    print(json.dumps({"rules": len(rules), "dir": str(args.rules), "self_transfer": len(st_items),
+                      "self_transfer_dir": str(args.self_transfer or selftransfer.default_dir())}, ensure_ascii=False))
     return 0
 
 
@@ -625,8 +631,9 @@ def _cmd_discover(args: argparse.Namespace) -> int:
         if found.no_config_found:  # 요약: 찾았지만 설정 형식 파일이 하나도 없음
             _err("[안내] " + found.no_config_line())
         return 0
+    n_st = sum(1 for c in d.candidates() if c.self_transfer)
     print(f"규칙 없는 설치 프로그램 {d.program_count}개, 설정 폴더 후보 {d.candidate_count}개"
-          f"(비밀 정보 가능성 {d.secret_count}개).", file=sys.stderr)
+          f"(비밀 정보 가능성 {d.secret_count}개" + (f", 자체 이전 필요 {n_st}개" if n_st else "") + ").", file=sys.stderr)
     return 0
 
 
@@ -866,6 +873,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     cr = sub.add_parser("check-rules", help="규칙 폴더가 올바르게 읽히는지만 확인(읽기 전용)")
     cr.add_argument("--rules", type=_path_arg, default=str(default_rules_dir()), help="규칙 JSON 폴더")
+    cr.add_argument("--self-transfer", type=_path_arg, default=None, help="자체 이전 필요 목록 JSON 폴더(기본: 프로그램의 selftransfer 폴더)")
     cr.set_defaults(func=_cmd_check_rules)
 
     k = sub.add_parser("checklist", help="수동 작업/수동 설치 체크리스트 출력")

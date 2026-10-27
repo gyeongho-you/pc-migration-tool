@@ -195,7 +195,7 @@ pcmigrate\
 ```
 
 - **관리자 권한이 필요 없습니다.** 일반 사용자로 실행하세요(`asInvoker`). 바탕화면, 한글/공백이 들어간 폴더, USB 드라이브 어디에서든 실행됩니다.
-- exe 에는 `rules\` 와 Python 실행기, tkinter 가 모두 들어 있습니다(실제 Python 이 PATH 에 없는 환경에서 `--version`, `scan`, `checklist`, `discover`, `transfer`, `manifest`, `verify`, GUI 실행을 확인했습니다. 아래 "검증한 범위" 참고).
+- exe 에는 `rules\`, `selftransfer\` 와 Python 실행기, tkinter 가 모두 들어 있습니다(실제 Python 이 PATH 에 없는 환경에서 `--version`, `scan`, `checklist`, `discover`, `transfer`, `manifest`, `verify`, GUI 실행을 확인했습니다. 아래 "검증한 범위" 참고).
 - 명령줄 예: `pcmigrate.exe --version`, `pcmigrate.exe transfer D:\프로젝트 E:\이전 --dry-run`
 
 ### 처음 실행할 때 (SmartScreen)
@@ -602,6 +602,8 @@ python -m pcmigrate discover --output-selection <폴더>\selection.json
 **프로그램 하나만 자세히:** `discover --program "이름"`(GUI 2단계의 "이 프로그램 설정 찾기")은 그 프로그램의 이름/게시자/설치 경로에서 뽑은 단어로 AppData, Documents, ProgramData, 홈의 점 폴더를 이름으로 찾고(시간 상한 `--find-time-limit`, GUI에서는 취소 가능), 각 후보에 크기, 파일 수, 근거(일치한 단어), 신뢰 등급을 붙입니다. 전체 탐색과 달리 캐시/로그/임시 폴더도 찾아 `임시 저장물일 수 있음`/`로그` 배지로 구분하고(자동 선택 없음, 직접 고르면 그대로 담김), 라이선스 폴더는 발견만 표시하며 선택할 수 없습니다(이 도구는 라이선스를 옮기지 않습니다). 설치 폴더(Program Files 등)의 설정 형식 파일(`.ini .json .xml .cfg .config .conf .properties .yaml .yml .toml .pgp .cui .cuix`)은 '설치 폴더 설정' 배지가 붙은 체크 가능한 후보로 보여 주며 자동으로 선택하지 않습니다. 선택 파일에는 `install_dir` 목록으로 따로 담기고(이전 버전은 이 목록을 무시합니다), 내보내면 패키지의 `data/install/` 영역에 환경 토큰 경로(`%ProgramFiles%` 등, 사용자 이름 경로 없음)로 담기며 설정 확인표에 '설치 폴더 설정' 행으로 나옵니다. 실행/스크립트/라이브러리/라이선스/링크, 파일당 5MB·프로그램당 30개/20MB·전체 300개/50MB를 넘는 것은 제외하고 사유를 기록합니다.
 
 **설정 파일 없음 판정:** `discover --program` 과 후보 목록(JSON 의 `no_config_found`, `config_check`: `있음 N개`/`없음`/`확인 안 됨`)은 허용 방식 기준 설정 형식 파일이 0개이고 계산이 시간 상한 없이 끝난 후보를 "설정 파일로 보이는 파일이 없습니다(폴더 용량 X는 설정 형식이 아닌 파일입니다. 필요하면 --extra-mode all)"로 알립니다(설치 폴더 탐색 결과 포함, 시간 상한에 걸리면 `확인 안 됨`). GUI 2단계 표는 이를 회색 "없음"으로 보여 주고, 체크하면 담을 파일이 없다는 안내를 띄웁니다(폴더 전체 담기를 켜면 해당 없음).
+
+**자체 이전 필요 표시:** 카카오톡 대화, 금융보안·키보드 보안 모듈(TouchEn nxKey, nProtect, AhnLab Safe Transaction, Veraport 등), 공동(공인)인증서 도구, 백신, 그래픽/오디오 드라이버, Microsoft Office, Adobe Creative Cloud 처럼 폴더를 복사해서는 옮길 수 없는 프로그램은 `selftransfer/self_transfer.json` 에 이름 패턴(설치 프로그램 표시 이름/게시자/폴더 이름), 분류, 이유, 대신 할 일, 근거 등급(A/B)으로 적혀 있습니다. `selftransfer/` 에 `*.json` 을 더하면 코드 수정 없이 항목이 늘어납니다(스키마 검증, `check-rules` 가 항목 수 보고, exe 와 pip 설치에도 함께 들어갑니다). `discover`/`discover --program` 은 해당 후보에 `자체 이전 필요: 이유 / 대신 할 일` 한 줄을 붙이고 JSON 에는 `self_transfer`(id/name/category/reason/todo)를 넣으며, 선택 파일에는 `self_transfer` id 만 덧붙입니다. 내보낼 때 이런 항목을 골라도 막지 않고 경고(와 설정 확인표/패키지 기록의 덧붙인 표시)만 남깁니다. GUI 2단계 표는 이 후보를 메인 표에서 빼고 표 아래의 접힌 구역 "자체 이전이 필요한 프로그램 N개 ▸"에 모읍니다(배지, 프로그램, 대신 할 일; 줄을 고르면 상세 줄, 체크하면 안내 창, "전체 선택"은 이 구역을 선택하지 않음). 이름만으로 판정하는 목록이라 이름이 다르게 설치된 프로그램은 빠질 수 있고, 여러 프로그램이 함께 쓰는 제조사 폴더는 근거가 약하면 표시하지 않습니다.
 
 **설치 폴더 설정 복원(기본은 복원 안 함):** `import --allow-install-dir`(GUI 신 PC 미리보기의 '설치 폴더 설정도 복원')을 켠 경우에만 복원하며, (1) 프로그램 폴더가 새 PC에 이미 있어야 하고(없으면 건너뛰고 '먼저 프로그램을 설치한 뒤 다시 복원하세요'), (2) `%ProgramFiles%`/`%ProgramFiles(x86)%` 또는 새 PC에서 같은 이름 프로그램의 설치 위치 아래이며 링크/정션, `..`, 대체 데이터 스트림, 예약 이름, Windows 구성요소 폴더, 다른 프로그램 폴더는 거부하고, (3) 설정 형식 확장자만 쓰며(변조된 묶음의 exe/dll/스크립트는 거부), (4) 기존 파일은 `.bak`으로 보존하고 미리보기에 덮어쓸 목록을 보여 주며, (5) 쓰기 권한이 없으면 '관리자 권한으로 다시 실행해 주세요'를 안내하고 아무것도 쓰지 않고 멈추며, (6) '같은 버전의 프로그램에서 가져온 설정 파일이라 버전이 다르면 오작동할 수 있다'는 경고를 보여 줍니다. 라이선스는 이 경로로도 옮기지 않습니다. 프로그램별 복원 선택에서는 설치 폴더 설정이 `install`(전부) 또는 `install:<프로그램 이름>` 단위로 선택/제외되고(`--only`/`--skip`), 복원 기록에 `install: true` 로 남아 `undo-import`가 `.bak`을 되돌립니다(권한이 없으면 "관리자 권한으로 다시 실행해 주세요"). 설치 폴더 확장자 허용 목록은 허용 방식(`--extra-mode config`)의 허용 목록의 부분집합입니다.
 

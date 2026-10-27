@@ -35,10 +35,10 @@ def test_pyinstaller_version_is_pinned(build):
 
 
 def test_spec_template_bundles_rules_and_both_exes(build):
-    text = build.SPEC_TEMPLATE.format(root="R", src="S", rules="RU", gui="G", cli="C")
+    text = build.SPEC_TEMPLATE.format(root="R", src="S", rules="RU", selftransfer="ST", gui="G", cli="C")
     compile(text.replace("Analysis", "dict").replace("MERGE", "print").replace("PYZ", "list").replace("EXE", "dict")
             .replace("COLLECT", "dict"), "spec", "exec")  # 문법 확인
-    assert '(r"RU", "rules")' in text and 'name="pcmigrate-gui", console=False' in text and 'name="pcmigrate", console=True' in text
+    assert '(r"RU", "rules")' in text and '(r"ST", "selftransfer")' in text and 'name="pcmigrate-gui", console=False' in text and 'name="pcmigrate", console=True' in text
     assert "upx=False" in text and 'name="pcmigrate")' in text  # 폴더 하나(dist/pcmigrate)에 exe 두 개
 
 

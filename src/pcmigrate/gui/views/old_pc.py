@@ -149,6 +149,21 @@ class DiscoverView(BaseView):
         self.banner = tk.Label(low, text="", anchor="w", justify="left")
         self.banner.pack(fill="x", pady=2)
         autowrap(self.banner, 40)
+        # 자체 이전이 필요한 프로그램(폴더를 복사해서 옮길 수 없음): 메인 표에서 빼고 표 아래의 접힌 구역에 모은다(없으면 구역 자체가 안 보인다)
+        self.st_slot = ttk.Frame(low)
+        self.st_slot.pack(fill="x")
+        self.st_box = Collapsible(self.st_slot, T.DISC_SELF_TOGGLE.format(n=0), T.DISC_SELF_TOGGLE_OPEN.format(n=0))
+        self.st_box.add_text(T.DISC_SELF_HINT)
+        st_cols = [("sel", T.DISC_SELF_COLS[0], 56), ("badge", T.DISC_SELF_COLS[1], 110), ("prog", T.DISC_SELF_COLS[2], 200),
+                   ("todo", T.DISC_SELF_COLS[3], 420)]
+        st_frame, self.st_tree = make_tree(self.st_box.body, st_cols, height=3)
+        st_frame.pack(fill="x")
+        self.st_tree.tag_configure("selftransfer", foreground=WARN_FG)
+        self.st_tree.bind("<Button-1>", self._st_click)
+        self.st_tree.bind("<space>", self._st_key_toggle)
+        self.st_tree.bind("<<TreeviewSelect>>", self._show_st_detail)
+        self.st_tips = TreeTooltip(self.st_tree, self._st_tip_text)
+        self.st_rows: dict[str, object] = {}
         self.detail = ttk.Label(low, text="", justify="left")  # 줄을 고르면 그때만 보인다
         autowrap(self.detail)
         self.adv = Collapsible(low, T.DISC_ADV_TOGGLE, T.DISC_ADV_TOGGLE_OPEN)  # 고급 옵션(접힘)
@@ -235,6 +250,8 @@ class DiscoverView(BaseView):
         rows = self.c.candidate_rows()
         cells = self.c.candidate_cfg_cells()
         for r in rows:
+            if r.self_transfer:
+                continue  # 자체 이전 필요: 메인 표 대신 아래 접힌 구역에 보인다
             checked = r.key in self.c.state.selected
             mark = T.CHECKED if checked else (T.LOCKED if not r.selectable else T.UNCHECKED)
             warn = T.DISC_WARN_SECRET if r.secret else (r.badge or (T.DISC_WARN_WEAK if r.weak else ""))
@@ -248,6 +265,7 @@ class DiscoverView(BaseView):
             self.cells[iid] = cell
         for col, desc in sort_state.items():
             sort_tree(self.tree, col, desc)
+        self._refresh_self_transfer([r for r in rows if r.self_transfer])
         n_secret = sum(1 for r in rows if r.secret)
         if n_secret:
             self.banner.configure(text=T.DISC_BANNER.format(icon=T.ICON_WARN, n=n_secret), bg=DANGER_BG, fg=DANGER_FG)
@@ -268,7 +286,63 @@ class DiscoverView(BaseView):
         self.all_var.set(all_mode)
 
     def _visible_keys(self) -> list:
-        return [r.key for r in self.rows.values()]
+        return [r.key for r in self.rows.values()]  # 메인 표만: 전체 선택은 '자체 이전 필요' 구역의 항목을 선택하지 않는다
+
+    # ------------------------------------------------------------------ 자체 이전이 필요한 프로그램 구역
+    def _refresh_self_transfer(self, st_rows: list) -> None:
+        clear(self.st_tree)
+        self.st_rows = {}
+        n = len(st_rows)
+        self.st_box.title = T.DISC_SELF_TOGGLE.format(n=n)
+        self.st_box.title_open = T.DISC_SELF_TOGGLE_OPEN.format(n=n)
+        self.st_box.toggle_btn.configure(text=self.st_box.title_open if self.st_box.open else self.st_box.title)
+        for r in st_rows:
+            mark = T.CHECKED if r.key in self.c.state.selected else (T.LOCKED if not r.selectable else T.UNCHECKED)
+            tags = ("secret",) if r.secret else ("selftransfer",)
+            iid = self.st_tree.insert("", "end", values=(mark, T.DISC_SELF_BADGE, r.programs, r.self_transfer["todo"]), tags=tags)
+            self.st_rows[iid] = r
+        self.st_tree.configure(height=max(2, min(6, n)))
+        if n and not self.st_box.winfo_manager():
+            self.st_box.pack(anchor="w", fill="x", pady=(2, 0))
+        elif not n and self.st_box.winfo_manager():
+            self.st_box.pack_forget()
+
+    def _st_tip_text(self, iid: str, col: int) -> str:
+        r = self.st_rows.get(iid)
+        if r is None:
+            return ""
+        return {2: f"{r.programs} / {r.path}", 3: r.self_transfer["todo"]}.get(col, "")
+
+    def _st_text(self, r) -> str:
+        return T.DISC_SELF_DETAIL.format(reason=r.self_transfer["reason"], todo=r.self_transfer["todo"])
+
+    def _toggle_st(self, iid: str) -> None:
+        r = self.st_rows.get(iid)
+        if r is not None:
+            turning_on = r.key not in self.c.state.selected
+            self.guarded(self.c.set_selected, r.key, turning_on)  # 막지 않는다: 안내만 띄운다
+            if turning_on and r.key in self.c.state.selected:
+                messagebox.showinfo(T.DISC_SELF_TITLE, T.DISC_SELF_CHECK.format(reason=r.self_transfer["reason"], todo=r.self_transfer["todo"]),
+                                    parent=self)
+
+    def _st_click(self, event) -> None:
+        iid = self.st_tree.identify_row(event.y)
+        if iid:
+            self._toggle_st(iid)
+
+    def _st_key_toggle(self, _e=None):
+        sel = self.st_tree.selection()
+        if sel:
+            self._toggle_st(sel[0])
+        return "break"
+
+    def _show_st_detail(self, _e=None) -> None:
+        sel = self.st_tree.selection()
+        if not sel or sel[0] not in self.st_rows:
+            return
+        if not self.detail.winfo_manager():
+            self.detail.pack(fill="x", pady=2, after=self.st_slot)
+        self.detail.configure(text=self._st_text(self.st_rows[sel[0]]))
 
     def _select_all(self) -> None:
         n, k = self.c.select_all_candidates(self._visible_keys())
@@ -278,7 +352,7 @@ class DiscoverView(BaseView):
         self.bulk_msg.configure(text=msg)
 
     def _clear_all(self) -> None:
-        n = self.c.clear_all_candidates(self._visible_keys())
+        n = self.c.clear_all_candidates(self._visible_keys() + [r.key for r in self.st_rows.values()])  # 해제는 구역 항목도 함께(안전한 쪽)
         self.bulk_msg.configure(text=T.DISC_BULK_CLEARED.format(n=n))
 
     def _toggle(self, iid: str) -> None:
@@ -306,7 +380,7 @@ class DiscoverView(BaseView):
             return
         r = self.rows[sel[0]]
         if not self.detail.winfo_manager():
-            self.detail.pack(fill="x", pady=2, after=self.banner)
+            self.detail.pack(fill="x", pady=2, after=self.st_slot)
         text = T.DISC_DETAIL.format(kind=r.kind, path=r.path, grade=r.grade, reason=f" — {r.reason}" if r.reason else "")
         cell = self.cells.get(sel[0], {})
         if cell.get("tip"):

@@ -55,11 +55,16 @@ def rows(manifest: dict) -> list[dict]:
             extra_note = _config_note(c)
             if extra_note:
                 note = f"{note}; {extra_note}" if note else extra_note
+            st = c.get("self_transfer")
+            if isinstance(st, dict) and isinstance(st.get("todo"), str):  # 덧붙이는 표시(이전 버전 패키지에는 없다)
+                note = (note + " / " if note else "") + f"자체 이전 필요: {st.get('reason', '')} 대신 할 일: {st['todo']}"
             if c.get("rule") == "install" and status in (ST_OK, ST_PART):
                 note = (note + " / " if note else "") + INSTALL_DIR_NOTE
             row = {"program": str(c.get("name") or c.get("rule") or "?"), "what": str(c.get("description") or c.get("path") or ""),
                    "status": status, "files": files, "note": note, "rule": str(c.get("rule", "")),
                    "path": str(c.get("path", ""))}
+            if isinstance(st, dict) and st.get("id"):
+                row["self_transfer"] = str(st["id"])
             if c.get("config_mode"):  # 허용 방식(설정 파일만)으로 담은 항목: 화면/표가 더 보여 줄 수 있는 세부(없으면 키 자체가 없다)
                 row.update({k: c.get(k) for k in ("ext_counts", "allowed_files", "allowed_bytes", "not_config_files",
                                                    "not_config_bytes", "limit_files", "limit_bytes")})
@@ -271,5 +276,7 @@ def json_rows(manifest: dict) -> list[dict]:
         d = {k: r[k] for k in ("program", "what", "status", "files")}
         if r.get("excluded_files"):
             d.update({k: r[k] for k in ("excluded_files", "excluded_bytes", "excluded_by_reason", "excluded_examples")})
+        if r.get("self_transfer"):
+            d["self_transfer"] = r["self_transfer"]
         out.append(d)
     return out

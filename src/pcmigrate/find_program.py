@@ -21,7 +21,7 @@ from typing import Callable
 from .cancel import Cancelled, checkpoint
 from .detect import Program
 from .discover import (CERTAIN, PROBABLE, Candidate, Discovery, Expand, Link, ProgramEntry, _covered, _folder_key, _list_root,
-                       _skip_name, link_candidate, rule_concrete_paths, scan_candidate)
+                       _skip_name, link_candidate, rule_concrete_paths, scan_candidate, self_transfer_for)
 from .discover_data import (FIND_SKIP_WORDS, ROOTS, SETTINGS_EXT_PREFIXES, SETTINGS_EXTENSIONS, TOKEN_STOPWORDS,
                             is_regenerable)
 from .envpaths import expand_env
@@ -29,6 +29,7 @@ from .install_dir import (INSTALL_FILE_MAX_BYTES, INSTALL_PROGRAM_MAX_FILES, bui
                           locate_install_dir, secret_hints)
 from .progress import ProgressInfo
 from .rules import Rule
+from . import selftransfer as st
 
 MAX_INSTALL_FILES = INSTALL_PROGRAM_MAX_FILES  # 프로그램 하나당 설치 폴더 설정 후보 상한(install_dir 의 상수를 쓴다)
 BADGE_INSTALL = "설치 폴더 설정"
@@ -50,6 +51,7 @@ class ProgramFind:
     nested_more: int = 0
     budget_hit: bool = False  # 시간 상한에 걸려 일부 크기를 못 쟀다
     has_rule: bool = False  # 이 프로그램은 이미 규칙이 있다(찾을 필요 없음)
+    self_transfer: dict | None = None  # 이 프로그램이 자체 이전 필요 목록에 해당하면 그 정보({id, name, category, reason, todo})
     install_dir_found: bool = False  # 설치 폴더를 찾아 설정 형식 파일을 훑었다
     install_complete: bool = True  # 설치 폴더 훑기가 시간 상한 없이 끝났다
 
@@ -100,7 +102,8 @@ class ProgramFind:
 
     def as_discovery(self) -> Discovery:
         """build_selection/render 같은 기존 도구를 재사용하기 위한 변환."""
-        return Discovery(programs=[ProgramEntry(self.program, list(self.candidates) + list(self.install_candidates))], with_sizes=True)
+        return Discovery(programs=[ProgramEntry(self.program, list(self.candidates) + list(self.install_candidates), self.self_transfer)],
+                         with_sizes=True)
 
 
 def _words(text: str) -> list[str]:
@@ -243,7 +246,8 @@ def _install_candidates(p: Program, files: list[dict], base: str, from_location:
 def find_program(program: Program, rules: list[Rule], expand: Expand = expand_env, *, per_limit: float = 3.0,
                  total_limit: float = 30.0, clock: Callable[[], float] = time.monotonic,
                  cancel: Callable[[], bool] | None = None, progress: Callable[[str], None] | None = None,
-                 progress_info: Callable[[ProgressInfo], None] | None = None) -> ProgramFind:
+                 progress_info: Callable[[ProgressInfo], None] | None = None,
+                 self_transfer: list | None = None) -> ProgramFind:
     """program 하나와 관련된 위치만 찾는다. 취소하면 Cancelled. total_limit 초가 지나면 남은 크기 계산은 건너뛴다."""
     def say(msg: str, phase: str = "find", done: int = 0, total: int = 0, current: str = "") -> None:
         if progress is not None:
@@ -259,6 +263,8 @@ def find_program(program: Program, rules: list[Rule], expand: Expand = expand_en
     res = ProgramFind(program, program_tokens(program), has_rule=any(r.matches_name(program.name) for r in rules))
     if res.has_rule:
         return res
+    st_items = st.default_items() if self_transfer is None else self_transfer
+    res.self_transfer = st.program_info(st_items, program.name, program.publisher)
     start = clock()
     budget_end = start + total_limit
     say(f"'{program.name}' 와 관련된 폴더 이름을 찾는 중입니다…")
@@ -289,6 +295,7 @@ def find_program(program: Program, rules: list[Rule], expand: Expand = expand_en
                             else "로그 폴더 — 설정이 아닌 기록일 가능성이 큼(직접 확인 후 선택)")
                 link = Link(link.programs, link.grade, f"[{badge}] {link.reason} — {note}", True if badge != BADGE_LICENSE else link.weak)
             c.link = link
+            c.self_transfer = res.self_transfer or self_transfer_for(st_items, e.name, link, {program.name: program.publisher})
             cands.append(c)
     for i, c in enumerate(cands, 1):
         check()
@@ -314,6 +321,8 @@ def find_program(program: Program, rules: list[Rule], expand: Expand = expand_en
     res.install_complete = clock() <= min(budget_end, install_deadline)
     if loc:
         res.install_candidates = _install_candidates(program, res.install_files, str(loc[0]), loc[1], expand)
+        for c in res.install_candidates:
+            c.self_transfer = res.self_transfer
     res.nested, res.nested_more = _nested_cache_settings([c for c in cands if c.is_dir and not c.badge],
                                                          min(budget_end, clock() + per_limit), clock)
     return res
@@ -388,7 +397,7 @@ def render(f: ProgramFind, fmt: str = "text") -> str:
     if fmt == "json":
         from dataclasses import asdict
         d = {"program": {"name": f.program.name, "version": f.program.version, "publisher": f.program.publisher},
-             "has_rule": f.has_rule, "no_config_found": f.no_config_found, "config_check": f.config_check,
+             "has_rule": f.has_rule, "self_transfer": f.self_transfer, "no_config_found": f.no_config_found, "config_check": f.config_check,
              "tokens": [{"token": t, "source": s} for t, s in f.tokens], "budget_hit": f.budget_hit,
              "candidates": [dict(asdict(c), secret_risk=bool(c.secret), no_config_found=c.no_config_found,
                                  config_check=c.config_check) for c in f.candidates],
@@ -406,6 +415,8 @@ def render(f: ProgramFind, fmt: str = "text") -> str:
         return "\n".join(lines) + "\n"
     lines.append("※ 읽기 전용 탐지입니다. 아무것도 자동으로 선택/포함되지 않습니다. 포함하려면 --output-selection 으로 선택 파일을 만들고 "
                  "include 를 true 로 바꾼 뒤 export --extra 로 지정하세요.")
+    if f.self_transfer:
+        lines.append(st.summary_line(f.self_transfer) + " (선택은 막지 않습니다)")
     lines.append("검색에 쓴 토큰: " + (", ".join(f"{t}({s})" for t, s in f.tokens) or "없음(이름이 너무 짧거나 흔한 낱말뿐)"))
     lines.append("")
     lines.append(f"=== 설정 폴더 후보 {len(f.candidates)}개 ===")

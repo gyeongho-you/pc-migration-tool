@@ -26,6 +26,7 @@ from .discover_data import (BROWSER_VENDOR_DIRS, DOT_HINTS, DOT_SKIP, EXTRA_ROOT
                             SKIP_PREFIXES, SKIP_SUBSTRINGS, Root, is_regenerable)
 from .progress import ProgressInfo
 from .rules import Rule
+from . import selftransfer as st
 
 Expand = Callable[[str], str]
 CERTAIN, PROBABLE, NONE = "확실", "추정", "없음"
@@ -80,6 +81,7 @@ class Candidate:
     config_complete: bool = False  # False 면 시간 상한에 걸려 '이상'(또는 계산하지 않음)
     install_program: str = ""  # 설치 폴더 설정 파일 후보(프로그램 설치 폴더 안의 파일 하나)면 그 프로그램 이름. 이때 root 는 %ProgramFiles% 등 토큰, rel 은 루트 기준 파일 경로
     install_folder: str = ""   # 위 후보의 루트 기준 프로그램 폴더(posix)
+    self_transfer: dict | None = None  # 폴더를 복사해서는 옮길 수 없는 프로그램의 것이면 {id, name, category, reason, todo}(selftransfer/*.json). 선택을 막지는 않는다
 
     @property
     def is_install(self) -> bool:
@@ -112,6 +114,7 @@ class Candidate:
 class ProgramEntry:
     program: Program
     candidates: list[Candidate] = field(default_factory=list)
+    self_transfer: dict | None = None  # 이 프로그램 자체가 자체 이전 필요 목록에 해당하면 그 정보
 
 
 @dataclass
@@ -280,6 +283,18 @@ def link_candidate(name: str, path: str, programs: list[Program], is_home: bool)
     return Link(names[:MAX_LINKED_NAMES], CERTAIN if top == 3 else PROBABLE, reason, weak)
 
 
+def self_transfer_for(items: list, folder: str, link: Link | None, publishers: dict[str, str]) -> dict | None:
+    """후보 폴더의 자체 이전 표시(selftransfer.flag_candidate). publishers = 프로그램 이름 -> 게시자."""
+    linked = [(n, publishers.get(n, "")) for n in link.programs] if link else []
+    return st.flag_candidate(items, folder, linked, bool(link and link.weak))
+
+
+def flag_extra(items: list, root: str, rel: str, path: str, programs: list[Program]) -> dict | None:
+    """직접 고른 항목(root/rel)이 자체 이전 필요 프로그램의 것인지(내보내기 경고용). 크기 계산 없이 이름 연결만 본다."""
+    link = link_candidate(rel, path, programs, root == "%USERPROFILE%")
+    return self_transfer_for(items, rel, link, {p.name: p.publisher for p in programs})
+
+
 def program_has_rule(p: Program, rules: list[Rule]) -> bool:
     return any(r.matches_name(p.name) for r in rules)
 
@@ -388,8 +403,11 @@ def discover(rules: list[Rule], programs: list[Program], expand: Expand = expand
              clock: Callable[[], float] = time.monotonic, min_size_kb: int = 0,
              show_all: bool = False, progress: Callable[[str], None] | None = None,
              cancel: Callable[[], bool] | None = None,
-             progress_info: Callable[[ProgressInfo], None] | None = None) -> Discovery:
+             progress_info: Callable[[ProgressInfo], None] | None = None,
+             self_transfer: list | None = None) -> Discovery:
     """규칙 없는 설치 프로그램과 사용자 데이터 폴더 후보를 찾는다.
+
+    self_transfer: 자체 이전 필요 목록(selftransfer.SelfTransferItem). None 이면 기본 목록. 해당 후보/프로그램에 표시만 붙인다.
 
     progress 가 있으면 진행 메시지(문자열)를 넘긴다. 출력 방식은 호출자(UI)가 정한다.
     """
@@ -427,7 +445,9 @@ def discover(rules: list[Rule], programs: list[Program], expand: Expand = expand
     info("find", f"규칙 없는 설치 프로그램 {len(ruleless)}개. 설정 폴더 후보를 찾는 중입니다…")
     concrete = rule_concrete_paths(rules, expand)
     all_programs = ruleless + rule_programs + [bp for bp, _ in d.bundles]
-    entries = {p.name: ProgramEntry(p) for p in ruleless}
+    st_items = st.default_items() if self_transfer is None else self_transfer
+    publishers = {p.name: p.publisher for p in all_programs}
+    entries = {p.name: ProgramEntry(p, self_transfer=st.program_info(st_items, p.name, p.publisher)) for p in ruleless}
     rule_names = {p.name for p in rule_programs}
     bundle_names = {bp.name for bp, _ in d.bundles}
 
@@ -440,6 +460,7 @@ def discover(rules: list[Rule], programs: list[Program], expand: Expand = expand
                 continue
             c = Candidate(r.template, e.name, path, e.is_dir(follow_symlinks=False))
             c.link = link_candidate(e.name, path, all_programs, r.dotfiles_only)
+            c.self_transfer = self_transfer_for(st_items, e.name, c.link, publishers)
             cands.append(c)
 
     start = clock()
@@ -536,6 +557,8 @@ def _cand_line(c: Candidate, with_sizes: bool, note_rule: bool = False) -> str:
         line += " — 프로그램 연결 없음"
     if note_rule and c.rule_programs:
         line += f" (규칙 있음: {', '.join(c.rule_programs)})"
+    if c.self_transfer:
+        line += " [자체 이전 필요]"
     if c.secret:
         line += f" ⚠ 비밀 정보 가능성({', '.join(c.secret)}): 기본 제외"
     return line
@@ -550,13 +573,13 @@ def to_dict(d: Discovery, show_all: bool = False) -> dict:
         return x
     out = {
         "programs_without_rule": [{"name": e.program.name, "version": e.program.version,
-                                   "publisher": e.program.publisher,
+                                   "publisher": e.program.publisher, "self_transfer": e.self_transfer,
                                    "candidates": [cdict(c) for c in e.candidates]} for e in d.programs],
         "home_dotfiles": [cdict(c) for c in d.home],
         "counts": {"programs": d.program_count, "candidates": d.candidate_count, "secret": d.secret_count,
                    "bundles_hidden": len(d.bundles), "unlinked": len(d.unlinked),
                    "rule_linked_hidden": len(d.rule_linked), "rule_covered": d.rule_covered,
-                   "small_hidden": d.hidden_small},
+                   "small_hidden": d.hidden_small, "self_transfer": sum(1 for c in d.candidates() if c.self_transfer)},
     }
     if show_all:
         out["bundles"] = [{"name": p.name, "reason": w} for p, w in d.bundles]
@@ -574,6 +597,9 @@ def render(d: Discovery, fmt: str = "text", show_all: bool = False) -> str:
     lines = ["# 규칙 없는 프로그램 탐지(discover)" if md else "규칙 없는 프로그램 탐지(discover)", ""]
     lines.append(f"규칙 없는 설치 프로그램 {d.program_count}개, 설정 폴더 후보 {d.candidate_count}개"
                  f" (비밀 정보 가능성 {d.secret_count}개)")
+    n_st = sum(1 for c in d.candidates() if c.self_transfer)
+    if n_st:
+        lines.append(f"자체 이전 필요 후보 {n_st}개: 폴더를 복사해서는 옮길 수 없는 프로그램입니다(선택은 막지 않지만 새 PC 에서 따로 처리해야 합니다).")
     lines.append("※ 읽기 전용 탐지입니다. 아무것도 자동으로 export 에 포함되지 않습니다. "
                  "포함하려면 --output-selection 으로 선택 파일을 만들고 include 를 true 로 바꾼 뒤 export --extra 로 지정하세요.")
     lines.append("")
@@ -585,10 +611,14 @@ def render(d: Discovery, fmt: str = "text", show_all: bool = False) -> str:
         shown = p.display
         lines.append(f"{'- **' + p.name + '**' if md else '* ' + p.name}"
                      + shown[len(p.name):] + (f" — {p.publisher}" if p.publisher else ""))
+        if e.self_transfer:
+            lines.append(bullet + st.summary_line(e.self_transfer))
         if not e.candidates:
             lines.append(f"{bullet}설정 폴더 후보 없음(자동으로 찾지 못함). 이 프로그램의 설정은 직접 확인하세요.")
         for c in e.candidates:
             lines.append(bullet + _cand_line(c, d.with_sizes))
+            if c.self_transfer and not e.self_transfer:  # 프로그램 줄에 없던 안내(연결된 다른 프로그램 기준)
+                lines.append(f"{bullet}  {st.summary_line(c.self_transfer)}")
     lines.append("")
     lines.append(H("홈 폴더의 점 폴더/파일"))
     if d.home:
@@ -638,6 +668,7 @@ def build_selection(d: Discovery, show_all: bool = False) -> dict:
             "secret": c.secret, "requires_allow_secrets": bool(c.secret),
             **({"include_caches": True} if c.include_caches else {}),
             **({"license_only": True, "include": False} if c.license_only else {}),
+            **({"self_transfer": c.self_transfer["id"]} if c.self_transfer else {}),  # 덧붙이기만: 이전 버전은 이 키를 무시한다
         } for c in cands],
     }
     if installs:
@@ -657,6 +688,7 @@ class ExtraItem:
     path: Path  # 확장된 절대 경로
     is_dir: bool
     include_caches: bool = False  # 선택 파일의 후보별 '캐시 포함'(프로그램 설정 찾기에서 캐시/로그 이름 후보를 직접 고른 경우)
+    self_transfer: dict | None = None  # run_export 가 붙이는 자체 이전 필요 표시(manifest/확인표에 덧붙인다)
 
 
 def _safe_top_rel(rel: str) -> None:

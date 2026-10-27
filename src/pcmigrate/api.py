@@ -38,6 +38,7 @@ from . import import_record
 from .package import (COMPRESS_MODES, NOT_SELECTED, ImportPlan, PackageError, apply_import, export_package, extract_winget,
                       is_unfinished_part, plan_import, retry_failed_export, verify_package)
 from .rules import Rule, RuleError, load_rules
+from . import selftransfer
 from . import fs
 from .manifest import build_manifest, verify_against_manifest
 from . import split
@@ -148,6 +149,14 @@ def load_rules_checked(rules_dir: str | Path) -> list[Rule]:
         return load_rules(Path(rules_dir))
     except RuleError as e:
         raise ApiError(f"규칙 오류: {e}") from e
+
+
+def load_self_transfer_checked(folder: str | Path | None = None) -> list:
+    """자체 이전 필요 목록(selftransfer/*.json). 폴더를 주지 않으면 기본 위치. 읽을 수 없으면 ApiError."""
+    try:
+        return selftransfer.load_items(Path(folder)) if folder else selftransfer.default_items(strict=True)
+    except selftransfer.SelfTransferError as e:
+        raise ApiError(f"자체 이전 목록 오류: {e}") from e
 
 
 def programs_registry(programs: list[Program]) -> list[Program]:
@@ -461,7 +470,7 @@ def run_discover(rules_dir: str | Path, *, min_size_kb: int = 0, show_all: bool 
     _phase(progress_info, "list", "설치된 프로그램 목록을 읽는 중입니다…")
     kw = {"progress_info": progress_info} if progress_info else {}
     return discover(rules, deps.registry(), min_size_kb=min_size_kb, show_all=show_all, progress=progress,
-                    cancel=cancel, **kw)
+                    cancel=cancel, self_transfer=load_self_transfer_checked(), **kw)
 
 
 def find_program_in(rules_dir: str | Path, name: str, deps: Deps | None = None):
@@ -489,7 +498,8 @@ def run_find_program(rules_dir: str | Path, name: str, *, deps: Deps | None = No
     rules = load_rules_checked(rules_dir)
     program = find_program_in(rules_dir, name, deps)
     kw = {"progress_info": progress_info} if progress_info else {}
-    return find_program(program, rules, total_limit=total_limit, progress=progress, cancel=cancel, **kw)
+    return find_program(program, rules, total_limit=total_limit, progress=progress, cancel=cancel,
+                        self_transfer=load_self_transfer_checked(), **kw)
 
 
 def selection_json(d: Discovery, show_all: bool = False) -> str:
@@ -562,6 +572,33 @@ def prepare_install(extra: str | Path | None, allow_secrets: bool, items: list |
     prep.risky += len(risky)
 
 
+def self_transfer_notes(items: list[ExtraItem], programs: list[Program]) -> list[str]:
+    """직접 고른 항목 중 자체 이전 필요 프로그램의 것에 표시(ExtraItem.self_transfer)를 붙이고 경고 문장을 돌려준다(종류당 한 번).
+    목록을 읽을 수 없으면 조용히 건너뛴다(표시 전용이라 내보내기를 막지 않는다)."""
+    from .discover import flag_extra
+    st_items = selftransfer.default_items()
+    if not items or not st_items:
+        return []
+    by_id: dict[str, tuple[dict, list[str]]] = {}
+    for it in items:
+        info = flag_extra(st_items, it.root, it.rel, str(it.path), programs)
+        if info:
+            it.self_transfer = info
+            by_id.setdefault(info["id"], (info, []))[1].append(str(it.path))
+    out = []
+    for info, paths in by_id.values():
+        hint = ""
+        item = next((x for x in st_items if x.id == info["id"]), None)
+        if item and item.checklist_item:
+            from .checklist_data import COMMON_ITEMS
+            title = next((c.title for c in COMMON_ITEMS if c.id == item.checklist_item), "")
+            if title:
+                hint = f" 해야 할 일 목록의 '{title}' 항목도 참고하세요."
+        out.append(f"[주의] 자체 이전 필요: {info['name']} — {info['reason']} 대신 할 일: {info['todo']}{hint} "
+                   f"(고른 항목 {len(paths)}개는 막지 않고 담았습니다: {', '.join(paths[:3])}{' …' if len(paths) > 3 else ''})")
+    return out
+
+
 @dataclass
 class ExportResult:
     manifest: dict
@@ -610,6 +647,9 @@ class ExportResult:
             d["limit_files"], d["limit_bytes"] = cfg["limit_files"], cfg["limit_bytes"]
             if cfg["by_reason"]:
                 d["excluded_by_reason"] = cfg["by_reason"]
+        st_ids = sorted({e["self_transfer"] for e in m.get("extras", []) if isinstance(e, dict) and e.get("self_transfer")})
+        if st_ids:  # 덧붙이는 키: 자체 이전 필요 표시가 붙은 항목의 종류
+            d["self_transfer"] = st_ids
         d["coverage"] = coverage.json_rows(m)
         return d
 
@@ -649,6 +689,7 @@ def run_export(rules_dir: str | Path, output: str | Path, *, extra: str | Path |
     winget = parse_winget_export(winget_text) if winget_text else []
     matched = match_rules(rules, registry + winget)
     notes = []
+    notes += self_transfer_notes(extras.items, registry)  # 막지 않고 알리기만(선택은 사용자 판단). 각 항목에 표시를 붙여 확인표/manifest 에도 남긴다
     if not matched:
         notes.append("감지된 프로그램 규칙이 없어 프로그램 목록만 내보냅니다.")
     if winget_text is None:

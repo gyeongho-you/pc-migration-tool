@@ -278,6 +278,7 @@ class CandRow:
     detail_cache: str = ""  # 캐시가 있으면 '전체 X 중 캐시 Y' 안내(상세줄용)
     install: bool = False  # 프로그램 설치 폴더 안의 설정 파일 후보(설치 폴더 설정)
     badge_note: str = ""  # 배지의 전체 설명(툴팁/상세줄용)
+    self_transfer: dict | None = None  # 자체 이전 필요 프로그램의 후보면 {id, name, category, reason, todo}: 표는 메인 표 대신 접힌 구역에 보인다(선택은 막지 않는다)
 
 
 @dataclass
@@ -678,7 +679,7 @@ class Controller(FilesMixin):
                 reason=link.reason if link else "", weak=bool(link and link.weak), secret=list(c.secret),
                 selectable=((not c.secret) or self.state.secrets_ack) and not c.license_only,
                 badge=c.badge, license_only=c.license_only, size_eff=eff_size, files_eff=eff_files, detail_cache=note,
-                install=bool(getattr(c, "install_program", "")),
+                install=bool(getattr(c, "install_program", "")), self_transfer=getattr(c, "self_transfer", None),
                 badge_note=T.DISC_INSTALL_BADGE_FULL if getattr(c, "install_program", "") else ""))
         for r in rows:
             if r.install:  # 설치 폴더 설정 후보: 상세줄에 복원 조건을 더한다(캐시 안내 대신)
@@ -806,6 +807,9 @@ class Controller(FilesMixin):
         toks = ", ".join(t for t, _s in res.tokens[:6]) or "-"
         text = T.FIND_RESULT.format(name=name, new=info["new"], dup=info["dup"], tokens=toks)
         text += "\n" + T.FIND_SCOPE_NOTE
+        st = getattr(res, "self_transfer", None)
+        if st:
+            text += "\n" + T.DISC_SELF_DETAIL.format(reason=st["reason"], todo=st["todo"])
         if getattr(res, "no_config_found", False):
             text += "\n" + T.FIND_NO_CONFIG.format(size=fmt_bytes(res.folder_bytes))
             if getattr(res, "install_dir_found", False):
