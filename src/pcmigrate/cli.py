@@ -1044,6 +1044,8 @@ def build_parser() -> argparse.ArgumentParser:
     lg = sub.add_parser("logs", help="오류 로그 폴더 경로와 최근 오류 요약을 보여 준다")
     lg.add_argument("--open", action="store_true", help="탐색기로 로그 폴더를 연다")
     lg.set_defaults(func=_cmd_logs)
+    from . import lan_cli
+    lan_cli.add_parsers(sub, _path_arg)
     return p
 
 
