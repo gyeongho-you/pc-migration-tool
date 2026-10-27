@@ -1051,6 +1051,10 @@ class Controller:
             if not _accepts(self.api.run_export, "include_caches"):
                 raise GuardError(T.G_INCLUDE_CACHES_UNSUPPORTED)
             stage_kw["include_caches"] = True
+        if self.state.extra_mode != "config":  # stage30b: 폴더 전체 담기(기본 config 는 넘기지 않는다: 이 옵션을 모르는 api 에도 안전)
+            if not _accepts(self.api.run_export, "extra_mode"):
+                raise GuardError(T.G_EXTRA_MODE_UNSUPPORTED)
+            stage_kw["extra_mode"] = self.state.extra_mode
 
         def work(progress, token):
             return self.api.run_export(self.state.rules_dir, output, extra_items=items or None,
@@ -1227,16 +1231,21 @@ class Controller:
         s = self.state
         s.preview_checked = s.bak_understood = s.final_confirmed = s.extra_consent = False
 
-    def start_preview(self) -> None:
+    def start_preview(self, keep_selection: bool = False) -> None:
         if not self.state.package:
             raise GuardError(T.G_NEED_PACKAGE)
         package = self.state.package
+        if not keep_selection:  # 새로 고른 묶음은 모든 프로그램 체크로 시작한다(stage30b)
+            self.state.restore_skip = set()
+        skip = tuple(sorted(self.state.restore_skip))
+        sel_kw = self._selection_kwargs(skip)
 
         def work(progress, token):
-            return self.api.run_import(package, self.state.rules_dir, dry_run=True, deps=self.deps)
+            return self.api.run_import(package, self.state.rules_dir, dry_run=True, deps=self.deps, **sel_kw)
 
         def done(res):
             self.state.preview, self.state.preview_package = res, package
+            self.state.preview_skip = skip
             self._reset_confirms()
             self.emit("preview_done", res)
         self._run(T.TASK_PREVIEW, work, done)
@@ -1306,6 +1315,9 @@ class Controller:
             return False, T.G_NEED_PREVIEW
         if p.mode == "blocked" or p.plan.problems:
             return False, T.G_PACKAGE_BLOCKED
+        why = self.restore_selection_reason()  # stage30b: 프로그램 체크가 미리보기와 다르면 복원 불가
+        if why:
+            return False, why
         if not s.preview_checked:
             return False, T.G_NEED_CHECK_PREVIEW
         if not s.bak_understood:
@@ -1326,13 +1338,15 @@ class Controller:
         if not ok:
             raise GuardError(why)
         package, allow_extra = self.state.package, self.state.extra_consent
+        sel_kw = self._selection_kwargs(tuple(sorted(self.state.restore_skip)))
 
         def work(progress, token):
             return self.api.run_import(package, self.state.rules_dir, yes=True, allow_extra=allow_extra,
-                                       deps=self.deps, **_supported(self.api.run_import, progress_info=progress))
+                                       deps=self.deps, **_supported(self.api.run_import, progress_info=progress), **sel_kw)
 
         def done(res):
             self.state.import_result = res
+            self.state.undo_results, self.state.undo_preview = {}, {}  # stage30b: 새 복원이므로 되돌리기 상태를 비운다
             self.state.preview = None  # 확정은 한 번만 유효: 다시 복원하려면 미리보기부터
             self._reset_confirms()
             self.emit("import_done", res)
@@ -2097,3 +2111,250 @@ class Controller:
             ok, skipped, failed = self.transfer_counts()
             return [T.result_line(ok, skipped, failed), *self.flow_notes()]
         return []
+
+    # ====================================================================== stage30b 구획(화면 4~7)
+    # ---- 작업 중지 안내(하단 막대가 쓴다)
+    def stop_done_note(self, task: str) -> str:
+        """중지가 끝난 뒤 보여 줄 안내: 이어받기가 되는 작업인지/되돌릴 수 있는지/읽기만 하는 작업인지."""
+        if task in (T.TASK_EXPORT, T.TASK_EXPORT_RETRY, T.TASK_TRANSFER, T.TASK_RETRY):
+            return T.STOP_DONE_RESUME
+        if task == T.TASK_APPLY:
+            return T.STOP_DONE_APPLY
+        if task == T.TASK_UNDO:
+            return T.STOP_DONE_UNDO
+        return T.STOP_DONE_READONLY
+
+    # ---- 화면 4: 설정 파일 열, 선택 합계, 폴더 전체 담기
+    def set_extra_mode(self, mode: str) -> None:
+        """직접 고른 폴더를 담는 방식. 'config'(기본, 설정 파일만) 또는 'all'(폴더 전체)."""
+        if mode not in ("config", "all"):
+            raise GuardError(T.G_NOT_IN_LIST)
+        self.state.extra_mode = mode
+        self.emit("selection_changed")
+
+    def candidate_cfg_cells(self) -> dict:
+        """후보 key -> {cfg, size, excl, tip}: 표의 '설정 파일 / 용량 / 제외' 칸(값이 없으면 '계산 중' 또는 '확인 안 됨')."""
+        from ..find_program import config_line
+        d = self.state.discovery
+        out: dict = {}
+        if d is None:
+            return out
+        calc = bool(self.state.busy and self.state.busy_label in (T.TASK_DISCOVER, T.TASK_FIND_PROGRAM))
+        all_mode = self.state.extra_mode == "all"
+        for c in d.candidates():
+            size_eff, files_eff, _note = self._effective(c)
+            cut = self._cache_excluded(c)
+            cache_txt = fmt_bytes(c.cache_size) if cut and c.cache_size else "-"
+            if all_mode:
+                out[c.key] = {"cfg": files_eff, "size": size_eff, "excl": cache_txt, "tip": ""}
+            elif c.config_files is not None:
+                more = "" if c.config_complete else "+"
+                excl = (c.config_excluded_bytes or 0) + (c.cache_size if cut else 0)
+                out[c.key] = {"cfg": (T.DISC_CFG_COUNT_MORE if more else T.DISC_CFG_COUNT).format(n=c.config_files),
+                              "size": fmt_bytes(c.config_bytes or 0), "excl": fmt_bytes(excl) if excl else "-", "tip": config_line(c)}
+            else:
+                size = T.DISC_SIZE_FOLDER.format(size=size_eff) if c.size is not None else "-"
+                out[c.key] = {"cfg": T.DISC_CFG_CALC if calc else T.DISC_CFG_UNKNOWN, "size": size, "excl": cache_txt,
+                              "tip": T.DISC_CFG_TIP_UNKNOWN}
+        return out
+
+    def selection_config_text(self) -> str:
+        """선택 합계 한 줄: '선택 N개 · 설정 파일 M개 · 약 X'. 폴더 전체 담기를 켜면 폴더 전체 기준."""
+        d = self.state.discovery
+        if d is None or not self.state.selected:
+            return T.DISC_TOTAL_V2.format(n=0, files=0, size=fmt_bytes(0))
+        if self.state.extra_mode == "all":
+            t = self.selection_totals()
+            return T.DISC_TOTAL_V2_ALL.format(n=t["n"], files=t["files"], size=fmt_bytes(t["bytes"]))
+        n = files = size = unknown = 0
+        for c in d.candidates():
+            if c.key not in self.state.selected:
+                continue
+            n += 1
+            if c.config_files is None:
+                unknown += 1
+            else:
+                files += c.config_files
+                size += c.config_bytes or 0
+        text = T.DISC_TOTAL_V2.format(n=n, files=files, size=fmt_bytes(size))
+        return text + (T.DISC_TOTAL_V2_UNKNOWN.format(k=unknown) if unknown else "")
+
+    # ---- 화면 6: 프로그램별 복원 선택(미리보기/복원에 skip 을 넘긴다)
+    def _selection_kwargs(self, skip: tuple) -> dict:
+        """체크를 끈 프로그램(skip)을 run_import 에 넘길 인자. 이 선택을 받지 못하는 api 면 조용히 무시하지 않고 GuardError."""
+        if not skip:
+            return {}
+        if not _accepts(self.api.run_import, "skip_programs"):
+            raise GuardError(T.G_RESTORE_SELECT_UNSUPPORTED)
+        return {"skip_programs": list(skip)}
+
+    def restore_programs(self) -> list[dict]:
+        """미리보기의 프로그램별 표(id/name/new/overwrite/same/files + checked)."""
+        p = self.state.preview
+        rows = getattr(getattr(p, "plan", None), "programs", None) or []
+        return [{**r, "checked": r["id"] not in self.state.restore_skip} for r in rows]
+
+    def set_restore_program(self, pid: str, on: bool) -> None:
+        """프로그램의 복원 체크를 바꾼다. 미리보기와 달라지므로 확인 표시를 지우고, 다시 계산하기 전에는 복원할 수 없다."""
+        if pid not in {r["id"] for r in self.restore_programs()}:
+            raise GuardError(T.G_RESTORE_UNKNOWN_PROGRAM)
+        if on:
+            self.state.restore_skip.discard(pid)
+        else:
+            self.state.restore_skip.add(pid)
+        self._reset_confirms()
+        self.emit("restore_selection_changed", pid)
+
+    def restore_selection_reason(self) -> str:
+        """프로그램 체크 때문에 복원할 수 없는 이유(없으면 빈 문자열)."""
+        if self.state.preview is None:
+            return ""
+        if tuple(sorted(self.state.restore_skip)) != tuple(self.state.preview_skip):
+            return T.G_RESTORE_DIRTY
+        rows = self.restore_programs()
+        if rows and not any(r["checked"] for r in rows):
+            return T.G_RESTORE_NONE
+        return ""
+
+    def restore_selected_count(self) -> tuple[int, int]:
+        """(체크한 프로그램 수, 전체 프로그램 수)."""
+        rows = self.restore_programs()
+        return sum(1 for r in rows if r["checked"]), len(rows)
+
+    def restore_item_count(self) -> int:
+        """복원 확인창에 보여 줄 파일 수(체크를 끈 프로그램의 파일은 뺀다)."""
+        p = self.state.preview
+        return sum(1 for it in p.plan.items if it.get("status") != "not_selected") if p else 0
+
+    def restart_preview_for_selection(self) -> None:
+        """체크 상태대로 미리보기를 다시 계산한다."""
+        self.start_preview(keep_selection=True)
+
+    # ---- 화면 6: 결과의 프로그램별 표와 되돌리기
+    def result_programs(self) -> list[dict]:
+        """결과 화면의 프로그램별 표: id/name/selected/new/overwrite/same/failed + undo(막힌 이유, 비었으면 가능)."""
+        r = self.state.import_result
+        if r is None or r.report is None:
+            return []
+        progs = getattr(r.plan, "programs", None) or []
+        by_entry = {it.get("entry"): it.get("program", "") for it in r.plan.items}
+        rows = {p["id"]: {"id": p["id"], "name": p["name"], "selected": p.get("selected", True), "new": 0, "overwrite": 0,
+                          "same": 0, "failed": 0} for p in progs}
+        for res in r.report.results:
+            row = rows.get(by_entry.get(res.src, ""))
+            if row is None:
+                continue
+            if res.status == "copied":
+                row["overwrite" if res.backup else "new"] += 1
+            elif res.status == "skipped_identical":
+                row["same"] += 1
+            elif res.status in ("failed", "rejected"):
+                row["failed"] += 1
+        out = list(rows.values())
+        for row in out:
+            row["undo"] = self.undo_reason(row["id"], row)
+        return out
+
+    def undo_reason(self, pid: str, row: dict | None = None) -> str:
+        """프로그램별 [되돌리기] 가 막혀 있는 이유(없으면 빈 문자열). 이미 되돌렸으면 그 결과 문구."""
+        r = self.state.import_result
+        if r is None or r.report is None:
+            return T.UNDO_NO_RECORD
+        if not r.record_path:
+            return T.UNDO_RECORD_FAILED if r.record_error else T.UNDO_NO_RECORD
+        if self.state.busy:
+            return T.WHY_BUSY
+        done = self.state.undo_results.get(pid)
+        if done is not None and getattr(done, "mode", "") == "applied":
+            return T.UNDO_DONE_LABEL.format(n=self.undo_counts(done)[0])
+        if row is None:
+            row = next((x for x in self.result_programs() if x["id"] == pid), None)
+        if row is None or not row["selected"] or not row["overwrite"]:
+            return T.UNDO_NOTHING
+        return ""
+
+    @staticmethod
+    def undo_counts(res: Any) -> tuple[int, int]:
+        """적용한 되돌리기 결과의 (되돌린 개수, 못 한 개수)."""
+        items = getattr(getattr(res, "plan", None), "items", [])
+        return sum(1 for i in items if i.result == "restored"), sum(1 for i in items if i.result == "failed")
+
+    @staticmethod
+    def undo_preview_counts(res: Any) -> tuple[int, int, int]:
+        """되돌리기 미리보기의 (되돌릴 개수, 지우지 않고 둘 새 파일 개수, 되돌릴 수 없는 개수)."""
+        s = res.plan.summary()
+        return s["restore"], s["new_kept"], s["problems"]
+
+    def _undo_api(self):
+        fn = getattr(self.api, "run_undo_import", None)
+        if fn is None:
+            raise GuardError(T.G_UNDO_UNSUPPORTED)
+        return fn
+
+    def start_undo_preview(self, pid: str) -> None:
+        """프로그램 하나의 되돌리기 미리보기(아무것도 바꾸지 않음). 끝나면 undo_preview_done 이벤트."""
+        fn = self._undo_api()
+        why = self.undo_reason(pid)
+        if why:
+            raise GuardError(why)
+        record = self.state.import_result.record_path
+
+        def work(progress, token):
+            return fn([pid], record=record, dry_run=True)
+
+        def done(res):
+            self.state.undo_preview[pid] = res
+            self.emit("undo_preview_done", {"id": pid, "result": res})
+        self._run(T.TASK_UNDO_PREVIEW, work, done)
+
+    def start_undo(self, pid: str, confirmed: bool = False) -> None:
+        """미리보기를 보고 확인한 뒤에만 실제로 되돌린다(새로 생긴 파일은 지우지 않는다). 끝나면 undo_done 이벤트."""
+        if not confirmed:
+            raise GuardError(T.G_NEED_FINAL_YES)
+        fn = self._undo_api()
+        why = self.undo_reason(pid)
+        if why:
+            raise GuardError(why)
+        if pid not in self.state.undo_preview:
+            raise GuardError(T.G_UNDO_UNKNOWN)
+        record = self.state.import_result.record_path
+
+        def work(progress, token):
+            return fn([pid], record=record, yes=True)
+
+        def done(res):
+            self.state.undo_results[pid] = res
+            self.emit("undo_done", {"id": pid, "result": res})
+        self._run(T.TASK_UNDO, work, done)
+
+    # ---- 화면 7: '추천대로 한 번에' 구 PC 마지막 화면
+    def auto_export_stopped(self) -> bool:
+        """내보내기 단계에서 멈췄는가(다시 시도/처음부터 다시 만들기 단추를 보일 때)."""
+        a = self.auto
+        st = a.step("export") if a is not None else None
+        return bool(a is not None and a.flow == "old" and a.status == "stopped" and st is not None and st.state == "stopped")
+
+    def auto_retry_export(self, restart: bool = False) -> None:
+        """멈춘 내보내기를 다시 시도한다(restart=False: 저장점부터 이어서, True: 처음부터)."""
+        a = self.auto
+        if not self.auto_export_stopped() or not a.export_path:
+            raise GuardError(T.G_AUTO_RETRY_NA)
+        a.stop_requested, a.what, a.how, a.by_user, a.warning = False, "", "", False, ""
+        self._auto_start("export", self.start_export, a.export_path, write_confirmed=True, resume=not restart)
+
+    def auto_after_retry(self, res: Any) -> None:
+        """끝난 '한 번에' 진행에서 '읽지 못한 파일 다시 담기'가 끝났을 때 '끝났지만 확인 필요' 를 새 결과로 갱신한다."""
+        a = self.auto
+        m = getattr(res, "manifest", None)
+        if a is None or a.flow != "old" or a.status != "done" or not isinstance(m, dict):
+            return
+        unreadable = sum(1 for f in m["failed"] if f.get("reason"))
+        hard = len(m["failed"]) - unreadable
+        a.warning = " ".join(x for x in (T.AUTO_UNREADABLE_WARN.format(n=unreadable) if unreadable else "",
+                                         T.AUTO_FAILED_WARN.format(n=hard) if hard else "") if x)
+        self._auto_mark("export", "warn" if a.warning else "done")
+        self._auto_notify()
+
+
+# stage30b: '되돌리기'는 파일을 쓰는 작업이라 강제로 버린 옛 쓰기 작업이 남아 있으면 시작하지 않는다
+_WRITING_TASKS = _WRITING_TASKS + (T.TASK_UNDO,)

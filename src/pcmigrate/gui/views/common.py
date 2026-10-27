@@ -35,6 +35,7 @@ WARN_BTN_BG, WARN_BTN_HOVER = "#b45309", "#92400e"  # 주의색 단추(덮어쓰
 PRIMARY_HOVER = "#094a82"
 BTN_DISABLED_BG, BTN_DISABLED_FG = "#c9d1dd", "#5a6270"
 PLAIN_BG, PLAIN_HOVER = "#e6e6e6", "#d6d6d6"
+STOP_BTN_BG, STOP_BTN_HOVER = "#b3261e", "#8c1d18"  # 중지 단추(빨강, kind="danger")
 
 # --------------------------------------------------------------------------- 글꼴(이름 있는 글꼴: 글자 크기 키우기에 맞춰 함께 바뀐다)
 TITLE_FONT = "PcTitle"  # 16pt 굵게
@@ -98,20 +99,20 @@ def autowrap(label: tk.Misc, pad: int = 24) -> None:
 class ActionButton(tk.Button):
     """눈에 띄는 단추(ttk 는 Windows 에서 배경색을 못 바꿔 tk 단추를 쓴다). ttk 단추처럼 state()/instate() 를 쓸 수 있다.
 
-    kind: primary(파랑, 주 동작) / warn(주황, 되돌리기 어려운 실행) / plain(연회색, 보조) / link(밑줄 글자).
+    kind: primary(파랑, 주 동작) / warn(주황, 되돌리기 어려운 실행) / danger(빨강, 중지) / plain(연회색, 보조) / link(밑줄 글자).
     """
 
     def __init__(self, parent: tk.Misc, text: str = "", command: Callable | None = None, kind: str = "primary", **kw) -> None:
         self.kind = kind
         self._disabled = False
         self._emph = True
-        font = kw.pop("font", BOLD_FONT if kind in ("primary", "warn") else BODY_FONT)
+        font = kw.pop("font", BOLD_FONT if kind in ("primary", "warn", "danger") else BODY_FONT)
         if kind == "link":
             kw.setdefault("padx", 2)
             kw.setdefault("pady", 1)
         else:
-            kw.setdefault("padx", 16 if kind in ("primary", "warn") else 10)
-            kw.setdefault("pady", 6 if kind in ("primary", "warn") else 4)
+            kw.setdefault("padx", 16 if kind in ("primary", "warn", "danger") else 10)
+            kw.setdefault("pady", 6 if kind in ("primary", "warn", "danger") else 4)
         super().__init__(parent, text=text, command=command, font=font, relief="flat", borderwidth=0, cursor="hand2",
                          takefocus=1, highlightthickness=2, **kw)
         self.bind("<Enter>", lambda e: self._paint(hover=True), add="+")
@@ -153,9 +154,11 @@ class ActionButton(tk.Button):
                               disabledforeground=BTN_DISABLED_FG, highlightbackground=self.master_bg(), highlightcolor=INFO_FG,
                               font=self._link_font())
             return
-        emph = self.kind in ("primary", "warn") and self._emph
+        emph = self.kind in ("primary", "warn", "danger") and self._emph
         if self._disabled:
-            bg, fg = (BTN_DISABLED_BG, BTN_DISABLED_FG) if self.kind in ("primary", "warn") else (PLAIN_BG, BTN_DISABLED_FG)
+            bg, fg = (BTN_DISABLED_BG, BTN_DISABLED_FG) if self.kind in ("primary", "warn", "danger") else (PLAIN_BG, BTN_DISABLED_FG)
+        elif emph and self.kind == "danger":
+            bg, fg = (STOP_BTN_HOVER if hover else STOP_BTN_BG), "white"
         elif emph:
             bg = (WARN_BTN_HOVER if hover else WARN_BTN_BG) if self.kind == "warn" else (PRIMARY_HOVER if hover else INFO_FG)
             fg = "white"
@@ -229,13 +232,24 @@ class Collapsible(tk.Frame):
     """'자세히 ▸' 접이식 영역. 머리글 단추를 누르면 body 가 펼쳐진다(처음에는 접혀 있다)."""
 
     def __init__(self, parent: tk.Misc, title: str = T.BTN_MORE, title_open: str = T.BTN_LESS, opened: bool = False,
-                 bg: str | None = None) -> None:
+                 bg: str | None = None, lead: str | None = None) -> None:
+        """lead: 머리글 한 줄 요약 글(있으면 '요약 글  자세히 ▸' 가 같은 줄에 놓인다. lead_label 로 글을 바꾼다)."""
         self.bg = bg or _bg_of(parent)
         super().__init__(parent, bg=self.bg)
         self.title, self.title_open = title, title_open
         self.open = False
-        self.toggle_btn = ActionButton(self, text=title, command=self.toggle, kind="link")
-        self.toggle_btn.pack(anchor="w")
+        self.lead_label: tk.Label | None = None
+        if lead is None:
+            self.toggle_btn = ActionButton(self, text=title, command=self.toggle, kind="link")
+            self.toggle_btn.pack(anchor="w")
+            self._head: tk.Misc = self.toggle_btn
+        else:
+            self._head = tk.Frame(self, bg=self.bg)
+            self._head.pack(anchor="w", fill="x")
+            self.lead_label = tk.Label(self._head, text=lead, bg=self.bg, anchor="w", justify="left")
+            self.lead_label.pack(side="left")
+            self.toggle_btn = ActionButton(self._head, text=title, command=self.toggle, kind="link")
+            self.toggle_btn.pack(side="left", padx=(10, 0))
         self.body = tk.Frame(self, bg=self.bg)
         if opened:
             self.toggle()
@@ -246,7 +260,7 @@ class Collapsible(tk.Frame):
     def set_open(self, on: bool) -> None:
         self.open = bool(on)
         if self.open:
-            self.body.pack(fill="x", pady=(2, 4), after=self.toggle_btn)
+            self.body.pack(fill="x", pady=(2, 4), after=self._head)
         else:
             self.body.pack_forget()
         self.toggle_btn.configure(text=self.title_open if self.open else self.title)

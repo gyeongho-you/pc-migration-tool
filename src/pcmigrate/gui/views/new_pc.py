@@ -6,8 +6,8 @@ from tkinter import filedialog, messagebox, ttk
 
 from .. import state as S
 from .. import texts as T
-from .common import (BODY_FONT, DANGER_BG, DANGER_FG, INFO_BG, INFO_FG, MUTED_FG, OK_BG, OK_FG, SUB_FONT, TITLE_FONT, WARN_FG,
-                     BaseView, Collapsible, CoverageBox, Notice, PathField, ResultSummary, ScrollBody, TreeTooltip, autowrap, clean_path,
+from .common import (BODY_FONT, TEXT_FG, DANGER_BG, DANGER_FG, INFO_BG, INFO_FG, MUTED_FG, OK_BG, OK_FG, SUB_FONT, TITLE_FONT, WARN_FG,
+                     ActionButton, BaseView, Collapsible, CoverageBox, Notice, PathField, ResultSummary, ScrollBody, TreeTooltip, autowrap, clean_path,
                      clear, make_text, make_tree, open_location, set_text)
 
 
@@ -74,19 +74,44 @@ class PreviewView(BaseView):
         self.problem_box.pack(fill="x", pady=4)
         self._empty_bg = self.problem_box.cget("bg")
         autowrap(self.problem_box, 40)
+        # 요약과 검사 결과 아래는 스크롤된다(창이 낮아도 프로그램별 표와 파일 목록이 줄어 사라지지 않게)
+        self.scroll = ScrollBody(self)
+        self.scroll.pack(fill="both", expand=True)
+        body = ttk.Frame(self.scroll.inner, padding=(0, 0, 8, 0))
+        body.pack(fill="both", expand=True)
+        # 프로그램별 복원 선택표: 체크를 끈 프로그램은 읽지도 쓰지도 않는다. 체크를 바꾸면 미리보기를 다시 계산한다
+        self.prog_box = ttk.Frame(body)
+        ttk.Label(self.prog_box, text=T.PREV_PROG_TITLE, font=SUB_FONT).pack(anchor="w")
+        pcols = [("chk", T.PREV_PROG_COLS[0], 60), ("name", T.PREV_PROG_COLS[1], 380), ("new", T.PREV_PROG_COLS[2], 80),
+                 ("over", T.PREV_PROG_COLS[3], 80), ("same", T.PREV_PROG_COLS[4], 80)]
+        self.prog_frame, self.prog_tree = make_tree(self.prog_box, pcols, height=3)
+        self.prog_frame.pack(fill="x", pady=(2, 0))
+        self.prog_tree.tag_configure("off", foreground=MUTED_FG)
+        self.prog_tree.bind("<Button-1>", self._prog_click)
+        self.prog_tree.bind("<space>", self._prog_key)
+        self.prog_ids: dict[str, str] = {}
+        prog_note_row = ttk.Frame(self.prog_box)
+        prog_note_row.pack(fill="x", pady=(2, 0))
+        self.prog_note = ttk.Label(prog_note_row, text=T.PREV_PROG_NOTE, foreground=MUTED_FG, justify="left")
+        self.prog_note.pack(side="left")
+        self.recalc_btn = ttk.Button(prog_note_row, text=T.BTN_PREV_RECALC, command=self._recompute_now)
+        self.dirty = ttk.Label(self.prog_box, text="", foreground=WARN_FG, justify="left")
+        autowrap(self.dirty, 30)
+        self._recalc_timer = None
         cols = [("status", T.PREV_COLS[0], 130), ("target", T.PREV_COLS[1], 460), ("backup", T.PREV_COLS[2], 250),
                 ("extra", T.PREV_COLS[3], 110)]
-        frame, self.tree = make_tree(self, cols, height=6)
-        self.lic_link = self.license_link(self)
-        self.lic_link.pack(side="bottom", anchor="w")
-        self.more = Collapsible(self, f"{T.PREV_WARN_TITLE} ▸", f"{T.PREV_WARN_TITLE} ▾")  # 직접 해야 할 일은 접어 둔다
-        self.more.pack(side="bottom", fill="x")
-        self.cov_fold = Collapsible(self, f"{T.COV_PREVIEW_TITLE} ▸", f"{T.COV_PREVIEW_TITLE} ▾")  # 설정 확인표도 접어 둔다
-        self.cov_fold.pack(side="bottom", fill="x")
+        frame, self.tree = make_tree(body, cols, height=6)
+        self.files_frame = frame
+        frame.pack(fill="x", pady=4)
+        self.cov_fold = Collapsible(body, f"{T.COV_PREVIEW_TITLE} ▸", f"{T.COV_PREVIEW_TITLE} ▾")  # 설정 확인표도 접어 둔다
+        self.cov_fold.pack(fill="x")
         self.cov = CoverageBox(self.cov_fold.body, title="")
         self.cov.title_label.pack_forget()
         self.cov.pack(fill="x")
-        frame.pack(side="top", fill="both", expand=True, pady=4)  # 아래쪽을 먼저 쌓은 뒤 표가 남는 높이를 쓴다
+        self.more = Collapsible(body, f"{T.PREV_WARN_TITLE} ▸", f"{T.PREV_WARN_TITLE} ▾")  # 직접 해야 할 일은 접어 둔다
+        self.more.pack(fill="x")
+        self.lic_link = self.license_link(body)
+        self.lic_link.pack(anchor="w")
         self.tree.tag_configure("over", foreground=WARN_FG)
         self.tree.tag_configure("extra", background=DANGER_BG, foreground=DANGER_FG)
         self.full: dict[str, tuple[str, str]] = {}
@@ -97,11 +122,100 @@ class PreviewView(BaseView):
 
     def on_show(self) -> None:
         self._render()
+        self.scroll.scroll_to_top()
         self.next_btn.focus_set()
 
     def on_event(self, kind, payload) -> None:
         if kind == "preview_done":
             self._render()
+        elif kind == "restore_selection_changed":
+            self._render_programs()
+            self._update_gate()
+            self._schedule_recompute()
+        elif kind == "busy" and self.c.state.preview is not None:
+            self._update_gate()
+
+    # ---- 프로그램별 복원 선택
+    def _render_programs(self) -> None:
+        rows = self.c.restore_programs()
+        clear(self.prog_tree)
+        self.prog_ids = {}
+        for r in rows:
+            on = r["checked"]
+            na = T.PREV_PROG_NA
+            iid = self.prog_tree.insert("", "end", tags=() if on else ("off",), values=(
+                T.CHECKED if on else T.UNCHECKED, r["name"], r["new"] if on else na, r["overwrite"] if on else na,
+                r["same"] if on else na))
+            self.prog_ids[iid] = r["id"]
+        self.prog_tree.configure(height=max(2, min(4, len(rows))))
+        if rows and not self.prog_box.winfo_manager():
+            self.prog_box.pack(fill="x", pady=(2, 0), before=self.files_frame)
+        elif not rows and self.prog_box.winfo_manager():
+            self.prog_box.pack_forget()
+
+    def _prog_toggle(self, iid: str) -> None:
+        pid = self.prog_ids.get(iid)
+        if pid is None:
+            return
+        on = pid in self.c.state.restore_skip  # 지금 꺼져 있으면 켠다
+        self.guarded(self.c.set_restore_program, pid, on)
+
+    def _prog_click(self, event) -> None:
+        iid = self.prog_tree.identify_row(event.y)
+        if iid:
+            self._prog_toggle(iid)
+
+    def _prog_key(self, _e=None):
+        sel = self.prog_tree.selection()
+        if sel:
+            self._prog_toggle(sel[0])
+        return "break"
+
+    def _schedule_recompute(self) -> None:
+        """체크를 바꾼 뒤 잠시(연달아 누르는 동안은 기다렸다가) 미리보기를 선택대로 다시 계산한다."""
+        if self._recalc_timer is not None:
+            try:
+                self.after_cancel(self._recalc_timer)
+            except tk.TclError:
+                pass
+        self._recalc_timer = self.after(400, self._recompute_now)
+
+    def _recompute_now(self) -> None:
+        self._recalc_timer = None
+        if self.c.restore_selection_reason() != T.G_RESTORE_DIRTY:
+            return
+        if self.c.state.busy:  # 다른 작업이 끝나면 다시 시도한다
+            self._recalc_timer = self.after(500, self._recompute_now)
+            return
+        self.guarded(self.c.restart_preview_for_selection)
+
+    def _update_gate(self) -> None:
+        """'복원 확인으로' 단추와 안내: 검사 문제나 체크 상태가 미리보기와 다르면 막는다."""
+        p = self.c.state.preview
+        if p is None:
+            return
+        why = self.c.restore_selection_reason()
+        dirty = why == T.G_RESTORE_DIRTY
+        if dirty:
+            self.dirty.configure(text=T.PREV_PROG_DIRTY, foreground=WARN_FG)
+        elif why:
+            self.dirty.configure(text=T.PREV_PROG_NONE_SELECTED, foreground=DANGER_FG)
+        if why and not self.dirty.winfo_manager():
+            self.dirty.pack(anchor="w", fill="x")
+        elif not why and self.dirty.winfo_manager():
+            self.dirty.pack_forget()
+        if dirty and not self.recalc_btn.winfo_manager():
+            self.recalc_btn.pack(side="left", padx=8)
+        elif not dirty and self.recalc_btn.winfo_manager():
+            self.recalc_btn.pack_forget()
+        if self.c.preview_problems():
+            return
+        if why:
+            self.next_btn.state(["disabled"])
+            self.set_next_reason(why)
+        else:
+            self.next_btn.state(["!disabled"])
+            self.set_next_reason("")
 
     def _render(self) -> None:
         p = self.c.state.preview
@@ -112,6 +226,7 @@ class PreviewView(BaseView):
             self.problem_box.configure(text="", bg=self._empty_bg)  # 이전 미리보기의 '검사 통과' 표시가 남지 않게
             self.next_btn.state(["disabled"])
             self.set_next_reason(T.WHY_PREVIEW_FIRST)
+            self.prog_box.pack_forget()
             return
         counts = p.summary()
         text = T.PREV_SUMMARY.format(new=counts.get("would_copy", 0), over=counts.get("would_overwrite", 0),
@@ -137,6 +252,8 @@ class PreviewView(BaseView):
         lines = (self.c.preview_lines()
                  + [f"{w.get('name', '')}: {i}" for w in p.plan.warnings for i in w.get("items", [])])
         set_text(self.warn, lines or [T.CL_EMPTY])
+        self._render_programs()
+        self._update_gate()
         table = self.c.coverage_table(p)
         self.cov.show(table)
         head = self.c.coverage_headline(table)
@@ -200,7 +317,11 @@ class ConfirmView(BaseView):
         self.extra_var.set(self.c.state.extra_consent)
         counts = p.summary() if p else {}
         new, over = counts.get("would_copy", 0), counts.get("would_overwrite", 0)
-        self.info.configure(text=T.CONF_INFO.format(package=self.c.state.package, new=new))
+        info = T.CONF_INFO.format(package=self.c.state.package, new=new)
+        picked, total = self.c.restore_selected_count()
+        if total and picked < total:  # 프로그램별로 일부만 복원하는 경우: 숫자는 선택을 반영한 미리보기 값이다
+            info += "\n" + T.CONF_SELECTED_NOTE.format(n=picked, m=total, k=total - picked)
+        self.info.configure(text=info)
         if over:
             self.big_label.configure(text=T.CONF_BIG.format(over=over), fg=WARN_FG)
             self.big_note.configure(text=T.CONF_BIG_NOTE)
@@ -219,7 +340,7 @@ class ConfirmView(BaseView):
         self.check.focus_set()
 
     def on_event(self, kind, payload) -> None:
-        if kind in ("confirm_changed", "busy"):
+        if kind in ("confirm_changed", "busy", "restore_selection_changed"):
             self._update()
 
     def _checked_changed(self) -> None:
@@ -239,8 +360,7 @@ class ConfirmView(BaseView):
         self.why.configure(text="" if ready else why)
 
     def _run(self) -> None:
-        p = self.c.state.preview
-        n = len(p.plan.items) if p else 0
+        n = self.c.restore_item_count()
         if not messagebox.askyesno(T.CONF_DIALOG_TITLE, T.CONF_DIALOG.format(n=n), icon="warning", parent=self):
             self.c.confirm_final(False)
             return
@@ -265,6 +385,19 @@ class ResultView(BaseView):
         self.summary.pack(fill="x")
         self.note = ttk.Label(body, text="", justify="left")
         self.note.pack(anchor="w", fill="x")
+        # 프로그램별 결과 표와 프로그램별 [되돌리기]
+        self.prog_box = ttk.Frame(body)
+        self.prog_title = ttk.Label(self.prog_box, text=T.RES_PROG_TITLE, font=SUB_FONT)
+        self.prog_title.pack(anchor="w")
+        self.prog_grid = ttk.Frame(self.prog_box)
+        self.prog_grid.pack(fill="x", pady=(2, 0))
+        self.prog_grid.columnconfigure(0, weight=1)
+        self.undo_msg = ttk.Label(self.prog_box, text=T.UNDO_NOTE, foreground=MUTED_FG, justify="left")
+        self.undo_msg.pack(anchor="w", fill="x", pady=(2, 0))
+        autowrap(self.undo_msg, 30)
+        self.undo_buttons: dict[str, ttk.Button] = {}
+        self.undo_labels: dict[str, ttk.Label] = {}
+        self.prog_box.pack(fill="x", pady=(3, 0))
         self.cov = CoverageBox(body, title=T.COV_PREVIEW_TITLE)  # 묶음 안에 어떤 설정이 담겼는지(프로그램별)
         self.cov.pack(fill="x", pady=(4, 0))
         cols = [("kind", T.RES_COLS[0], 90), ("path", T.RES_COLS[1], 520), ("detail", T.RES_COLS[2], 260)]
@@ -305,15 +438,85 @@ class ResultView(BaseView):
     def on_event(self, kind, payload) -> None:
         if kind == "import_done":
             self.c.go(S.NEW_RESULT)
+        elif kind == "undo_preview_done":
+            self.after_idle(lambda: self._confirm_undo(payload["id"], payload["result"]))
+        elif kind == "undo_done":
+            self._render_programs()
+            name = self._name_of(payload["id"])
+            n, failed = self.c.undo_counts(payload["result"])
+            self.undo_msg.configure(text=T.UNDO_DONE.format(icon=T.ICON_FAIL if failed else T.ICON_OK, name=name, n=n, f=failed),
+                                    foreground=DANGER_FG if failed else OK_FG)
+        elif kind == "busy":
+            self._sync_undo_buttons()
+
+    # ---- 프로그램별 결과 표 / 되돌리기
+    def _name_of(self, pid: str) -> str:
+        return next((x["name"] for x in self.c.result_programs() if x["id"] == pid), pid)
+
+    def _render_programs(self) -> None:
+        for w in self.prog_grid.winfo_children():
+            w.destroy()
+        self.undo_buttons, self.undo_labels = {}, {}
+        rows = self.c.result_programs()
+        if not rows:
+            self.prog_box.pack_forget()
+            return
+        if not self.prog_box.winfo_manager():
+            self.prog_box.pack(fill="x", pady=(3, 0), before=self.cov)
+        for col, head in enumerate(T.RES_PROG_COLS):
+            ttk.Label(self.prog_grid, text=head, font=BODY_FONT, foreground=MUTED_FG).grid(
+                row=0, column=col, sticky="w", padx=(0, 14))
+        na = T.PREV_PROG_NA
+        for i, r in enumerate(rows, 1):
+            on = r["selected"]
+            ttk.Label(self.prog_grid, text=r["name"]).grid(row=i, column=0, sticky="w", padx=(0, 14))
+            for col, key in enumerate(("new", "overwrite", "same", "failed"), 1):
+                ttk.Label(self.prog_grid, text=str(r[key]) if on else na,
+                          foreground=DANGER_FG if key == "failed" and r[key] else TEXT_FG).grid(
+                    row=i, column=col, sticky="w", padx=(0, 14))
+            cell = ttk.Frame(self.prog_grid)
+            cell.grid(row=i, column=5, sticky="w")
+            btn = ttk.Button(cell, text=T.BTN_UNDO, style="Mini.TButton", command=lambda pid=r["id"]: self._undo_click(pid))
+            btn.pack(side="left")
+            lbl = ttk.Label(cell, text="", foreground=MUTED_FG)
+            lbl.pack(side="left", padx=(6, 0))
+            self.undo_buttons[r["id"]], self.undo_labels[r["id"]] = btn, lbl
+        self._sync_undo_buttons()
+
+    def _sync_undo_buttons(self) -> None:
+        for r in self.c.result_programs():
+            btn = self.undo_buttons.get(r["id"])
+            if btn is None:
+                continue
+            why = r["undo"]
+            btn.state(["disabled"] if why else ["!disabled"])
+            self.undo_labels[r["id"]].configure(text=why)
+
+    def _undo_click(self, pid: str) -> None:
+        self.guarded(self.c.start_undo_preview, pid)
+
+    def _confirm_undo(self, pid: str, res) -> None:
+        """되돌리기 미리보기를 본 뒤 확인창: 예 를 눌러야만 실제로 되돌린다(새로 생긴 파일은 지우지 않는다)."""
+        name = self._name_of(pid)
+        n, kept, problems = self.c.undo_preview_counts(res)
+        if not n:
+            messagebox.showinfo(T.UNDO_CONFIRM_TITLE, T.UNDO_NOTHING_DIALOG.format(name=name), parent=self)
+            return
+        extra = T.UNDO_PROBLEMS.format(p=problems) if problems else ""
+        if messagebox.askyesno(T.UNDO_CONFIRM_TITLE, T.UNDO_CONFIRM.format(name=name, n=n, k=kept, problems=extra),
+                               icon="warning", parent=self):
+            self.guarded(self.c.start_undo, pid, confirmed=True)
 
     def on_show(self) -> None:
         r = self.c.state.import_result
         clear(self.tree)
         self.full = {}
+        self.undo_msg.configure(text=T.UNDO_NOTE, foreground=MUTED_FG)
         for key, var in self.next_vars.items():
             var.set(key in self.c.roadmap_marks)
         self.scroll.scroll_to_top()
         if r is None or r.report is None:
+            self._render_programs()
             self.cov.clear()
             self.summary.clear()
             self.note.configure(text=T.RES_NOT_YET)
@@ -323,6 +526,7 @@ class ResultView(BaseView):
         self.note.configure(text="\n".join(x for x in (self.c.denied_note(), self.c.git_config_note(applied=True)) if x))
         ok, skipped, failed = self.c.import_counts()
         self.summary.show(ok, skipped, failed, T.RES_ALL_OK, T.RES_IMPORT_FAIL)
+        self._render_programs()
         self.cov.show(self.c.coverage_table(r))
 
         def add(kind, path, detail, tags=()):

@@ -121,21 +121,21 @@ PROGRESS = {
     TASK_SCAN: "설치된 프로그램을 조사하는 중… 보통 10~60초 걸립니다.",
     TASK_DISCOVER: "자동 목록에 없는 프로그램의 설정 폴더를 찾는 중… 폴더 크기를 재느라 보통 30~90초 걸립니다.",
     TASK_CHECKLIST: "해야 할 일 목록을 만드는 중… 보통 10~60초 걸립니다.",
-    TASK_FIND_PROGRAM: "고른 프로그램과 이름이 맞는 설정 폴더만 찾는 중… 보통 몇 초에서 30초 걸립니다. 읽기만 하며 아래 '취소'로 멈출 수 있습니다.",
+    TASK_FIND_PROGRAM: "고른 프로그램과 이름이 맞는 설정 폴더만 찾는 중… 보통 몇 초에서 30초 걸립니다. 읽기만 하며 아래 '중지'로 멈출 수 있습니다.",
     TASK_EXPORT: "설정 묶음 파일을 만드는 중… 파일 수에 따라 수십 초에서 몇 분 걸립니다. 원본은 읽기만 합니다.",
     TASK_PREVIEW: "설정 묶음 파일을 검사하고 미리보기를 만드는 중… 보통 몇 초에서 1분 걸립니다. 아무것도 쓰지 않습니다.",
     TASK_INSTALL_CHECK: "이 PC에 설치된 프로그램을 읽어 설정 묶음 파일의 목록과 비교하는 중… 보통 10~60초 걸립니다. 아무것도 설치하거나 바꾸지 않습니다.",
     TASK_APPLY: "복원하는 중… 파일 수에 따라 수십 초에서 몇 분 걸립니다. 덮어쓰는 파일은 백업 파일(.bak)로 남깁니다.",
-    TASK_TRANSFER: "복사하고 검사하는 중… 용량에 따라 몇 분에서 몇 시간 걸릴 수 있습니다. 취소해도 나중에 이어서 할 수 있습니다.",
+    TASK_TRANSFER: "복사하고 검사하는 중… 용량에 따라 몇 분에서 몇 시간 걸릴 수 있습니다. 중지해도 나중에 이어서 할 수 있습니다.",
     TASK_TRANSFER_PREVIEW: "무엇이 복사될지 확인하는 중… 아무것도 쓰지 않습니다.",
     TASK_VERIFY: "목록 파일과 이 PC의 복사본을 하나씩 비교하는 중… 용량에 따라 몇 분에서 몇 시간 걸립니다. 읽기만 하며 아무것도 쓰지 않습니다.",
-    TASK_VERIFY_AGAIN: "원본과 복사본을 다시 비교하는 중… 복사는 하지 않고 읽기만 합니다. 취소해도 됩니다.",
+    TASK_VERIFY_AGAIN: "원본과 복사본을 다시 비교하는 중… 복사는 하지 않고 읽기만 합니다. 중지해도 됩니다.",
     TASK_RETRY: "검사가 끝나지 않았거나 실패한 파일만 다시 복사하고 검사하는 중입니다. 이미 정확한 파일은 건드리지 않습니다.",
 }
 STAGE_LABEL = "지금 하는 일"
 BUSY_NOTE = "화면이 멈춘 것처럼 보여도 작업은 진행 중입니다. 끝날 때까지 기다려 주세요."
-CANCELLING = "취소하는 중입니다…"
-CANCELLED = "{task}을(를) 취소했습니다. 진행 기록은 남아 있어 같은 설정으로 다시 실행하면 이어서 합니다."
+CANCELLING = "중지하는 중입니다…"
+CANCELLED = "{task}을(를) 중지했습니다. 진행 기록은 남아 있어 같은 설정으로 다시 실행하면 이어서 합니다."
 ERROR_STATUS = "문제가 생겨 작업을 마치지 못했습니다."
 SCAN_PROGRESS = PROGRESS[TASK_SCAN]
 CHECKLIST_PROGRESS = PROGRESS[TASK_CHECKLIST]
@@ -201,7 +201,7 @@ COL_PROGRAM_RULE, COL_EVIDENCE = "프로그램", "근거"
 DISC_HEADING = TITLES[OLD_DISCOVER]
 DISC_SUB = "자동 목록에 없는 프로그램의 설정 폴더 후보입니다. 설정 묶음 파일에 넣을 항목만 직접 골라 주세요."
 BTN_DISCOVER = "찾기 시작"
-DISC_HINT = "읽기만 합니다. 폴더 크기를 재느라 1분 안팎 걸릴 수 있으며, 아래 '취소'로 멈출 수 있습니다."
+DISC_HINT = "읽기만 합니다. 폴더 크기를 재느라 1분 안팎 걸릴 수 있으며, 아래 '중지'로 멈출 수 있습니다."
 DISC_SUMMARY = "자동 목록에 없는 프로그램 {n}개, 설정 폴더 후보 {m}개 (민감한 정보 가능성 {k}개)"
 DISC_COLS = ("선택", "주의", "프로그램", "위치", "크기(캐시 제외)", "파일 수", "연결 근거")
 DISC_COL_SIZE_ALL = "크기(캐시 포함)"
@@ -491,7 +491,7 @@ TR_CONFIRM_TITLE = "복사 확인"
 TR_CONFIRM = ("다음 위치에 복사합니다(원본은 읽기만 합니다):\n\n원본: {src}\n대상: {dst}\n\n"
               f"대상 폴더에 복사한 파일과 작업 기록용 숨김 파일이 만들어집니다. 같은 이름의 다른 파일이 이미 있으면 {TERM_BACKUP}로 보관한 뒤 복사합니다."
               "{cloud}\n\n※ CAD 등 모든 프로그램을 종료한 뒤 시작해 주세요(사용 중인 파일은 복사에 실패합니다).\n"
-              "시작하시겠습니까? (진행 중 '취소'로 멈추고 나중에 이어서 할 수 있습니다)")
+              "시작하시겠습니까? (진행 중 '중지'로 멈추고 나중에 이어서 할 수 있습니다)")
 TR_CONFIRM_CLOUD = "\n⚠ OneDrive 클라우드 전용 파일을 포함하므로 대량으로 내려받을 수 있습니다."
 TR_COLS = ("구분", "파일", "내용")
 TR_PREVIEW_RESULT = ("미리보기 결과(실제로 바꾸지 않음): 새로 복사 {new}개, 덮어씀 {over}개(기존 파일은 백업 파일로 보관), 이미 같음 {same}개, "
@@ -1098,3 +1098,96 @@ EXP_RETRY_AGAIN = "프로그램을 닫은 뒤 '이 파일들만 다시 담기'�
 G_NEED_RETRY_CONFIRM = "읽지 못한 파일을 다시 담기 전에 확인하는 단계가 필요합니다."
 G_RETRY_NO_PACKAGE = "다시 담을 설정 묶음 파일이 없습니다. 먼저 설정 묶음 파일을 만들어 주세요."
 G_RETRY_NOTHING = "다시 담을 파일이 없습니다."
+
+
+# =========================================================================== stage30b 구획(화면 4~7: 표/중지/프로그램별 복원/마지막 화면)
+# ---- 작업 중지(하단 막대)
+BTN_STOP = "중지"
+STOPPING = "중지하는 중…"
+STOP_STUCK = (f"{ICON_WARN} 아직 멈추지 않았습니다. 파일을 읽거나 쓰는 중이면 잠시 더 걸릴 수 있습니다. "
+              "더 기다려도 되고, 화면을 먼저 정상으로 돌려놓을 수도 있습니다.")
+BTN_FORCE_STOP = "지금 강제로 멈추기"
+FORCE_STOPPED = ("화면은 정상으로 돌아왔습니다. 만들던 임시 파일은 이어받기가 가능한 상태로 남겨 두었습니다. "
+                 "파일을 쓰는 새 작업은 잠시 막힐 수 있습니다.")
+STOP_DONE_RESUME = "중지했습니다. 만들던 임시 파일은 남아 있어, 같은 설정으로 다시 시작하면 이어서 합니다."
+STOP_DONE_APPLY = "중지했습니다. 이미 복원한 파일이 있을 수 있으며, 덮어쓴 파일은 백업 파일(.bak)로 남아 있습니다."
+STOP_DONE_READONLY = "중지했습니다. 읽기만 하는 작업이라 원본은 그대로이며, 처음부터 다시 해도 안전합니다."
+STOP_DONE_UNDO = "중지했습니다. 이미 되돌린 파일이 있을 수 있습니다. 결과 화면에서 다시 확인해 주세요."
+TIP_STOP = "지금 하는 작업을 안전한 지점에서 멈춥니다(Esc 키도 같습니다)."
+
+# ---- 화면 4: 자동 목록에 없는 프로그램
+DISC_HINT_SHORT = "읽기만 합니다. 1분 안팎 걸릴 수 있고, 아래 '중지'로 멈출 수 있습니다."
+DISC_COLS_V2 = ("선택", "주의", "프로그램", "위치", "설정 파일", "용량", "제외")
+DISC_CFG_UNKNOWN = "확인 안 됨"
+DISC_CFG_CALC = "계산 중"
+DISC_CFG_COUNT = "{n}개"
+DISC_CFG_COUNT_MORE = "{n}개 이상"
+DISC_SIZE_FOLDER = "폴더 {size}"
+DISC_CFG_TIP_UNKNOWN = "설정 파일 수는 '이 프로그램 설정 찾기'를 누르면 계산됩니다. 그 전에는 폴더 전체 크기만 보여 줍니다."
+DISC_EXCLUDED_TIP = "제외: 설정 형식이 아니거나 캐시라서 담지 않는 파일의 용량입니다."
+DISC_TOTAL_V2 = "선택 {n}개 · 설정 파일 {files}개 · 약 {size}"
+DISC_TOTAL_V2_ALL = "선택 {n}개 · 폴더 전체 파일 {files}개 · 약 {size}"
+DISC_TOTAL_V2_UNKNOWN = " (확인 안 된 {k}개는 빠짐)"
+DISC_TOTAL_V2_NONE = "선택 0개 · 설정 파일 0개 · 약 0 MB"
+DISC_MORE_TOGGLE, DISC_MORE_TOGGLE_OPEN = "자세히 ▸", "자세히 ▾"
+DISC_GRIP_TIP = "이 줄을 위아래로 끌면 표 높이를 바꿀 수 있습니다(↑ ↓ 키도 됩니다). 표는 최소 8줄을 유지합니다."
+DISC_ADV_TOGGLE, DISC_ADV_TOGGLE_OPEN = "고급 옵션 ▸", "고급 옵션 ▾"
+DISC_ALL_MODE = "폴더 전체 담기(설정 파일이 아닌 파일도 포함)"
+DISC_ALL_MODE_NOTE = "기본은 설정 파일만 담습니다. 켜면 고른 폴더의 모든 파일을 담아 용량과 시간이 크게 늘고 민감한 정보가 섞일 수 있습니다."
+DISC_ALL_MODE_CONFIRM_TITLE = "폴더 전체 담기"
+DISC_ALL_MODE_CONFIRM = ("직접 고른 폴더의 모든 파일(설정 파일이 아닌 것 포함)을 설정 묶음 파일에 담습니다. 용량과 시간이 크게 늘 수 있고 "
+                         "민감한 정보가 섞일 수 있습니다. 켤까요?")
+EXP_MODE_ALL_NOTE = f"{ICON_WARN} 폴더 전체 담기가 켜져 있습니다. 직접 고른 폴더의 모든 파일을 담습니다."
+G_EXTRA_MODE_UNSUPPORTED = "이 버전은 '폴더 전체 담기'를 지원하지 않습니다. 옵션을 끄고 진행해 주세요."
+
+# ---- 화면 6: 신 PC 프로그램별 복원 선택, 되돌리기
+PREV_PROG_TITLE = "프로그램별로 복원할지 고르기"
+PREV_PROG_COLS = ("복원", "프로그램", "새로", "덮어씀", "같음")
+PREV_PROG_NOTE = "체크를 끈 프로그램은 읽지도 쓰지도 않습니다."
+PREV_PROG_DIRTY = "체크를 바꿨습니다. 미리보기를 다시 계산하는 중입니다. 계산되지 않으면 '선택대로 다시 계산'을 눌러 주세요."
+PREV_PROG_NONE_SELECTED = f"{ICON_WARN} 복원할 프로그램이 하나도 체크되어 있지 않습니다. 하나 이상 체크해 주세요."
+PREV_PROG_NA = "—"
+BTN_PREV_RECALC = "선택대로 다시 계산"
+PREV_STATUS["not_selected"] = "선택 안 함"
+G_RESTORE_DIRTY = "프로그램 체크를 바꿨습니다. 미리보기를 선택대로 다시 계산한 뒤 진행해 주세요."
+G_RESTORE_NONE = "복원할 프로그램이 하나도 체크되어 있지 않습니다. 하나 이상 체크해 주세요."
+G_RESTORE_SELECT_UNSUPPORTED = "이 버전은 프로그램별 복원 선택을 지원하지 않습니다. 모든 프로그램에 체크를 켠 상태로 진행해 주세요."
+G_RESTORE_UNKNOWN_PROGRAM = "이 묶음에 없는 프로그램입니다."
+CONF_SELECTED_NOTE = "프로그램 {m}개 중 {n}개만 복원합니다(체크를 끈 {k}개는 읽지도 쓰지도 않습니다)."
+
+RES_PROG_TITLE = "프로그램별 결과"
+RES_PROG_COLS = ("프로그램", "새로", "덮어씀", "같음", "실패", "되돌리기")
+BTN_UNDO = "되돌리기"
+UNDO_NO_RECORD = "복원 기록이 없어 되돌릴 수 없습니다."
+UNDO_RECORD_FAILED = "복원은 끝났지만 복원 기록을 저장하지 못해 되돌릴 수 없습니다."
+UNDO_NOTHING = "덮어쓴 파일이 없어 되돌릴 것이 없습니다."
+UNDO_NEW_KEPT = "새로 생긴 파일은 지우지 않았습니다."
+UNDO_DONE_LABEL = "되돌림 {n}개"
+UNDO_NOTE = "되돌리기는 덮어쓴 파일을 복원 전 백업 파일(.bak)로 되돌립니다. 새로 생긴 파일은 지우지 않습니다."
+UNDO_CONFIRM_TITLE = "설정 되돌리기"
+UNDO_CONFIRM = ("'{name}' 의 덮어쓴 파일 {n}개를 복원 전 백업 파일(.bak)로 되돌립니다.\n"
+                "새로 생긴 파일 {k}개는 지우지 않습니다.{problems}\n\n진행할까요?")
+UNDO_PROBLEMS = "\n되돌릴 수 없는 파일 {p}개는 그대로 둡니다(백업이 없거나 그 뒤에 바뀐 파일)."
+UNDO_NOTHING_DIALOG = "'{name}' 은(는) 되돌릴 파일이 없습니다. 새로 생긴 파일은 지우지 않습니다."
+UNDO_DONE = "{icon} '{name}' 되돌림: {n}개 되돌렸고 못 한 것 {f}개입니다. 새로 생긴 파일은 지우지 않았습니다."
+TASK_UNDO_PREVIEW = "되돌리기 미리보기(실제로 바꾸지 않음)"
+TASK_UNDO = "프로그램 설정 되돌리기"
+PROGRESS[TASK_UNDO_PREVIEW] = "되돌릴 파일을 확인하는 중… 보통 몇 초 걸립니다. 아무것도 바꾸지 않습니다."
+PROGRESS[TASK_UNDO] = "덮어쓴 파일을 백업 파일(.bak)로 되돌리는 중… 보통 몇 초 걸립니다. 새로 생긴 파일은 지우지 않습니다."
+TASK_STEPS[TASK_UNDO_PREVIEW] = ("확인",)
+TASK_STEPS[TASK_UNDO] = ("되돌리기",)
+G_UNDO_UNSUPPORTED = "이 버전은 프로그램별 되돌리기를 지원하지 않습니다."
+G_UNDO_UNKNOWN = "이 복원에서 되돌릴 수 있는 프로그램이 아닙니다."
+
+# ---- 화면 7: 구 PC 마지막 화면
+EXP_CHECK_TITLE = "설정 확인표"
+EXP_CHECK_FOLD = "설정 확인표 ▸"
+EXP_CHECK_FOLD_OPEN = "설정 확인표 ▾"
+EXP_STOPPED_HEAD = f"{ICON_FAIL} 설정 묶음 파일 만들기가 중간에 멈췄습니다"
+BTN_EXP_RETRY_SAVEPOINT = "다시 시도(저장점부터 이어서)"
+BTN_EXP_RESTART = "처음부터 다시 만들기"
+EXP_STOPPED_HINT = "원본은 읽기만 했으므로 바뀐 것이 없습니다. 이어서 하면 이미 담은 부분은 다시 읽지 않습니다."
+AUTO_DONE_RETRY_OK = f"{ICON_OK} 읽지 못했던 파일을 모두 담았습니다. 모든 단계가 끝났습니다."
+G_AUTO_RETRY_NA = "다시 시도할 수 있는 상태가 아닙니다. 처음 화면에서 다시 시작해 주세요."
+DISC_COL_FILES_ALL = "파일 수(폴더 전체)"
+DISC_COL_SIZE_FULL = "용량(폴더 전체)"

@@ -12,9 +12,10 @@ from tkinter import filedialog, messagebox, ttk
 from .. import state as S
 from .. import texts as T
 from .install import InstallPanel
+from .retry_panel import RetryPanel
 from .status_card import StatusCard
 from .common import (DANGER_BG, DANGER_FG, INFO_BG, INFO_FG, MUTED_FG, OK_BG, OK_FG, SUB_FONT, WARN_BG, WARN_FG, ActionButton, BaseView,
-                     PathField, ScrollBody, TextDialog, autowrap, clean_path, open_location)
+                     Collapsible, CoverageBox, PathField, ScrollBody, TextDialog, autowrap, clean_path, open_location)
 
 _STATE_COLORS = {"todo": MUTED_FG, "doing": INFO_FG, "waiting": WARN_FG, "done": OK_FG, "skipped": MUTED_FG, "warn": WARN_FG,
                  "stopped": DANGER_FG}
@@ -46,22 +47,35 @@ class AutoView(BaseView):
         body.pack(fill="both", expand=True)
         self.body = body
         self.head = ttk.Label(body, text="", font=SUB_FONT, justify="left")
-        self.head.pack(anchor="w", fill="x", pady=(2, 4))
+        self.head.pack(anchor="w", fill="x", pady=(2, 2))
         autowrap(self.head)
-        self.steps_frame = tk.Frame(body, highlightbackground="#9db7e0", highlightthickness=1, padx=10, pady=6)  # 맨 아래에 pack(위쪽이 지금 할 일)
+        self.steps_frame = tk.Frame(body, highlightbackground="#9db7e0", highlightthickness=1, padx=10, pady=3)  # 맨 아래에 pack(위쪽이 지금 할 일)
         self.step_rows: list[tuple[tk.Label, tk.Label, tk.Label]] = []
         self._steps_sig: tuple = ()
         self.stop_note = ttk.Label(body, text="", foreground=WARN_FG, justify="left")
         autowrap(self.stop_note)
-        self.msg = tk.Label(body, text="", anchor="w", justify="left", padx=10, pady=6)  # 멈춘 이유 / 끝난 결과(이 화면의 안내 상자)
+        self.msg = tk.Label(body, text="", anchor="w", justify="left", padx=8, pady=3)  # 멈춘 이유 / 끝난 결과(이 화면의 안내 상자)
         autowrap(self.msg, 40)
         self.gate = ttk.Frame(body)  # 사람의 확인/입력이 필요할 때만 내용이 있다
-        self.gate.pack(fill="x", pady=4)
+        self.gate.pack(fill="x", pady=2)
         self._gate_sig: tuple = ()
         self.out = ttk.Frame(body)  # 끝나거나 멈춘 뒤의 단추들
-        self.out.pack(fill="x", pady=(6, 0))
-        self.next_box = tk.Frame(body, bg=INFO_BG, highlightbackground=INFO_FG, highlightthickness=1, padx=12, pady=8)
-        self.steps_frame.pack(fill="x", pady=(10, 6))
+        # 구 PC 마지막 화면: 일반 4단계와 같은 '읽지 못해 제외된 파일 다시 담기' 상자, 접힌 설정 확인표, 다음에 할 일
+        self.retry_panel = RetryPanel(body, self.c, self.guarded)
+        self.retry_panel.pack(fill="x", after=self.gate)
+        self.out.pack(fill="x", pady=(3, 0))
+        self.next_box = tk.Frame(body, bg=INFO_BG, highlightbackground=INFO_FG, highlightthickness=1, padx=10, pady=4)
+        tk.Label(self.next_box, text=T.NEXT_TITLE, bg=INFO_BG, fg=INFO_FG, font=SUB_FONT, anchor="w").pack(anchor="w")
+        for line in T.EXP_NEXT_STEPS:
+            lbl = tk.Label(self.next_box, text=line, bg=INFO_BG, justify="left", anchor="w")
+            lbl.pack(anchor="w", fill="x", pady=1)
+            autowrap(lbl, 30)
+        self.cov_fold = Collapsible(body, T.EXP_CHECK_FOLD, T.EXP_CHECK_FOLD_OPEN)
+        self.cov = CoverageBox(self.cov_fold.body, title="")
+        self.cov.title_label.pack_forget()
+        self.cov.pack(fill="x")
+        self._retried = False
+        self.steps_frame.pack(fill="x", pady=(5, 3))
         self.restore = None
         self.install_panel = None  # 설치 확인 지점에서만 있다
         self.finish()
@@ -77,6 +91,15 @@ class AutoView(BaseView):
         self.refresh()
 
     def on_event(self, kind, payload) -> None:
+        self.retry_panel.on_event(kind, payload)
+        if kind == "export_done":
+            self._retried = False
+            self._show_cov()
+        elif kind == "export_retry_done":
+            self._retried = True
+            self.c.auto_after_retry(payload)  # 모두 담겼으면 '끝났지만 확인 필요' 를 '완료'로 갱신(auto_changed 가 화면을 다시 그린다)
+            self._show_cov()
+            self.refresh()
         if kind in ("auto_changed", "busy"):
             self.refresh()
         elif kind == "confirm_changed":
@@ -99,7 +122,7 @@ class AutoView(BaseView):
         else:
             self.stop_note.pack_forget()
         self._draw_message(a)
-        if a.active:
+        if a.active and not self.c.state.busy:  # 작업 중에는 아래 막대의 빨간 '중지'를 쓴다(확인을 기다리는 동안만 이 단추)
             self.stop_btn.pack(side="right")
             self.stop_btn.state(["!disabled"] if not a.stop_requested else ["disabled"])
         else:
@@ -148,10 +171,12 @@ class AutoView(BaseView):
                 text, bg, fg = a.warning, WARN_BG, WARN_FG
             else:
                 lines = self.c.auto_result_lines()
+                if self._retried:
+                    lines = [T.AUTO_DONE_RETRY_OK, *lines]
                 text, bg, fg = "\n".join(lines[:6]), OK_BG, OK_FG
         if text:
             self.msg.configure(text=text, bg=bg, fg=fg)
-            self.msg.pack(fill="x", pady=4, before=self.gate)
+            self.msg.pack(fill="x", pady=2, before=self.gate)
         else:
             self.msg.pack_forget()
 
@@ -374,29 +399,59 @@ class AutoView(BaseView):
         self.guarded(self.c.auto_confirm, True)
 
     # ------------------------------------------------------------------ 끝나거나 멈춘 뒤
+    def _show_cov(self) -> None:
+        """끝난 구 PC 흐름의 설정 확인표(접힘). 헤드라인('담김 5 · 직접 해야 함 3 · 해당 없음 12')은 접힌 제목에 보인다."""
+        a = self.auto
+        if a is None or a.flow != "old" or a.status != "done":
+            self.cov_fold.pack_forget()
+            return
+        table = self.c.coverage_table()
+        self.cov.show(table)
+        head = self.c.coverage_headline(table)
+        self.cov_fold.title = f"{T.EXP_CHECK_TITLE}: {head} ▸" if head else T.EXP_CHECK_FOLD
+        self.cov_fold.title_open = self.cov_fold.title.replace("▸", "▾")
+        self.cov_fold.set_open(self.cov_fold.open)
+        self.cov_fold.pack(fill="x", pady=(2, 0), after=self.next_box)
+
     def _draw_outcome(self, a) -> None:
         self._clear(self.out)
         self.next_box.pack_forget()
+        self.cov_fold.pack_forget()
         if a.active:
             return
         if a.status == "stopped":
             label = T.AUTO_BTN_PICK_MANUAL if a.flow == "new" and not a.candidates else T.AUTO_BTN_MANUAL
+            if self.c.auto_export_stopped():  # 내보내기가 예외로 멈췄다: 저장점부터 이어서 / 처음부터 / 직접 진행
+                ActionButton(self.out, text=T.BTN_EXP_RETRY_SAVEPOINT, command=lambda: self._retry_export(False),
+                             kind="primary").pack(side="left", padx=(0, 8))
+                ActionButton(self.out, text=T.BTN_EXP_RESTART, command=lambda: self._retry_export(True),
+                             kind="plain").pack(side="left", padx=(0, 8))
+                label = T.AUTO_BTN_MANUAL
+                ActionButton(self.out, text=label, command=self.c.auto_manual, kind="plain").pack(side="left")
+                return
             ActionButton(self.out, text=label, command=self.c.auto_manual, kind="primary").pack(side="left")
         elif a.flow == "old":
             ActionButton(self.out, text=T.BTN_OPEN_RESULT, command=lambda: open_location(self.c.state.export_output),
                          kind="plain").pack(side="left", padx=(0, 8))
             ActionButton(self.out, text=T.AUTO_BTN_CHECKLIST, command=lambda: self.c.go(S.OLD_CHECKLIST), kind="plain").pack(side="left")
-            self.next_box.pack(fill="x", pady=(10, 0), after=self.out)
-            for w in self.next_box.winfo_children():
-                w.destroy()
-            tk.Label(self.next_box, text=T.NEXT_TITLE, bg=INFO_BG, fg=INFO_FG, font=SUB_FONT, anchor="w").pack(anchor="w")
-            for line in T.EXP_NEXT_STEPS:
-                lbl = tk.Label(self.next_box, text=line, bg=INFO_BG, justify="left", anchor="w")
-                lbl.pack(anchor="w", fill="x", pady=2)
-                autowrap(lbl, 30)
+            self.next_box.pack(fill="x", pady=(4, 0), after=self.out)  # 안의 글은 한 번만 만든다(다시 그릴 때 글 상자를 지우면 줄바꿈 처리기가 남는다)
+            self._show_cov()
         elif a.flow == "transfer":
             ActionButton(self.out, text=T.AUTO_BTN_DETAIL, command=lambda: self.c.go(S.TRANSFER), kind="plain").pack(side="left")
         ActionButton(self.out, text=T.AUTO_BTN_HOME, command=lambda: self.c.go(S.START), kind="plain").pack(side="left", padx=8)
+
+    # ------------------------------------------------------------------ 내보내기가 멈춘 뒤 다시 시도
+    def _retry_export(self, restart: bool) -> None:
+        a = self.auto
+        if restart:
+            if not messagebox.askokcancel(T.EXP_RESTART_TITLE, T.EXP_RESTART_CONFIRM, parent=self):
+                return
+        else:
+            exists = T.EXP_EXISTS if a is not None and os.path.exists(a.export_path) else ""
+            if not messagebox.askokcancel(T.EXP_CONFIRM_TITLE, T.EXP_CONFIRM.format(path=a.export_path if a else "", exists=exists),
+                                          parent=self):
+                return
+        self.guarded(self.c.auto_retry_export, restart)
 
     # ------------------------------------------------------------------ 중지
     def _stop(self) -> None:

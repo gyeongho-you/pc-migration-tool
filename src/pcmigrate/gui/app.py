@@ -346,7 +346,6 @@ class App(tk.Tk):
         self.log_link = ActionButton(right, text=T.BTN_OPEN_ERROR_LOG, kind="link",
                                      command=lambda: open_location(str(errorlog.log_dir())))
         self.log_link.pack(side="bottom")  # 오류가 났을 때 로그를 바로 열 수 있게 항상 보인다(작은 링크)
-        self.cancel_btn = ttk.Button(right, text=T.BTN_CANCEL, command=self.c.cancel)
         left = ttk.Frame(bar)
         left.pack(side="left", fill="x", expand=True)
         self.stage = ttk.Label(left, text=T.READY, font=SUB_FONT)  # 지금 하는 일
@@ -355,6 +354,7 @@ class App(tk.Tk):
         autowrap(self.status, 20)
         self.note = ttk.Label(left, text="", foreground=MUTED_FG)
         self._left = left
+        self._build_stop_widgets(right, left)  # stage30b: 중지/강제 중지/중지 뒤 안내
 
     def _sync_footer(self) -> None:
         """하단 상태줄: 유휴일 때는 '준비됨' 한 줄만. 작업 중이어도 현황 카드가 보이는 화면에서는 같은 말이 겹치지 않게 막대/설명을 숨긴다."""
@@ -374,6 +374,7 @@ class App(tk.Tk):
                 w.pack(anchor="w", fill="x")
             elif not want_text and w.winfo_manager():
                 w.pack_forget()
+        self._sync_stop()
 
     # ------------------------------------------------------------------ 화면/도움말/키
     def show(self, screen: str) -> None:
@@ -382,6 +383,7 @@ class App(tk.Tk):
         view = self.views[screen]
         previous = self.views.get(self.current) if self.current != screen else None
         self.current = screen
+        self._after_note_text = ""  # 다른 화면으로 가면 지난 중지 안내는 지운다
         view.grid()  # grid_remove 로 숨겨 둔 화면을 다시 배치 대상으로(원래 옵션을 기억한다)
         self.crumb.configure(text=T.CRUMB_HOME if screen == S.START else T.TITLES.get(screen, screen))
         self.update_overall()
@@ -501,7 +503,7 @@ class App(tk.Tk):
             return None
         if self.c.state.busy:
             if self.c.can_cancel:
-                self.c.cancel()
+                self._stop_clicked()
             return "break"
         return None
 
@@ -515,12 +517,10 @@ class App(tk.Tk):
                 self.stage.configure(text=f"{T.STAGE_LABEL}: {payload}")
                 self.note.configure(text=T.BUSY_NOTE)
                 self.progress.start(12)
-                if self.c.can_cancel:
-                    self.cancel_btn.pack(side="top", pady=(4, 0))
+                self._after_note_text = ""  # 새 작업을 시작하면 지난 중지 안내는 지운다
             else:
                 self.progress.stop()
                 self.progress.configure(mode="indeterminate", value=0)
-                self.cancel_btn.pack_forget()
                 self.stage.configure(text=T.READY)
                 self.status.configure(text="")
                 self.note.configure(text="")
@@ -532,6 +532,9 @@ class App(tk.Tk):
                 self.progress.configure(mode="determinate", maximum=100, value=payload.fraction * 100)
         elif kind == "cancelled":
             self.status.configure(text=T.CANCELLED.format(task=payload))
+            self._after_note_text = self.c.stop_done_note(payload)
+        elif kind == "force_stopped":
+            self._after_note_text = T.FORCE_STOPPED
         elif kind == "error":
             self.show_error(payload)
         elif kind == "transfer_flow":
@@ -548,6 +551,7 @@ class App(tk.Tk):
             if self.c.status.running:  # 경과 시간/속도가 계속 바뀌도록 작업 중에는 0.1초마다 현황 카드를 다시 그린다
                 self.views[self.current].refresh_card()
                 self._sync_footer()
+            self._sync_stop()  # 중지 요청 뒤 15초가 지났는지 주기적으로 본다(stage30b)
         except Exception as e:  # noqa: BLE001 - 한 번의 오류로 폴링이 멈추면 진행/완료가 영영 화면에 오지 않는다
             self.report_callback_exception(type(e), e, e.__traceback__)
         finally:
@@ -563,6 +567,65 @@ class App(tk.Tk):
                 return
         self.c.cancel()
         self.destroy()
+
+    # ====================================================================== stage30b 구획: 작업 중지
+    def _build_stop_widgets(self, right: ttk.Frame, left: ttk.Frame) -> None:
+        """하단 막대의 빨간 '중지' 단추, '지금 강제로 멈추기' 상자, 중지가 끝난 뒤 안내."""
+        self.stop_btn = ActionButton(right, text=T.BTN_STOP, command=self._stop_clicked, kind="danger", padx=12, pady=3)
+        add_tooltip(self.stop_btn, T.TIP_STOP)
+        self.force_box = ttk.Frame(left)
+        self.force_label = ttk.Label(self.force_box, text=T.STOP_STUCK, justify="left", foreground=WARN_FG)
+        self.force_btn = ActionButton(self.force_box, text=T.BTN_FORCE_STOP, command=self._force_clicked, kind="danger", padx=12, pady=3)
+        self.force_btn.pack(side="right", padx=(10, 0))
+        self.force_label.pack(side="left", fill="x", expand=True)
+        autowrap(self.force_label, 240)
+        self.after_note = ttk.Label(left, text="", justify="left", foreground=INFO_FG)
+        autowrap(self.after_note, 20)
+        self._after_note_text = ""
+
+    def _stop_clicked(self) -> None:
+        """'중지': 바로 '중지하는 중…'으로 바뀌고 다시 누를 수 없다. '추천대로 한 번에' 진행 중이면 그 흐름도 함께 멈춘다."""
+        a = self.c.auto
+        if a is not None and a.active:
+            self.c.auto_stop()
+        else:
+            self.c.cancel()
+        self._sync_stop()
+
+    def _force_clicked(self) -> None:
+        self.c.force_stop()
+        self._sync_stop()
+
+    def _sync_stop(self) -> None:
+        """컨트롤러 상태에서 중지 관련 위젯을 맞춘다: 평상시 숨김 → 작업 중 '중지' → 누르면 '중지하는 중…'(비활성) → 15초 뒤 강제 중지 상자."""
+        if not hasattr(self, "stop_btn"):
+            return
+        c = self.c
+        if c.state.busy and c.can_cancel:
+            requested = c.cancel_requested_at is not None
+            if not self.stop_btn.winfo_manager():
+                self.stop_btn.pack(side="top", pady=(4, 0), before=self.log_link)
+            text = T.STOPPING if requested else T.BTN_STOP
+            if str(self.stop_btn.cget("text")) != text:
+                self.stop_btn.configure(text=text)
+            self.stop_btn.state(["disabled"] if requested else ["!disabled"])
+            want_force = c.force_stop_ready()
+        else:
+            if self.stop_btn.winfo_manager():
+                self.stop_btn.pack_forget()
+            want_force = False
+        if want_force and not self.force_box.winfo_manager():
+            self.force_box.pack(anchor="w", fill="x", after=self.stage)
+        elif not want_force and self.force_box.winfo_manager():
+            self.force_box.pack_forget()
+        text = self._after_note_text if not c.state.busy else ""
+        if text:
+            if str(self.after_note.cget("text")) != text:
+                self.after_note.configure(text=text)
+            if not self.after_note.winfo_manager():
+                self.after_note.pack(anchor="w", fill="x")
+        elif self.after_note.winfo_manager():
+            self.after_note.pack_forget()
 
 
 def _notify_fatal(text: str) -> None:

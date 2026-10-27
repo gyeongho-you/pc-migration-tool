@@ -510,17 +510,18 @@ def test_error_dialog_shows_what_how_and_hides_traceback_until_expanded(ctx):
 def test_busy_status_card_shows_stage_message_note_and_cancel(ctx):
     app, c = ctx.app, ctx.c
     assert app.stage.cget("text") == T.READY
-    c.can_cancel = True
+    c.can_cancel, c.state.busy = True, True
     app.on_event("busy", T.TASK_TRANSFER)
     app.on_event("progress", T.PROGRESS[T.TASK_TRANSFER])
     app.update()
     assert app.stage.cget("text") == f"{T.STAGE_LABEL}: {T.TASK_TRANSFER}"  # 지금 하는 일을 크게
     assert app.status.cget("text") == T.PROGRESS[T.TASK_TRANSFER] and app.note.cget("text") == T.BUSY_NOTE
-    assert app.cancel_btn.winfo_manager() == "pack"
+    assert app.stop_btn.winfo_manager() == "pack" and app.stop_btn.cget("text") == T.BTN_STOP  # 작업 중에는 항상 빨간 '중지'
     app.on_event("progress", "복사본 검증 중 25/100")
     assert app.status.cget("text") == "복사본 검증 중 25/100"
+    c.can_cancel, c.state.busy = False, False
     app.on_event("busy", None)
-    assert app.cancel_btn.winfo_manager() == "" and app.stage.cget("text") == T.READY and app.note.cget("text") == ""
+    assert app.stop_btn.winfo_manager() == "" and app.stage.cget("text") == T.READY and app.note.cget("text") == ""
     app.on_event("cancelled", T.TASK_DISCOVER)
     assert app.status.cget("text") == T.CANCELLED.format(task=T.TASK_DISCOVER)
     c.state.busy = True
