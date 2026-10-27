@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+from . import settings_filter
 from .progress import fmt_bytes
 
 ST_OK, ST_PART, ST_NONE = "담김", "일부만 담김", "이 PC에 없음"
@@ -62,6 +63,7 @@ def rows(manifest: dict) -> list[dict]:
             if c.get("config_mode"):  # 허용 방식(설정 파일만)으로 담은 항목: 화면/표가 더 보여 줄 수 있는 세부(없으면 키 자체가 없다)
                 row.update({k: c.get(k) for k in ("ext_counts", "allowed_files", "allowed_bytes", "not_config_files",
                                                    "not_config_bytes", "limit_files", "limit_bytes")})
+                row.update(excluded_fields(c))
             out.append(row)
         return out
     counts: dict[str, int] = {}
@@ -110,6 +112,9 @@ def lines(manifest: dict, *, expand_none: bool = False, indent: str = "  ") -> l
     for r in shown:
         tail = f" — {r['note']}" if r["note"] else ""
         out.append(f"{indent}{r['program']} / {r['what']} / {r['status']} / {r['files']}개{tail}")
+        if r.get("excluded_line"):
+            out.append(f"{indent}{indent}{r['excluded_line']}")
+            out += [f"{indent}{indent}{indent}· {example_text(e)}" for e in r.get("excluded_examples", [])]
     if hidden:
         out.append(f"{indent}{folded_line(len(hidden))}")
         if expand_none:
@@ -148,7 +153,7 @@ def config_totals(manifest: dict) -> dict:
     """허용 방식(설정 파일만)으로 담은 항목들의 합계. items=0 이면 허용 방식 항목이 없다(규칙만, 또는 예전 방식/이전 버전 패키지).
     {items, allowed_files, allowed_bytes, ext_counts, not_config_files, not_config_bytes, limit_files, limit_bytes}"""
     out = {"items": 0, "allowed_files": 0, "allowed_bytes": 0, "ext_counts": {}, "not_config_files": 0, "not_config_bytes": 0,
-           "limit_files": 0, "limit_bytes": 0}
+           "limit_files": 0, "limit_bytes": 0, "by_reason": {}}
     cov = manifest.get("coverage")
     for c in cov if isinstance(cov, list) else []:
         if not isinstance(c, dict) or not c.get("config_mode"):
@@ -156,6 +161,8 @@ def config_totals(manifest: dict) -> dict:
         out["items"] += 1
         for k in ("allowed_files", "allowed_bytes", "not_config_files", "not_config_bytes", "limit_files", "limit_bytes"):
             out[k] += _num(c.get(k))
+        for k, n in _clean_reasons(c.get("excluded_by_reason")).items():
+            out["by_reason"][k] = out["by_reason"].get(k, 0) + n
         if isinstance(c.get("ext_counts"), dict):
             for e, n in c["ext_counts"].items():
                 out["ext_counts"][str(e)] = out["ext_counts"].get(str(e), 0) + _num(n)
@@ -172,6 +179,10 @@ def config_lines(manifest: dict, indent: str = "") -> list[str]:
     if t["not_config_files"]:
         out.append(f"{indent}제외된 파일(설정 형식이 아님) {t['not_config_files']}개, 용량 {fmt_bytes(t['not_config_bytes'])}"
                    " — 전부 담으려면 --extra-mode all")
+    if t["by_reason"]:
+        out.append(f"{indent}빠진 사유: {reasons_text(t['by_reason'], 6)}")
+    if t["by_reason"].get(settings_filter.WHY_NOEXT):
+        out.append(f"{indent}[주의] " + NOEXT_HINT_CLI.format(n=t["by_reason"][settings_filter.WHY_NOEXT]))
     if t["limit_files"]:
         out.append(f"{indent}상한(파일 크기/폴더 용량/파일 수)을 넘어 제외된 설정 형식 파일 {t['limit_files']}개, 용량 {fmt_bytes(t['limit_bytes'])}")
     return out
@@ -193,3 +204,72 @@ def cache_line(manifest: dict) -> str:
     if not n:
         return ""
     return f"재생성되는 임시 저장물 폴더 {n}개(파일 {f}개, {fmt_bytes(b)})를 제외했습니다(--include-caches 로 포함 가능)."
+
+
+# --------------------------------------------------------------------------- 빠진 파일 요약(허용 방식, 표시 전용)
+NOEXT_HINT = "설정일 수 있는 확장자 없는 파일이 {n}개 빠졌습니다. 필요하면 폴더 전체 담기를 켜고 다시 내보내 주세요."
+NOEXT_HINT_CLI = "설정일 수 있는 확장자 없는 파일이 {n}개 빠졌습니다. 필요하면 --extra-mode all 로 폴더 전체를 담아 다시 내보내 주세요."
+REASON_SHOWN = 3  # 한 줄 요약에 적는 사유 가짓수(나머지는 '외 N가지')
+
+
+def _clean_reasons(v: object) -> dict[str, int]:
+    return dict(settings_filter.ordered_reasons(v)) if isinstance(v, dict) else {}
+
+
+def _clean_examples(v: object) -> list[dict]:
+    """manifest 의 예시를 표시용으로 거른다(이전 버전/손상된 값 허용, 최대 EXAMPLES_KEEP 개)."""
+    out: list[dict] = []
+    for e in v if isinstance(v, list) else []:
+        if isinstance(e, dict) and isinstance(e.get("name"), str) and e["name"]:
+            out.append({"name": e["name"], "size": _num(e.get("size")),
+                        "why": e["why"] if isinstance(e.get("why"), str) else settings_filter.WHY_OTHER})
+    return out[:settings_filter.EXAMPLES_KEEP]
+
+
+def reasons_text(by_reason: dict, shown: int = REASON_SHOWN) -> str:
+    """{사유: 개수} -> '데이터베이스/데이터 12개, 확장자 없음(설정일 수 있음) 5개, 이미지·영상 340개 외 2가지'(많은 순)."""
+    pairs = settings_filter.ordered_reasons(by_reason)
+    text = ", ".join(f"{k} {n}개" for k, n in pairs[:shown])
+    return text + (f" 외 {len(pairs) - shown}가지" if len(pairs) > shown else "")
+
+
+def example_text(e: dict) -> str:
+    return f"{e['name']} {fmt_bytes(_num(e.get('size')))} — {e.get('why', '')}"
+
+
+def excluded_line(files: int, size: int, by_reason: dict) -> str:
+    """'제외 4개, 3.0GB(데이터베이스/데이터 2개, …)'. 빠진 파일이 없으면 빈 글."""
+    if not files:
+        return ""
+    why = reasons_text(by_reason)
+    return f"제외 {files}개, {fmt_bytes(size)}" + (f"({why})" if why else "")
+
+
+def excluded_fields(c: dict) -> dict:
+    """설정 확인표 항목(coverage 의 c) 하나의 '빠진 파일' 세부. 이전 버전 manifest(키 없음)도 허용하며 없으면 개수/용량만 쓴다.
+    excluded_files/bytes = 설정 형식이 아님 + 상한 초과. 빠진 것이 없으면 빈 dict."""
+    files = _num(c.get("not_config_files")) + _num(c.get("limit_files"))
+    if not files:
+        return {}
+    size = _num(c.get("not_config_bytes")) + _num(c.get("limit_bytes"))
+    why = _clean_reasons(c.get("excluded_by_reason"))
+    return {"excluded_files": files, "excluded_bytes": size, "excluded_by_reason": why,
+            "excluded_examples": _clean_examples(c.get("excluded_examples")),
+            "excluded_line": excluded_line(files, size, why),
+            "noext_excluded": why.get(settings_filter.WHY_NOEXT, 0)}
+
+
+def noext_total(table: list[dict]) -> int:
+    """표(rows())에서 '확장자 없음'으로 빠진 파일 수의 합."""
+    return sum(_num(r.get("noext_excluded")) for r in table)
+
+
+def json_rows(manifest: dict) -> list[dict]:
+    """--json/미리보기 JSON 용 행: program/what/status/files + (있으면) 빠진 파일 요약."""
+    out = []
+    for r in rows(manifest):
+        d = {k: r[k] for k in ("program", "what", "status", "files")}
+        if r.get("excluded_files"):
+            d.update({k: r[k] for k in ("excluded_files", "excluded_bytes", "excluded_by_reason", "excluded_examples")})
+        out.append(d)
+    return out

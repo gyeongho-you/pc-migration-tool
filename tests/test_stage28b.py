@@ -588,7 +588,7 @@ def test_cli_export_extra_mode_option(pcs, tmp_path, capsys, monkeypatch):
             assert monkey_rc == 0, capsys.readouterr()
             j = json.loads(capsys.readouterr().out)
             assert j["files"] == (4 if not mode else 8)
-        assert out1.stat().st_size < out2.stat().st_size
+        assert len(zipfile.ZipFile(out1).namelist()) < len(zipfile.ZipFile(out2).namelist())  # manifest 예시 때문에 작은 묶음은 크기 비교 불가
     finally:
         envpaths.set_overrides(None)
 

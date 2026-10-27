@@ -671,6 +671,7 @@ python -m pcmigrate discover --output-selection <폴더>\selection.json
   선택은 이어받기 지문에 들어가 바꾸면 처음부터 다시 만들고, `--retry-failed` 는 묶음에 기록된 모드와 상한으로 다시 찾습니다(기록 없는 이전 묶음은 `all`).
   `discover --program` 의 후보에는 허용 방식 기준 '담길 파일 수/용량, 설정 형식이 아니라 빠질 파일'이 함께 나옵니다(JSON 의 `config_files` 등).
   확장자 없는 설정 파일(예: `Preferences`)은 허용 방식에서 빠지므로 필요하면 `--extra-mode all` 을 쓰세요.
+  **빠진 파일 예시:** 폴더(항목)마다 빠진 파일 중 큰 것 최대 5개의 이름(항목 폴더 기준 상대 이름)·크기·사유만 기록합니다(훑는 중 얻은 이름/크기/확장자만 쓰며 추가 순회·파일 읽기는 없고, 파일당 O(log 5) 힙). `manifest['skipped']` 의 `not_config` 항목에 `examples: [{name, size, why}]` 와 사유별 개수 `by_reason`(데이터베이스/데이터, 확장자 없음(설정일 수 있음), 작업물·모델, 글꼴, 이미지·영상, 메모 문서, 로그, 라이선스, 실행·라이브러리·스크립트, 크기 상한, 기타; 분류표는 `settings_filter.why_of`)을, 설정 확인표 항목(`coverage`)에 `excluded_by_reason`/`excluded_examples` 를 덧붙입니다(없는 이전 패키지도 읽힘). 확인표에는 `제외 N개, 3.0GB(사유 요약)` 한 줄과 예시가 나오고, `export --json` 의 `coverage` 행에도 `excluded_files/excluded_bytes/excluded_by_reason/excluded_examples` 가 들어갑니다. GUI 설정 확인표(구 PC 마지막 화면, 신 PC 미리보기)는 행 아래에 같은 한 줄을 보이고 `자세히 ▸`(줄을 누르거나 Enter)로 예시를 펼치며, 확장자 없는 파일이 빠졌으면 노란 안내가 한 줄 나옵니다.
 - **프로그램별 복원 선택(`import --only 규칙id[,..]` / `--skip 규칙id[,..]`)**: 새 PC 에서 일부 프로그램만 복원하거나 뺍니다. 프로그램 단위는 규칙 id,
   규칙 없는 항목은 `extra:<루트키>/<최상위 이름>`(예: `extra:appdata/AcmePaint`; `extra` 는 전부, `extra:AcmePaint` 는 루트 무관). `--only` 후 `--skip` 을 적용하고, 묶음에 없는 이름은 오류로 알립니다.
   `--dry-run`/`--json` 미리보기에는 프로그램별 표(`programs`: id, name, kind, selected, files, bytes, new, overwrite, same, denied, rejected, not_selected)가 나옵니다.

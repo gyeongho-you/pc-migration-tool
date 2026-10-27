@@ -291,6 +291,12 @@ class CoverageBox(ttk.Frame):
             self.tree.tag_configure(st, foreground=color)
         self.full: dict[str, str] = {}
         self.tips = TreeTooltip(self.tree, lambda iid, col: self.full.get(iid, "") if col in (1, 2) else "")
+        self.tree.tag_configure("exc", foreground=MUTED_FG)
+        self.lines: set[str] = set()   # '제외 N개…' 줄(행 아래에 붙는 자식 행). 선택/눌러서 큰 파일 예시를 펼친다
+        self.tree.bind("<ButtonRelease-1>", self._click_line, add="+")
+        self.tree.bind("<Return>", self._key_line, add="+")
+        self.noext = Notice(self, "", "warn")  # 확장자 없는 파일이 빠졌을 때만 보이는 노란 안내
+        self._noext_shown = False
         self.fold = Collapsible(self, T.COV_FOLD.format(n=0), T.COV_FOLD_OPEN.format(n=0))
         self.fold_note = self.fold.add_text(T.COV_FOLD_NOTE)
         self.fold_list = tk.Label(self.fold.body, text="", justify="left", anchor="w", bg=self.fold.bg)
@@ -302,8 +308,48 @@ class CoverageBox(ttk.Frame):
     def clear(self) -> None:
         clear(self.tree)
         self.full = {}
+        self.lines = set()
         self.rows_shown, self.rows_hidden = [], []
+        self._set_noext(0)
         self._set_fold(0)
+
+    def _set_noext(self, n: int) -> None:
+        if n:
+            self.noext.set(f"{T.ICON_WARN} {T.COV_NOEXT_HINT.format(n=n)}", "warn")
+            if not self._noext_shown:
+                self.noext.pack(fill="x", pady=(3, 0), after=self.frame)
+                self._noext_shown = True
+        elif self._noext_shown:
+            self.noext.pack_forget()
+            self._noext_shown = False
+
+    def _toggle_line(self, iid: str, on: bool | None = None) -> None:
+        if iid not in self.lines:
+            return
+        on = (not self.tree.item(iid, "open")) if on is None else on
+        self.tree.item(iid, open=on)
+        self.tree.set(iid, "status", T.BTN_LESS if on else T.BTN_MORE)
+        self._fit_height()
+
+    def _click_line(self, e) -> None:
+        iid = self.tree.identify_row(e.y)
+        if iid in self.lines:
+            self._toggle_line(iid)
+
+    def _key_line(self, _e=None) -> None:
+        for iid in self.tree.selection():
+            if iid in self.lines:
+                self._toggle_line(iid)
+
+    def _fit_height(self) -> None:
+        n = 0
+        for top in self.tree.get_children(""):
+            n += 1
+            for ln in self.tree.get_children(top):
+                n += 1
+                if self.tree.item(ln, "open"):
+                    n += len(self.tree.get_children(ln))
+        self.tree.configure(height=min(self.max_rows + 5, max(2, n)))
 
     def _set_fold(self, n: int) -> None:
         if n and not self._fold_shown:
@@ -319,6 +365,7 @@ class CoverageBox(ttk.Frame):
         """table: coverage.rows() 의 행들. 비어 있으면 안내 한 줄만."""
         clear(self.tree)
         self.full = {}
+        self.lines = set()
         shown, hidden = coverage.fold(table)
         self.rows_shown, self.rows_hidden = shown, hidden
         if not table:
@@ -327,7 +374,17 @@ class CoverageBox(ttk.Frame):
             tail = f" — {r['note']}" if r["note"] else ""
             iid = self.tree.insert("", "end", tags=(r["status"],), values=(r["program"], r["what"], r["status"], f"{r['files']}개"))
             self.full[iid] = f"{r['program']}: {r['what']}{tail}"
-        self.tree.configure(height=min(self.max_rows, max(2, len(shown) or 1)))
+            if r.get("excluded_line"):  # 빠진 파일 한 줄 요약(+ 눌러서 펼치는 큰 파일 예시, 읽기 전용)
+                ln = self.tree.insert(iid, "end", tags=("exc",), open=False,
+                                      values=("", T.COV_EXC_INDENT + r["excluded_line"], T.BTN_MORE, ""))
+                self.lines.add(ln)
+                self.tree.item(iid, open=True)
+                self.full[ln] = r["excluded_line"]
+                for e in r.get("excluded_examples", []):
+                    ex = self.tree.insert(ln, "end", tags=("exc",), values=("", T.COV_EX_INDENT + coverage.example_text(e), "", ""))
+                    self.full[ex] = coverage.example_text(e)
+        self.tree.configure(height=min(self.max_rows, max(2, len(shown) + len(self.lines) or 1)))
+        self._set_noext(coverage.noext_total(shown))
         self.fold_list.configure(text="\n".join(f"· {r['program']} — {r['what']}" for r in hidden))
         self._set_fold(len(hidden))
 

@@ -608,7 +608,9 @@ class ExportResult:
             d["config_ext_counts"] = cfg["ext_counts"]
             d["not_config_files"], d["not_config_bytes"] = cfg["not_config_files"], cfg["not_config_bytes"]
             d["limit_files"], d["limit_bytes"] = cfg["limit_files"], cfg["limit_bytes"]
-        d["coverage"] = [{k: r[k] for k in ("program", "what", "status", "files")} for r in coverage.rows(m)]
+            if cfg["by_reason"]:
+                d["excluded_by_reason"] = cfg["by_reason"]
+        d["coverage"] = coverage.json_rows(m)
         return d
 
     def unreadable_lines(self, limit: int = 5) -> list[str]:
@@ -817,7 +819,7 @@ class ImportResult:
              "programs": self.plan.programs, "selection": {"only": list(self.only), "skip": list(self.skip)}}
         if self.record_path:
             d["import_record"] = self.record_path
-        d["coverage"] = [{k: r[k] for k in ("program", "what", "status", "files")} for r in coverage.rows(self.plan.manifest)]
+        d["coverage"] = coverage.json_rows(self.plan.manifest)
         if self.n_install:
             from . import install_dir
             d["install_dir"] = {"allowed": self.install_allowed, "counts": self.install_counts(), "items": self.install_view,

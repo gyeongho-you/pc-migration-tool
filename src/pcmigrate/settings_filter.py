@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+import heapq
 import os
 from dataclasses import dataclass, field
 
@@ -63,6 +64,77 @@ LIMIT_TEXT = {TOO_BIG: "파일 하나가 너무 큼", FOLDER_BYTES: "폴더 용�
 BY_EXT_KEEP = 12  # 설정 형식이 아닌 제외 파일을 확장자별로 기록할 때 남길 가짓수(나머지는 '기타')
 LIMIT_EXAMPLES = 5
 
+# ---- 제외 사유 분류(표시 전용: 파일 이름/확장자/크기만 보고 판단하며 내용은 열지 않는다) ----------------------------------------
+# 근거: 위 모듈 설명의 '허용하지 않는 것' 분류를 사람이 이해하기 쉬운 말로 나눈 것이다. 확장자별 소속은 개발 시점의 일반 지식이며
+# 프로그램마다 다를 수 있어 '사유'는 추정이다(복원/판정에는 쓰지 않는다). 확장자 없는 파일은 설정(예: 점 파일, 확장자 없는 INI)일 수
+# 있으므로 따로 표시해 사용자가 직접 확인하게 한다.
+WHY_DB, WHY_NOEXT, WHY_WORK, WHY_FONT = "데이터베이스/데이터", "확장자 없음(설정일 수 있음)", "작업물·모델", "글꼴"
+WHY_MEDIA, WHY_DOC, WHY_LOG, WHY_LICENSE = "이미지·영상", "메모 문서", "로그", "라이선스"
+WHY_CODE, WHY_SIZE, WHY_OTHER = "실행·라이브러리·스크립트", "크기 상한", "기타"
+WHY_ORDER = (WHY_DB, WHY_NOEXT, WHY_WORK, WHY_FONT, WHY_MEDIA, WHY_DOC, WHY_LOG, WHY_LICENSE, WHY_CODE, WHY_SIZE, WHY_OTHER)
+_WHY_EXTS: dict[str, frozenset[str]] = {
+    WHY_DB: frozenset({".db", ".sqlite", ".sqlite3", ".mdb", ".accdb", ".dat", ".bin", ".idx", ".ldb", ".sst", ".mdf", ".dmp"}),
+    WHY_WORK: frozenset({".dwg", ".dxf", ".dwf", ".rvt", ".rfa", ".rvz", ".skp", ".3dm", ".gh", ".ghx", ".pln", ".pla", ".ifc", ".nwd",
+                         ".nwc", ".nwf", ".max", ".obj", ".fbx", ".3ds", ".stl", ".c4d", ".lmv", ".rvm", ".dgn", ".ptx", ".e57", ".las"}),
+    WHY_FONT: frozenset({".shx", ".ttf", ".otf", ".ttc", ".woff", ".woff2", ".fon", ".pfb", ".pfm"}),
+    WHY_MEDIA: frozenset({".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".heic", ".tif", ".tiff", ".psd", ".ico", ".svg", ".exr", ".hdr",
+                          ".mp4", ".mov", ".avi", ".mkv", ".wmv", ".webm", ".mp3", ".wav", ".m4a", ".flac"}),
+    WHY_DOC: frozenset({".txt", ".csv", ".tsv", ".md", ".rtf", ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".hwp", ".hwpx", ".html", ".htm"}),
+    WHY_LOG: frozenset({".log", ".trace", ".etl", ".out", ".old"}),
+    WHY_LICENSE: frozenset({".lic", ".lcs", ".key"}),
+    WHY_CODE: frozenset({".exe", ".dll", ".msi", ".lsp", ".fas", ".vlx", ".arx", ".py", ".js", ".ps1", ".bat", ".cmd", ".vbs", ".dyn",
+                         ".gha", ".rhp", ".addin", ".so", ".jar", ".cs", ".ts", ".vsix", ".lib", ".sys", ".ocx", ".reg", ".lnk", ".scr", ".com",
+                         ".zip", ".7z", ".rar", ".cab"}),
+}
+_EXT_WHY: dict[str, str] = {e: why for why, exts in _WHY_EXTS.items() for e in exts}
+EXAMPLES_KEEP = 5  # 항목(폴더)마다 기록할 '빠진 큰 파일' 예시 수(크기순 상위)
+EXAMPLE_NAME_MAX = 120
+
+
+def why_of(name: str) -> str:
+    """설정 형식이 아니라 제외한 파일의 사유 분류(이름만 본다, O(1)). 크기 상한 초과는 ConfigGate 가 WHY_SIZE 로 따로 기록한다."""
+    low = name.lower().rstrip(" .")
+    if any(w in low for w in LICENSE_WORDS):
+        return WHY_LICENSE
+    e = ext_of(low)
+    if not e:
+        return WHY_NOEXT
+    return _EXT_WHY.get(e, WHY_OTHER)
+
+
+class _TopN:
+    """크기순 상위 N 개(이름, 크기, 사유)만 힙으로 유지한다. 파일당 O(log N). 같은 크기면 먼저 본 것을 남긴다(결정적)."""
+
+    def __init__(self, n: int = EXAMPLES_KEEP) -> None:
+        self.n = n
+        self.heap: list[tuple[int, int, str, str]] = []
+        self.seq = 0
+
+    def add(self, name: str, size: int, why: str) -> None:
+        self.seq += 1
+        if len(self.heap) < self.n:
+            heapq.heappush(self.heap, (size, -self.seq, name, why))
+        elif size > self.heap[0][0]:
+            heapq.heapreplace(self.heap, (size, -self.seq, name, why))
+
+    def items(self) -> list[tuple[int, str, str]]:
+        return [(s, n, w) for s, _, n, w in sorted(self.heap, key=lambda t: (-t[0], -t[1]))]
+
+
+def _example_dicts(rows: list[tuple[int, str, str]]) -> list[dict]:
+    return [{"name": n if len(n) <= EXAMPLE_NAME_MAX else "…" + n[-(EXAMPLE_NAME_MAX - 1):], "size": s, "why": w} for s, n, w in rows]
+
+
+def ordered_dict(by_reason: dict) -> dict:
+    return dict(ordered_reasons(by_reason))
+
+
+def ordered_reasons(by_reason: dict) -> list[tuple[str, int]]:
+    """{사유: 개수} -> 개수 많은 순(같으면 WHY_ORDER 순). 값이 0 이거나 숫자가 아닌 것은 뺀다."""
+    pos = {w: i for i, w in enumerate(WHY_ORDER)}
+    pairs = [(str(k), v) for k, v in by_reason.items() if isinstance(v, int) and not isinstance(v, bool) and v > 0]
+    return sorted(pairs, key=lambda kv: (-kv[1], pos.get(kv[0], len(pos)), kv[0]))
+
 
 @dataclass(frozen=True)
 class ConfigLimits:
@@ -108,9 +180,13 @@ class ConfigGate:
         self.lim_bytes = 0
         self.lim_kinds: dict[str, int] = {}
         self.lim_examples: list[str] = []
+        self.nc_top = _TopN()    # 설정 형식이 아니라 빠진 파일 중 큰 것
+        self.lim_top = _TopN()   # 상한을 넘어 빠진 파일 중 큰 것
+        self.nc_reasons: dict[str, int] = {}
 
-    def judge(self, name: str, size: int, shown: str = "") -> str | None:
-        """None 이면 담는다(통계에 더함). 아니면 제외 사유 코드를 돌려주고 통계에 기록한다."""
+    def judge(self, name: str, size: int, shown: str = "", rel: str = "") -> str | None:
+        """None 이면 담는다(통계에 더함). 아니면 제외 사유 코드를 돌려주고 통계에 기록한다.
+        rel: 예시로 남길 항목 기준 상대 이름(경로의 사용자 이름이 기록되지 않게 절대 경로를 넣지 않는다). 없으면 파일 이름."""
         low = name.lower().rstrip(" .")
         if not is_config_name(low) or low in JUNK_NAMES or any(w in low for w in LICENSE_WORDS):
             self.nc_files += 1
@@ -118,6 +194,9 @@ class ConfigGate:
             e = self.nc_by_ext.setdefault(ext_of(low) or "(확장자 없음)", [0, 0])
             e[0] += 1
             e[1] += size
+            why = why_of(low)
+            self.nc_reasons[why] = self.nc_reasons.get(why, 0) + 1
+            self.nc_top.add(rel or name, size, why)
             return NOT_CONFIG
         lim = self.limits
         kind = None
@@ -131,6 +210,7 @@ class ConfigGate:
             self.lim_files += 1
             self.lim_bytes += size
             self.lim_kinds[kind] = self.lim_kinds.get(kind, 0) + 1
+            self.lim_top.add(rel or name, size, WHY_SIZE)
             if len(self.lim_examples) < LIMIT_EXAMPLES:
                 self.lim_examples.append(shown or name)
             return kind
@@ -153,11 +233,12 @@ class ConfigGate:
         out: list[dict] = []
         if self.nc_files:
             out.append({"rule": rule_id, "path": path, "name": name, "reason": NOT_CONFIG_REASON, "not_config": True,
-                        "files": self.nc_files, "bytes": self.nc_bytes, "by_ext": self.by_ext_record()})
+                        "files": self.nc_files, "bytes": self.nc_bytes, "by_ext": self.by_ext_record(),
+                        "by_reason": ordered_dict(self.nc_reasons), "examples": _example_dicts(self.nc_top.items())})
         if self.lim_files:
             out.append({"rule": rule_id, "path": path, "name": name, "reason": LIMIT_REASON, "limit": True,
                         "files": self.lim_files, "bytes": self.lim_bytes, "kinds": dict(self.lim_kinds),
-                        "examples": list(self.lim_examples)})
+                        "examples": list(self.lim_examples), "top": _example_dicts(self.lim_top.items())})
         return out
 
     def coverage_fields(self) -> dict:
@@ -165,7 +246,18 @@ class ConfigGate:
         return {"config_mode": True, "allowed_files": self.files, "allowed_bytes": self.bytes,
                 "ext_counts": dict(sorted(self.ext_counts.items(), key=lambda kv: (-kv[1], kv[0]))),
                 "not_config_files": self.nc_files, "not_config_bytes": self.nc_bytes,
-                "limit_files": self.lim_files, "limit_bytes": self.lim_bytes}
+                "limit_files": self.lim_files, "limit_bytes": self.lim_bytes,
+                **self._excluded_fields()}
+
+    def _excluded_fields(self) -> dict:
+        """빠진 파일 요약(설정 형식이 아님 + 상한 초과 합산): 사유별 개수와 큰 것 예시. 하나도 없으면 키를 넣지 않는다."""
+        if not (self.nc_files or self.lim_files):
+            return {}
+        reasons = dict(self.nc_reasons)
+        if self.lim_files:
+            reasons[WHY_SIZE] = self.lim_files
+        merged = sorted(self.nc_top.items() + self.lim_top.items(), key=lambda t: (-t[0], t[1]))[:EXAMPLES_KEEP]
+        return {"excluded_by_reason": ordered_dict(reasons), "excluded_examples": _example_dicts(merged)}
 
 
 @dataclass

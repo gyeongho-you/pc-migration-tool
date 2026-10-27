@@ -383,7 +383,7 @@ def collect_extra_items(extras: list, expand: Expand = expand_env, *, avoid: Cal
                 if why:
                     skipped.append(_denied_skip(EXTRA_ID, f, why))
                     continue
-                if gate is not None and gate.judge(f.name, _size_or_zero(f), str(f)) is not None:
+                if gate is not None and gate.judge(f.name, _size_or_zero(f), str(f), f.name if f == top else rel[len(ex.rel) + 1:]) is not None:
                     continue  # 허용 방식: 설정 형식이 아니거나 상한 초과(요약은 아래에서 한 번에 기록)
                 items.append(Item(f"data/{EXTRA_ID}/{keys[ex.root]}/{rel}", f, EXTRA_ID, ex.root, rel))
             if gate is not None:
