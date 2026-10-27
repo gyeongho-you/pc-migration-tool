@@ -20,11 +20,14 @@ NEW_FLOW = (NEW_PACKAGE, NEW_INSTALL, NEW_PREVIEW, NEW_CONFIRM, NEW_RESULT)
 TITLES = T.TITLES  # 화면 제목은 texts.py 에서 관리
 
 
-def overall_step(screen: str, transfer_mode: str = "", transfer_stage: int = 1) -> tuple[int, int, str, str] | None:
+def overall_step(screen: str, transfer_mode: str = "", transfer_stage: int = 1, files_stage: int = 0) -> tuple[int, int, str, str] | None:
     """마법사 맨 위의 '전체 단계 n/N' 표시용 (n, N, 흐름 이름, 화면 제목). 시작 화면은 None.
 
     구 PC / 새 PC 흐름은 4단계, 대용량 복사는 외장/랜선이면 2단계(구 PC에서 보내기 -> 새 PC에서 받아 검사), 같은 PC 면 1단계.
+    files_stage(1~4)가 있으면 '내 파일 옮기기'(찾기 → 방법 → 연결·복사 → 결과) 4단계 흐름이다(stage30a).
     """
+    if files_stage:
+        return files_overall_step(screen, files_stage)
     if screen in OLD_FLOW:
         return OLD_FLOW.index(screen) + 1, len(OLD_FLOW), T.OVERALL_FLOWS["old"], TITLES[screen]
     if screen in NEW_FLOW:
@@ -37,8 +40,10 @@ def overall_step(screen: str, transfer_mode: str = "", transfer_stage: int = 1) 
     return None
 
 
-def overall_names(screen: str, transfer_mode: str = "") -> tuple[str, ...]:
+def overall_names(screen: str, transfer_mode: str = "", files_stage: int = 0) -> tuple[str, ...]:
     """맨 위 단계 표시줄에 번호와 함께 보여 줄 단계 이름들(overall_step 의 N 개와 같은 개수)."""
+    if files_stage:
+        return T.OVERALL_STEP_NAMES["files"]
     if screen in OLD_FLOW:
         return T.OVERALL_STEP_NAMES["old"]
     if screen in NEW_FLOW:
@@ -99,3 +104,17 @@ class WizardState:
     transfer_progress: Any = None  # progress.ProgressInfo
     verify_manifest: str = ""  # 2단계(랜선): 목록 파일
     verify_target: str = ""  # 2단계(랜선): 검사할 폴더
+
+
+# =========================================================================== stage30a: 내 파일 옮기기(찾기 → 방법 → 연결·복사 → 결과)
+# 새 화면 이름. 상태 값은 gui/files_flow.py 의 FilesState 에 있다(WizardState 를 건드리지 않아 병합 충돌이 적다).
+FIND, METHOD = "find_data", "move_method"
+LAN_RECV, LAN_SEND = "lan_receive", "lan_send"
+FILES_SCREENS = (FIND, METHOD, LAN_RECV, LAN_SEND)
+FILES_STEPS = 4
+
+
+def files_overall_step(screen: str, stage: int) -> tuple[int, int, str, str]:
+    """내 파일 옮기기의 (n, 4, 흐름 이름, 화면 제목). 화면 제목은 연결/복사 화면이 단계 3 이나 4(결과) 로 보이도록 stage 를 받는다."""
+    stage = max(1, min(FILES_STEPS, stage))
+    return stage, FILES_STEPS, T.OVERALL_FLOWS["files"], TITLES.get(screen, "")

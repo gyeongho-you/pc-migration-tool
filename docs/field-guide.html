@@ -280,6 +280,7 @@ pcmigrate.exe import E:\이전\설정.zip --yes</pre><button class="copy" type="
         <li><strong>규칙 폴더 오류</strong>: "규칙 폴더를 찾을 수 없습니다" 또는 "규칙 파일이 하나도 없습니다"가 나오면 exe 옆 <code>_internal\rules</code> 폴더가 지워진 것입니다. 이 상태로는 아무 프로그램도 감지하지 못하므로 도구가 종료 코드 1로 멈춥니다. 다시 내려받아 압축을 풀어 주세요.</li>
       </ul>
       <h3>대용량 복사</h3>
+      <p>GUI 의 ③ <strong>내 파일 옮기기</strong>(예전 이름: 대용량 복사)는 4단계(찾기 → 방법 → 연결·복사 → 결과)입니다. <code>내 파일 찾기</code>(<code>find-data</code> 와 같은 기능, 읽기만)로 폴더를 찾아 직접 체크하고, 방법을 <strong>두 PC를 바로 연결(추천, <code>pcmigrate receive</code>/<code>send</code> 와 같은 기능)</strong> · 외장 드라이브 · 공유 폴더(고급) 중에서 고릅니다. 바로 연결은 새 PC에서 '받는 쪽'을 먼저 열어 6자리 코드를 확인하고 구 PC에서 '보내는 쪽'으로 연결하며, 내용은 암호화되지 않으니 사설 네트워크에서만 쓰세요. 아래 명령은 같은 일을 터미널에서 하는 방법입니다.</p>
       <div class="cmd"><div class="lab">목록만 확인 (아무것도 쓰지 않음)</div><pre>pcmigrate.exe transfer D:\프로젝트 E:\이전\프로젝트 --dry-run</pre><button class="copy" type="button">복사</button></div>
       <div class="cmd"><div class="lab">외장으로 복사 (같은 PC 안의 두 디스크는 복사 후 바로 검사)</div><pre>pcmigrate.exe transfer D:\프로젝트 E:\이전\프로젝트 --report C:\이전기록\복사결과.json</pre><button class="copy" type="button">복사</button></div>
       <div class="cmd"><div class="lab">랜선: 원본 해시 목록을 만들며 복사, 대상 검사는 새 PC로 미룸</div><pre>pcmigrate.exe transfer D:\프로젝트 \\192.168.50.2\Migrate\프로젝트 --manifest-out C:\이전기록\목록.jsonl</pre><button class="copy" type="button">복사</button></div>

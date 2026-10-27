@@ -75,7 +75,7 @@ def test_start_texts_follow_the_three_situations():  # U-3
     assert titles[0].startswith("① 쓰던 PC에서 준비하기") and titles[1].startswith("② 새 PC에서 설치하고 가져오기")
     assert all(len(c[0].split("\n")) == 2 for c in T.START_CHOICES)  # 제목은 의도적으로 두 줄: (구 PC)/(신 PC)가 줄 중간에서 끊기지 않는다
     assert T.START_CHOICES[1][0].split("\n")[1] == "가져오기(신 PC)"
-    assert titles[2].startswith("③ 큰 파일(도면·사진) 옮기기")
+    assert titles[2].startswith("③ 내 파일 옮기기") and "자동으로 찾아서" in titles[2]  # stage30a: 이름 변경(예전: 큰 파일 옮기기)
     assert T.START_ORDER_NOTE == "처음이시면 ① → ② → ③ 순서로 진행해 주세요." and "전체 이전 순서" in T.BTN_ROADMAP_BIG
     assert len(T.START_INTRO.splitlines()) <= 2  # U-6 소개는 2줄 이내
 
@@ -185,7 +185,7 @@ def test_next_step_items_reuse_roadmap_keys(hc):  # U-13
     keys = {k for k, *_ in (*T.ROADMAP_OLD, *T.ROADMAP_NEW)}
     assert [k for k, _t in T.RES_NEXT_ITEMS] == ["new2", "new5", "old6"] and set(k for k, _ in T.RES_NEXT_ITEMS) <= keys
     assert hc.toggle_roadmap("new2") is True and "new2" in hc.roadmap_marks
-    assert len(T.EXP_NEXT_STEPS) == 3 and "USB" in T.EXP_NEXT_STEPS[0] and "신 PC" in T.EXP_NEXT_STEPS[1] and "대용량 복사" in T.EXP_NEXT_STEPS[2]
+    assert len(T.EXP_NEXT_STEPS) == 3 and "USB" in T.EXP_NEXT_STEPS[0] and "신 PC" in T.EXP_NEXT_STEPS[1] and "내 파일 옮기기" in T.EXP_NEXT_STEPS[2]
 
 
 def test_backup_folder_comes_from_applied_report(hc):  # U-4

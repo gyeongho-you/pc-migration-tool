@@ -22,7 +22,11 @@ from .views import common as C
 from .views.common import (CHIP_DONE_BG, CHIP_TODO_BG, FONT_DELTA_RANGE, INFO_BG, INFO_FG, MUTED_FG, OK_FG, SUB_FONT, TITLE_FONT, WARN_FG,
                            ActionButton, BaseView, TextDialog, add_tooltip, autowrap, install_wheel, open_location, setup_fonts)
 from .views.auto import AutoView
+from .views.find import FindView
 from .views.install import InstallView
+from .views.lan_recv import ReceiveView
+from .views.lan_send import SendView
+from .views.method import MethodView
 from .views.new_pc import ConfirmView, PackageView, PreviewView, ResultView
 from .views.old_pc import ChecklistView, DiscoverView, ExportView, ScanView
 from .views.start import StartView
@@ -215,7 +219,7 @@ class ErrorDialog(tk.Toplevel):
 
 
 VIEW_CLASSES = (StartView, ScanView, DiscoverView, ChecklistView, ExportView, PackageView, InstallView, PreviewView, ConfirmView,
-                ResultView, TransferView, AutoView)
+                ResultView, TransferView, AutoView, FindView, MethodView, ReceiveView, SendView)  # stage30a: 뒤의 네 화면
 
 
 class App(tk.Tk):
@@ -396,13 +400,14 @@ class App(tk.Tk):
     def update_overall(self) -> None:
         """맨 위의 '전체 단계 n/N' 과 단계 이름 표시(흐름 안의 화면에서만). 단계 칩은 만들어 둔 것을 재사용하고 바뀐 것만 고친다."""
         mode, stage = self.c.flow()
-        step = S.overall_step(self.current, mode, stage)
+        files = self.c.files_stage(self.current)  # stage30a: 내 파일 옮기기 4단계 흐름이면 1~4, 아니면 0
+        step = S.overall_step(self.current, mode, stage, files)
         if step is None:
             if self.overall.winfo_manager():
                 self.overall.pack_forget()
             return
         n, total, flow, title = step
-        names = S.overall_names(self.current, mode)
+        names = S.overall_names(self.current, mode, files)
         if not self.overall.winfo_manager():
             self.overall.pack(fill="x", after=self.header_sep)
         self._set_text(self.overall_label, T.OVERALL_FMT.format(n=n, total=total))
@@ -534,7 +539,7 @@ class App(tk.Tk):
             self.status.configure(text=T.CANCELLED.format(task=payload))
         elif kind == "error":
             self.show_error(payload)
-        elif kind == "transfer_flow":
+        elif kind in ("transfer_flow", "transfer_done", "files_changed", "lan_rx", "lan_send_done"):  # stage30a: 단계 표시줄 새로 고침
             self.update_overall()
         for v in self.views.values():
             v.on_event(kind, payload)

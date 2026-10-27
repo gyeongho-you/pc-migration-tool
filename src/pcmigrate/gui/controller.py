@@ -37,6 +37,7 @@ from ..scan import skipped_links_view
 from ..transfer import DriveDisconnected, TransferError
 from . import state as S
 from . import texts as T
+from .files_controller import FilesMixin  # stage30a: 내 파일 옮기기(찾기/방법/직접 연결) 부분은 별도 파일
 from .runner import Runner
 from .status import StatusModel
 
@@ -322,7 +323,7 @@ AUTO_FLOWS = ("old", "new", "transfer")
 _AUTO_KINDS = {"scan_done", "checklist_done", "export_done", "preview_done", "install_done", "import_done", "transfer_done", "error", "cancelled"}
 
 
-class Controller:
+class Controller(FilesMixin):
     """화면과 api 사이의 중간층. 이벤트는 listener(kind, payload) 로 전달된다."""
 
     def __init__(self, api_mod: Any = None, deps: Any = None, runner: Runner | None = None,
@@ -506,6 +507,7 @@ class Controller:
         return fe
 
     def go(self, screen: str) -> None:
+        self._files_on_go(screen)  # stage30a
         if screen != S.AUTO:
             self.auto = None  # 진행 화면을 떠나면 '한 번에' 진행은 끝난 것으로 본다(이어서 하려면 직접 진행)
         self.state.screen = screen
@@ -1462,6 +1464,8 @@ class Controller:
         self._dest_cache.clear()
 
     def check_transfer_paths(self, src: str, dst: str) -> PathCheck:
+        if self.has_selection():  # stage30a: 선택 목록으로 복사
+            return self._check_selection_paths(dst)
         lines: list[tuple[bool, str]] = []
         if not src:
             lines.append((False, T.G_NEED_SOURCE))
@@ -1549,6 +1553,9 @@ class Controller:
         s = self.state
         if self.is_verify_flow():
             raise GuardError(T.G_NOT_IN_LIST)
+        if self.has_selection():  # stage30a: 선택 목록으로 복사(data_api.run_transfer_selection)
+            return self._start_selection_transfer(dry_run, strict, include_cloud, report_path, write_confirmed, verify_only,
+                                                  retry_failed, workers, split_large)
         check = self.check_transfer_paths(s.transfer_src, s.transfer_dst)
         if not check.ok:
             raise GuardError(" ".join(t for ok, t in check.lines if not ok))
@@ -1722,6 +1729,8 @@ class Controller:
         rep = self.state.transfer_report
         if rep is None:
             return {}
+        if self._is_multi(rep):  # stage30a: 선택 목록 복사 결과
+            return self._multi_summary(rep)
         counts = rep.to_dict()["summary"]
         return {"dry_run": self.state.transfer_was_dry_run, "counts": counts,
                 "verified": counts.get("verified", 0), "mismatch": counts.get("mismatch", 0),
@@ -1751,7 +1760,7 @@ class Controller:
         if rep is None:
             raise GuardError(T.G_NOTHING_TO_SAVE)
         s = self.state
-        for folder in (s.verify_target if self.is_verify_flow() else s.transfer_src,):
+        for folder in self.source_folders():  # stage30a: 선택 목록이면 고른 폴더들
             if folder and real_api.report_inside(path, folder):
                 raise GuardError(T.G_REPORT_INSIDE_SOURCE)
         try:

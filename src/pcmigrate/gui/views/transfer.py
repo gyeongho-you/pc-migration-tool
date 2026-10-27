@@ -12,7 +12,7 @@ from tkinter import filedialog, messagebox, ttk
 from .. import state as S
 from .. import texts as T
 from ...progress import fmt_bytes
-from .common import (DANGER_BG, DANGER_FG, MUTED_FG, OK_FG, WARN_BG, WARN_FG, ActionButton, BaseView, Collapsible,
+from .common import (DANGER_BG, DANGER_FG, INFO_BG, INFO_FG, MUTED_FG, OK_FG, WARN_BG, WARN_FG, ActionButton, BaseView, Collapsible,
                      PathField, ResultSummary, ScrollBody, StepStrip, TextDialog, TreeTooltip, add_tooltip, autowrap, clean_path, clear,
                      make_tree)
 
@@ -24,7 +24,7 @@ class TransferView(BaseView):
 
     def __init__(self, app, controller) -> None:
         super().__init__(app, controller)
-        self.navbar(back=lambda: self.c.go(S.START))
+        self.navbar(back=lambda: self.c.go(self.c.transfer_back_screen()))  # stage30a: 선택 목록 흐름이면 '옮기는 방법' 화면으로
         self._build_action_bar()
         self.header(T.TR_HEADING, T.TR_SUB)
         self.add_status_card({T.TASK_TRANSFER, T.TASK_TRANSFER_PREVIEW, T.TASK_VERIFY, T.TASK_VERIFY_AGAIN, T.TASK_RETRY})
@@ -77,6 +77,8 @@ class TransferView(BaseView):
                                    drives=self.c.list_drives, on_drive=self._pick_dst_drive)
         self.dst_field.pack(fill="x", pady=(6, 0))
         self.src_label, self.dst_label = self.src_field.label, self.dst_field.label
+        self.sel_box = tk.Label(form, text="", anchor="w", justify="left", padx=10, pady=6, bg=INFO_BG, fg=INFO_FG)  # stage30a: 선택 목록 흐름의 원본 표시
+        autowrap(self.sel_box, 40)
         self.src_entry = self.src_field.entry
         self.dst_hint = self.dst_field.hint
         self.src_var.trace_add("write", lambda *a: self._check())
@@ -292,6 +294,7 @@ class TransferView(BaseView):
 
     def _apply_flow(self) -> None:
         """방식/단계에 맞게 안내, 입력 칸 이름, 버튼을 바꾼다."""
+        self.c.sync_selection_src()  # stage30a
         mode, stage = self.c.flow()
         self.mode_var.set(mode)
         self.stage_var.set(stage)
@@ -332,13 +335,27 @@ class TransferView(BaseView):
                     self.dst_field.drive_box.grid()
             self.primary = self.dry_btn
         self._layout_bar(verify)
+        self._apply_selection_mode()
         self._render_result()
         self._check()
+
+    def _apply_selection_mode(self) -> None:
+        """stage30a: 앞 화면에서 고른 폴더 목록으로 복사하는 흐름이면 '원본 폴더' 입력칸 대신 선택 요약을 보인다."""
+        if self.c.has_selection():
+            self.src_field.pack_forget()
+            self.sel_box.configure(text=self.c.selection_box_text() + "\n" + T.TR_SELECTION_HINT)
+            self.sel_box.pack(fill="x", pady=(2, 0), before=self.dst_field)
+        else:
+            self.sel_box.pack_forget()
+            if not self.src_field.winfo_manager():
+                self.src_field.pack(fill="x", pady=(2, 0), before=self.dst_field)
 
     # ------------------------------------------------------------------ 상태 동기화
     def _sync_state(self) -> None:
         st = self.c.state
-        st.transfer_src, st.transfer_dst = clean_path(self.src_var.get()), clean_path(self.dst_var.get())
+        if not self.c.has_selection():  # 선택 목록 흐름에서는 원본 표식을 컨트롤러가 관리한다
+            st.transfer_src = clean_path(self.src_var.get())
+        st.transfer_dst = clean_path(self.dst_var.get())
         st.verify_manifest, st.verify_target = clean_path(self.manifest_var.get()), clean_path(self.target_var.get())
 
     def _show_check(self, res) -> None:
@@ -408,7 +425,7 @@ class TransferView(BaseView):
         self.target_var.set(vals[3])
         self._apply_flow()
         self.after_idle(self.scroll.scroll_to_top)  # _render_result 가 예약한 결과 스크롤보다 나중에 실행되어 항상 맨 위(입력칸)에서 시작한다
-        self.src_entry.focus_set()
+        (self.dst_field.entry if self.c.has_selection() else self.src_entry).focus_set()
 
     # ------------------------------------------------------------------ 실행
     def _options_changed(self) -> None:
@@ -429,13 +446,13 @@ class TransferView(BaseView):
         cloud = T.TR_CONFIRM_CLOUD if self.cloud_var.get() else ""
         flow = T.TR_CONFIRM_FLOW.format(flow=self.c.flow_title(), method=self.c.flow_method())
         if not messagebox.askokcancel(T.TR_CONFIRM_TITLE,
-                                      T.TR_CONFIRM.format(src=s.transfer_src, dst=s.transfer_dst, cloud=cloud) + flow, parent=self):
+                                      T.TR_CONFIRM.format(src=self.c.src_display(), dst=s.transfer_dst, cloud=cloud) + flow, parent=self):
             return
         self.guarded(self.c.start_transfer, dry_run=False, write_confirmed=True, **self._opts())
 
     def _retry(self) -> None:
         self._sync_state()
-        if not messagebox.askokcancel(T.TR_CONFIRM_TITLE, T.TR_CONFIRM.format(src=self.c.state.transfer_src, dst=self.c.state.transfer_dst,
+        if not messagebox.askokcancel(T.TR_CONFIRM_TITLE, T.TR_CONFIRM.format(src=self.c.src_display(), dst=self.c.state.transfer_dst,
                                                                               cloud=""), parent=self):
             return
         self.guarded(self.c.start_transfer, dry_run=False, write_confirmed=True, retry_failed=True, **self._opts())
