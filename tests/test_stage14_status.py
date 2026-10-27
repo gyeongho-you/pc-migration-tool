@@ -54,7 +54,7 @@ def test_headline_matches_spec_example(model):
     model.begin(T.TASK_TRANSFER)
     model.info(info("scan", 5))
     model.info(info("copy", 12431, 50003, done_bytes=1, total_bytes=100, speed_bps=1000.0, eta_seconds=60.0))
-    assert model.snapshot().headline == "② 복사 중 — 12,431 / 50,003개 파일 (24%)"
+    assert model.snapshot().headline == "복사 중 — 12,431 / 50,003개 파일 (24%)"
 
 
 def test_steps_bar_marks_done_current_todo_and_final_step(model):
@@ -68,10 +68,10 @@ def test_steps_bar_marks_done_current_todo_and_final_step(model):
     model.info(info("scan", 3))  # 단계는 뒤로 가지 않는다
     assert model.snapshot().stage_text == "② 복사"
     model.info(info("verify", 1, 10))
-    assert model.snapshot().headline.startswith("③ 검사 중")
+    assert model.snapshot().headline.startswith("검사 중")
     model.finish()
     snap = model.snapshot()
-    assert all(s.state == ST.STEP_DONE for s in snap.steps) and snap.headline.startswith("④ 완료")
+    assert all(s.state == ST.STEP_DONE for s in snap.steps) and snap.headline.startswith("완료")
 
 
 def test_non_applicable_task_uses_its_own_steps(model):
@@ -518,9 +518,9 @@ def test_status_card_widget_reflects_progress_chips_and_list_dialog(ctx):
     card.refresh()
     app.update()
     assert card.shown
-    assert card.headline.cget("text") == "② 복사 중 — 12,431 / 50,003개 파일 (24%)"
+    assert card.headline.cget("text") == "복사 중 — 12,431 / 50,003개 파일 (24%)"
     texts = [l.cget("text") for l in card.step_labels]
-    assert texts[0].startswith(T.ICON_OK) and "② 복사" in texts[1] and T.ICON_OK not in texts[1]
+    assert texts[0].startswith(T.ICON_OK) and "복사" in texts[1] and T.ICON_OK not in texts[1]
     assert "12,431 / 50,003개" in card.metric_values[T.CARD_METRIC_FILES].cget("text")
     assert "…" in card.current.cget("text") and card.current_tip.text.endswith("a.dwg")
     chip_texts = {k: l.cget("text") for k, l in card.chips.items()}
@@ -597,3 +597,35 @@ def test_locked_source_is_classified_in_use_not_permission(tmp_path):
     assert r1.status == "failed" and r1.reason == "in_use" and "사용 중" in r1.error
     assert r2.status == "failed" and r2.reason == "in_use"
     assert not list((tmp_path / "out").glob("*.pcmigrate-part"))
+
+
+# ----------------------------------------------------------------------------- stage36: 현황 카드 작업 내부 단계에는 동그라미 숫자가 없다
+CIRCLED = "".join(chr(c) for c in range(0x2460, 0x2474))  # ①~⑳
+
+
+def test_card_steps_and_headline_have_no_circled_numbers_for_every_task(model):
+    for task, labels in T.TASK_STEPS.items():
+        model.begin(task)
+        for i in range(len(labels) + 1):
+            model.step_index = i
+            snap = model.snapshot()
+            assert not any(ch in CIRCLED for ch in snap.headline), (task, snap.headline)
+        model.finish()
+        assert not any(ch in CIRCLED for ch in model.snapshot().headline)
+    assert not any(ch in CIRCLED for name in ("CARD_HEAD_RUNNING", "CARD_HEAD_DONE") for ch in getattr(T, name))
+
+
+def test_card_step_labels_show_done_current_todo_without_circled(ctx):
+    app, c = ctx.app, ctx.c
+    c.go(S.TRANSFER)
+    card = app.views[S.TRANSFER].card
+    c.status.begin(T.TASK_TRANSFER)
+    c.status.info(info("scan", 5))
+    c.status.info(info("copy", 10, 100))
+    card.refresh()
+    app.update()
+    texts = [l.cget("text") for l in card.step_labels]
+    assert texts[0].startswith(T.ICON_OK) and not texts[1].startswith(T.ICON_OK) and not texts[2].startswith(T.ICON_OK)
+    assert all(ch not in CIRCLED for t in texts for ch in t)
+    assert card.step_labels[1].cget("font") == str(card.step_labels[1].cget("font")) and \
+        card.step_labels[1].cget("fg") != card.step_labels[2].cget("fg")  # 현재 단계는 강조색, 예정 단계는 흐리게

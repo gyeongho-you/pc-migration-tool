@@ -201,7 +201,7 @@ class StatusCard(tk.Frame):
         for lbl, step in zip(self.step_labels, steps):
             fg, weight = STEP_COLORS[step.state]
             mark = T.ICON_OK + " " if step.state == ST.STEP_DONE else ""
-            lbl.configure(text=f"{mark}{step.no} {step.label}", fg=fg, font=weight,
+            lbl.configure(text=f"{mark}{step.label}", fg=fg, font=weight,
                           bg=CHIP_DONE_BG if step.state == ST.STEP_CURRENT else INFO_BG)
 
     # ------------------------------------------------------------------ 칩을 누르면 목록
