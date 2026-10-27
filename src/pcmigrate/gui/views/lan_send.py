@@ -10,7 +10,6 @@ from tkinter import messagebox, ttk
 
 from .. import state as S
 from .. import texts as T
-from ...progress import fmt_bytes
 from .common import (DANGER_BG, DANGER_FG, MUTED_FG, OK_BG, OK_FG, SUB_FONT, WARN_BG, WARN_FG, ActionButton, BaseView, ScrollBody,
                      autowrap, bind_alt, clean_path)
 
@@ -108,10 +107,7 @@ class SendView(BaseView):
     def _render(self) -> None:
         c, f = self.c, self.c.files
         items = c.lan_send_items()
-        known = sum(i.total_bytes or 0 for i in items if i.total_bytes is not None)
-        unknown = any(i.total_bytes is None for i in items)
-        self.selection.configure(text=(T.TX_SELECTION.format(n=len(items), size=("약 " + fmt_bytes(known)) + (" 이상" if unknown else ""))
-                                       if items else T.TX_SELECTION_UNKNOWN.format(n=0)))
+        self.selection.configure(text=c.tx_selection_text(items))
         labels = [T.TX_FOUND_ITEM.format(name=r.name, addr=f"{r.ip}:{r.port}") for r in f.found]
         self.found_box.configure(values=labels)
         if not labels:
@@ -176,9 +172,6 @@ class SendView(BaseView):
         if why:
             messagebox.showwarning(T.GUARD_TITLE, why, parent=self)
             return
-        items = self.c.lan_send_items()
-        known = sum(i.total_bytes or 0 for i in items if i.total_bytes is not None)
-        size = ("약 " + fmt_bytes(known)) + (" 이상" if any(i.total_bytes is None for i in items) else "")
-        if not messagebox.askokcancel(T.TX_CONFIRM_TITLE, T.TX_CONFIRM.format(n=len(items), size=size, target=target), parent=self):
+        if not messagebox.askokcancel(T.TX_CONFIRM_TITLE, self.c.tx_confirm_text(target), parent=self):
             return
         self.guarded(self.c.lan_send_start, target, code, True)

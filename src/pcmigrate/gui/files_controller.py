@@ -1,4 +1,4 @@
-"""컨트롤러의 '내 파일 옮기기'(③) 부분(stage30a). Controller 가 이 믹스인을 상속한다(병합 충돌을 줄이려고 별도 파일).
+"""컨트롤러의 '내 파일 옮기기'(②) 부분(stage30a). Controller 가 이 믹스인을 상속한다(병합 충돌을 줄이려고 별도 파일).
 
 비시각(헤드리스)로 시험할 수 있다. 화면은 이 메서드들만 부른다. 외부 호출은 data_api / lan_api 속성으로 바꿔 끼울 수 있다
 (시험에서는 가짜를 넣는다. 실제 스캔·전송·네트워크 방송은 시험에서 하지 않는다).
@@ -8,7 +8,11 @@
 """
 from __future__ import annotations
 
+import contextlib
+import hashlib
 import os
+import shutil
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +44,7 @@ class FilesMixin:
     # 시험에서 가짜를 넣는 자리(None 이면 실제 모듈)
     data_api: Any = None
     lan_api: Any = None
+    bundle_temp_root: str | None = None  # 설정 묶음의 임시 복사본을 둘 위치(None 이면 시스템 임시 폴더). 시험에서 바꿔 끼운다
 
     # ------------------------------------------------------------------ 기본
     @property
@@ -171,10 +176,13 @@ class FilesMixin:
 
     def data_total_text(self) -> str:
         n, size, unknown = self.data_total()
+        b = self.bundle_item()
+        bsize = fmt_bytes(b.total_bytes or 0) if b is not None else ""
         if not n:
-            return T.FD_TOTAL_NONE
+            return T.FD_TOTAL_ONLY_BUNDLE.format(note=T.BUNDLE_INCLUDED, size=bsize) if b is not None else T.FD_TOTAL_NONE
         text = T.FD_TOTAL.format(n=n, size=fmt_bytes(size))
-        return text + (" " + T.FD_TOTAL_UNKNOWN.format(k=unknown) if unknown else "")
+        text += (" " + T.FD_TOTAL_UNKNOWN.format(k=unknown) if unknown else "")
+        return text + (T.FD_TOTAL_BUNDLE.format(note=T.BUNDLE_INCLUDED, size=bsize) if b is not None else "")
 
     def add_data_folder(self, path: str) -> str:
         """'직접 폴더 추가'. 폴더가 아니면 막는다. 이미 목록에 있으면 선택만 켠다(이미 선택됐으면 안내)."""
@@ -231,13 +239,122 @@ class FilesMixin:
         for r in self.data_rows(visible_only=False):
             if r.selected:
                 out.append(SelectedItem(r.path, True, r.total_bytes, r.total_files, r.kind))
+        b = self.bundle_item()
+        if b is not None:  # 체크한 경우에만(자동으로 넣지 않는다)
+            out.append(b)
         return out
+
+    # ------------------------------------------------------------------ ① 에서 만든 설정 묶음 함께 보내기(stage34)
+    def bundle_source(self) -> tuple[str, int] | None:
+        """함께 보낼 수 있는 설정 묶음(.zip): 마지막으로 내보낸 결과 파일, 없으면 기본 저장 위치(바탕화면)의 pcmigrate-settings.zip.
+        실제로 파일이 있을 때만 (경로, 크기). 읽기만 한다."""
+        cands = []
+        last = getattr(self.state, "export_output", "") or ""
+        if last:
+            cands.append(last)
+        try:
+            cands.append(self.default_export_path())
+        except Exception:  # noqa: BLE001 - 기본 위치를 알 수 없으면 마지막 내보내기 결과만 본다
+            pass
+        for c in cands:
+            try:
+                if c and os.path.isfile(c) and c.lower().endswith(".zip"):
+                    return c, int(os.path.getsize(c))
+            except OSError:
+                continue
+        return None
+
+    def bundle_included(self) -> bool:
+        return bool(self.files.bundle_include and self.bundle_source() is not None)
+
+    def set_bundle_included(self, on: bool) -> None:
+        if self.state.busy:
+            raise _guard(T.G_BUSY)
+        if on and self.bundle_source() is None:
+            raise _guard(T.G_BUNDLE_GONE)
+        f = self.files
+        if bool(on) != f.bundle_include and f.use_selection:
+            self._end_selection_mode()  # 보낼 목록이 바뀌므로 앞서 만든 복사 준비(미리보기)는 다시 만든다
+        f.bundle_include = bool(on)
+        self.emit("files_changed")
+
+    def bundle_label(self) -> str:
+        """체크 줄에 보일 문구('① 에서 만든 설정 묶음 이름(크기) — 함께 보내기'). 묶음이 없으면 빈 문자열."""
+        b = self.bundle_source()
+        return T.FD_BUNDLE_CHECK.format(name=os.path.basename(b[0]), size=fmt_bytes(b[1])) if b else ""
+
+    def _bundle_stage_dir(self, src: str) -> str:
+        root = self.bundle_temp_root or tempfile.gettempdir()
+        return os.path.join(root, "pcmigrate-bundle-" + hashlib.sha1(norm(src).encode("utf-8", "replace")).hexdigest()[:8])
+
+    def bundle_item(self) -> SelectedItem | None:
+        """보낼 목록에 넣을 '설정 묶음 임시 폴더' 항목(체크했고 파일이 있을 때만). 폴더 단위 전송 계층에 맞춰 폴더로 넣는다."""
+        if not self.files.bundle_include:
+            return None
+        b = self.bundle_source()
+        if b is None:
+            return None
+        return SelectedItem(self._bundle_stage_dir(b[0]), True, b[1], 1, T.BUNDLE_LABEL)
+
+    @staticmethod
+    def is_bundle_item(item: Any) -> bool:
+        return getattr(item, "label", "") == T.BUNDLE_LABEL
+
+    def bundle_note(self, items: list | None = None) -> str:
+        """합계/확인창/결과에 보일 '설정 묶음 1개 포함'(없으면 빈 문자열)."""
+        items = self.data_selected_items() if items is None else items
+        return T.BUNDLE_INCLUDED if any(self.is_bundle_item(i) for i in items) else ""
+
+    @contextlib.contextmanager
+    def bundle_staging(self, items: list):
+        """보내기/복사 직전에 설정 묶음만 담은 임시 폴더를 만들고(원본 zip 은 읽기만), 끝나면(취소·실패 포함) 지운다.
+        임시 폴더 이름은 원본 경로로 정해져 있어 미리보기와 복사가 같은 경로를 본다. 우리가 만들지 않은 내용이 있으면 건드리지 않고 멈춘다."""
+        bundle = [i for i in items if self.is_bundle_item(i)]
+        if not bundle:
+            yield
+            return
+        src = self.bundle_source()
+        if src is None:
+            raise _guard(T.G_BUNDLE_GONE)
+        stage, name = bundle[0].path, os.path.basename(src[0])
+        copy = os.path.join(stage, name)
+        try:
+            if os.path.lexists(stage):
+                if not os.path.isdir(stage) or any(e != name for e in os.listdir(stage)):
+                    raise OSError("unexpected temp content")
+                if os.path.lexists(copy):
+                    os.remove(copy)
+                os.rmdir(stage)
+            os.makedirs(stage)
+            shutil.copy2(src[0], copy)
+        except OSError as e:
+            self._bundle_cleanup(stage, name)
+            raise _guard(T.G_BUNDLE_STAGE) from e
+        try:
+            yield
+        finally:
+            self._bundle_cleanup(stage, name)
+
+    @staticmethod
+    def _bundle_cleanup(stage: str, name: str) -> None:
+        try:
+            os.remove(os.path.join(stage, name))
+        except OSError:
+            pass
+        try:
+            os.rmdir(stage)
+        except OSError:
+            pass
+
+    def data_has_send(self) -> bool:
+        """보낼 것이 있는가(체크한 폴더가 있거나, 설정 묶음만 함께 보내기로 체크했다)."""
+        return bool(self.data_selection()) or self.bundle_item() is not None
 
     # ------------------------------------------------------------------ 2/4 방법
     def files_go_method(self) -> None:
         if self.state.busy:
             raise _guard(T.G_BUSY)
-        if not self.data_selection():
+        if not self.data_has_send():
             raise _guard(T.G_FD_NEED_SELECTION)
         self.go(S.METHOD)
 
@@ -260,7 +377,7 @@ class FilesMixin:
             return T.WHY_MV_NEED_METHOD
         if f.method == T.MV_DIRECT and not f.role:
             return T.WHY_MV_NEED_ROLE
-        if not (f.method == T.MV_DIRECT and f.role == T.MV_ROLE_RECV) and not self.data_selection():
+        if not (f.method == T.MV_DIRECT and f.role == T.MV_ROLE_RECV) and not self.data_has_send():
             return T.WHY_FD_NEED_SELECTION
         return ""
 
@@ -325,21 +442,32 @@ class FilesMixin:
             s.transfer_src = ""
 
     def src_display(self) -> str:
-        """확인 창에 보일 '원본' 표시(선택 목록이면 폴더 수와 앞쪽 경로, 아니면 입력한 원본 폴더)."""
+        """확인 창에 보일 '원본' 표시(선택 목록이면 폴더 수와 앞쪽 경로, 아니면 입력한 원본 폴더). 설정 묶음이 있으면 한 줄 더."""
         if not self.has_selection():
             return self.state.transfer_src
-        items = self.files.transfer_items
-        lines = [T.TR_SELECTION_SRC.format(n=len(items))] + ["  · " + T.ellipsize_path(i.path, 70) for i in items[:6]]
+        items = [i for i in self.files.transfer_items if not self.is_bundle_item(i)]
+        lines = [T.TR_SELECTION_SRC.format(n=len(items))] if items else []
+        lines += ["  · " + T.ellipsize_path(i.path, 70) for i in items[:6]]
         if len(items) > 6:
             lines.append("  · " + T.TR_SELECTION_MORE.format(n=len(items) - 6))
+        lines += self._bundle_lines(self.files.transfer_items)
         return "\n".join(lines)
+
+    def _bundle_lines(self, items: list) -> list[str]:
+        out = []
+        for i in items:
+            if self.is_bundle_item(i):
+                b = self.bundle_source()
+                out.append(T.BUNDLE_LINE.format(name=os.path.basename(b[0]) if b else T.BUNDLE_LABEL, size=fmt_bytes(i.total_bytes or 0)))
+        return out
 
     def transfer_back_screen(self) -> str:
         return S.METHOD if self.files.use_selection and self.files.transfer_items else S.START
 
     def selection_box_text(self) -> str:
-        """복사 화면의 '옮길 폴더' 요약(처음 몇 곳의 경로 포함)."""
-        items = self.files.transfer_items
+        """복사 화면의 '옮길 폴더' 요약(처음 몇 곳의 경로 포함). 설정 묶음이 있으면 '설정 묶음 1개 포함' 줄."""
+        all_items = self.files.transfer_items
+        items = [i for i in all_items if not self.is_bundle_item(i)]
         known = sum(i.total_bytes or 0 for i in items if i.total_bytes is not None)
         unknown = sum(1 for i in items if i.total_bytes is None)
         size = ("약 " + fmt_bytes(known)) + (" 이상" if unknown else "")
@@ -347,7 +475,28 @@ class FilesMixin:
         lines += ["  · " + T.ellipsize_path(i.path, 70) for i in items[:4]]
         if len(items) > 4:
             lines.append("  · " + T.TR_SELECTION_MORE.format(n=len(items) - 4))
+        lines += ["  · " + t for t in self._bundle_lines(all_items)]
         return "\n".join(lines)
+
+    # ---- 보내는 쪽 화면의 한 줄 요약/확인 문구
+    def _folders_and_size(self, items: list) -> tuple[list, str]:
+        folders = [i for i in items if not self.is_bundle_item(i)]
+        known = sum(i.total_bytes or 0 for i in folders if i.total_bytes is not None)
+        return folders, ("약 " + fmt_bytes(known)) + (" 이상" if any(i.total_bytes is None for i in folders) else "")
+
+    def tx_selection_text(self, items: list | None = None) -> str:
+        items = self.lan_send_items() if items is None else items
+        folders, size = self._folders_and_size(items)
+        text = T.TX_SELECTION.format(n=len(folders), size=size) if folders else T.TX_SELECTION_UNKNOWN.format(n=0)
+        note = self.bundle_note(items)
+        return text + (" · " + note if note else "")
+
+    def tx_confirm_text(self, target: str, items: list | None = None) -> str:
+        items = self.lan_send_items() if items is None else items
+        folders, size = self._folders_and_size(items)
+        text = T.TX_CONFIRM.format(n=len(folders), size=size, target=target)
+        lines = self._bundle_lines(items)
+        return ("\n".join(lines) + "\n\n" + text) if lines else text
 
     def files_stage(self, screen: str) -> int:
         """맨 위 단계 표시줄용: 이 화면이 '내 파일 옮기기' 4단계 흐름의 몇 번째인가(흐름 밖이면 0)."""
@@ -372,7 +521,7 @@ class FilesMixin:
         if self.is_verify_flow():
             return [s.verify_target]
         if self.has_selection():
-            return [i.path for i in self.files.transfer_items]
+            return [i.path for i in self.files.transfer_items if not self.is_bundle_item(i)]
         return [s.transfer_src]
 
     def _check_selection_paths(self, dst: str):
@@ -380,7 +529,7 @@ class FilesMixin:
         s, f = self.state, self.files
         lines: list[tuple[bool, str]] = []
         items = f.transfer_items
-        missing = [i.path for i in items if not os.path.isdir(i.path)]
+        missing = [i.path for i in items if not self.is_bundle_item(i) and not os.path.isdir(i.path)]  # 설정 묶음 임시 폴더는 시작할 때 만든다
         if not items:
             lines.append((False, T.G_FD_NEED_SELECTION))
         elif missing:
@@ -434,7 +583,8 @@ class FilesMixin:
                 "cloud_only": counts.get("cloud_only", 0), "failed": counts.get("failed", 0) + len(rep.item_errors),
                 "failures": failures, "cloud_files": cloud, "repaired": repaired, "pending": counts.get("pending_verify", 0),
                 "added": 0, "mode": "multi", "io": {}, "split": 0, "manifest_complete": True, "manifest_errors": 0,
-                "verification_complete": d.get("verification_complete"), "success": d.get("success")}
+                "verification_complete": d.get("verification_complete"), "success": d.get("success"),
+                "bundle": 1 if any(self.is_bundle_item(i) for i in self.files.transfer_items) else 0}
 
     def _start_selection_transfer(self, dry_run: bool, strict: bool, include_cloud: bool, report_path: str, write_confirmed: bool,
                                   verify_only: bool, retry_failed: bool, workers: int | None, split_large: bool) -> None:
@@ -482,9 +632,10 @@ class FilesMixin:
         junk = f.junk
 
         def work(progress, token):
-            return d.run_transfer_selection(items, s.transfer_dst, dry_run=dry_run, include_cloud=include_cloud, strict=strict,
-                                            progress=progress, cancel=token, deps=self.deps, warn=progress, progress_info=progress,
-                                            exclude_junk=junk, **extra)
+            with self.bundle_staging(items):  # 설정 묶음이 있으면 임시 폴더에 복사본을 만들고, 끝나면(실패·취소 포함) 지운다
+                return d.run_transfer_selection(items, s.transfer_dst, dry_run=dry_run, include_cloud=include_cloud, strict=strict,
+                                                progress=progress, cancel=token, deps=self.deps, warn=progress, progress_info=progress,
+                                                exclude_junk=junk, **extra)
 
         def done(rep):
             s.transfer_report, s.transfer_was_dry_run = rep, dry_run
@@ -712,12 +863,14 @@ class FilesMixin:
         f, lan = self.files, self._lan()
         junk = f.junk
         f.tx_report, f.tx_error, f.tx_error_code, f.tx_cancelled = None, "", "", False
+        f.tx_bundle = any(self.is_bundle_item(i) for i in items)
         holder: dict[str, Any] = {}
 
         def work(progress, token):
             holder["token"] = token
             try:
-                rep = lan.run_send(t, c, selection=items, options={"exclude_junk": junk}, progress_info=progress, cancel=token)
+                with self.bundle_staging(items):  # 설정 묶음이 있으면 임시 폴더에 복사본을 만들고, 끝나면(실패·취소 포함) 지운다
+                    rep = lan.run_send(t, c, selection=items, options={"exclude_junk": junk}, progress_info=progress, cancel=token)
             except LanError as e:  # 연결/코드 문제는 화면에 쉬운 문구로 보인다(오류 대화상자 대신)
                 return {"lan_error": e.code}
             return {"report": rep}
@@ -754,6 +907,8 @@ class FilesMixin:
             notes.append(T.TX_SKIPPED_NOTE.format(n=cloud_n, junk=junk_n))
         if rep.get("failed_count"):
             notes.append(T.TX_FAILED_HEAD.format(n=rep["failed_count"]))
+        if self.files.tx_bundle:
+            notes.insert(0, T.BUNDLE_RESULT_NOTE)
         notes.append(T.TX_VERIFY_NEW_PC)
         return text, ok, notes
 

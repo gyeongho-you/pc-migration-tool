@@ -9,7 +9,7 @@ from .. import state as S
 from .. import texts as T
 from ...api import unreadable_lines
 from .common import (BOLD_FONT, DANGER_BG, DANGER_FG, INFO_BG, INFO_BORDER, INFO_FG, LIST_BG, MUTED_FG, OK_FG, SUB_FONT, WARN_FG,
-                     ActionButton, BaseView, add_tooltip, bind_alt, CoverageBox,
+                     ActionButton, BaseView, ExplorerLink, add_tooltip, bind_alt, CoverageBox,
                      Collapsible, PathField, ResultSummary, ScrollBody, TreeTooltip, autowrap, clear, clean_path, make_text,
                      make_tree, open_location, set_text, sort_tree, table_hint)
 from .retry_panel import RetryPanel
@@ -97,6 +97,7 @@ class DiscoverView(BaseView):
         self.more.add_text(T.DISC_HINT)
         self.more.add_text(T.FIND_HINT)
         self.more.add_text(T.DISC_BULK_SCOPE)
+        self.more.add_text(T.OPEN_HINT)
         self.hint_label = table_hint(self.more.body)  # Space 로 선택
         self.hint_label.pack(anchor="w")
         self.find_full = self.more.add_text("")  # 설정 찾기 결과의 전체 안내(위 한 줄 요약의 나머지)
@@ -141,6 +142,10 @@ class DiscoverView(BaseView):
         self.clear_all_btn = ttk.Button(self.bulk, text=T.DISC_CLEAR_ALL, command=self._clear_all)
         self.select_all_btn.pack(side="left")
         self.clear_all_btn.pack(side="left", padx=6)
+        # 탐색기에서 보기(열거나 실행하지 않고 폴더만 보여 준다): '폴더 보기' 단추(창이 낮아도 보이는 아래 고정 줄), 줄 더블클릭(체크 칸 제외), Enter
+        self.explorer = ExplorerLink(self, self.sumrow)
+        self.explorer.button.pack(side="right")
+        self._last_toggle: tuple | None = None  # 방금 첫 클릭이 바꾼 항목(더블클릭으로 열 때 되돌린다)
         self.bulk_msg = ttk.Label(self.bulk, text="", justify="left")
         self.bulk_msg.pack(side="left", padx=6)
         for b in (self.select_all_btn, self.clear_all_btn):
@@ -164,6 +169,10 @@ class DiscoverView(BaseView):
         self.st_tree.bind("<<TreeviewSelect>>", self._show_st_detail)
         self.st_tips = TreeTooltip(self.st_tree, self._st_tip_text)
         self.st_rows: dict[str, object] = {}
+        self.explorer.attach(self.tree, lambda iid: (self.rows[iid].path, None) if iid in self.rows else None,
+                             click=self._click, undo=self._undo_toggle)
+        self.explorer.attach(self.st_tree, lambda iid: (self.st_rows[iid].path, None) if iid in self.st_rows else None,
+                             click=self._st_click, undo=self._undo_toggle_st)
         self.detail = ttk.Label(low, text="", justify="left")  # 줄을 고르면 그때만 보인다
         autowrap(self.detail)
         self.adv = Collapsible(low, T.DISC_ADV_TOGGLE, T.DISC_ADV_TOGGLE_OPEN)  # 고급 옵션(접힘)
@@ -284,6 +293,7 @@ class DiscoverView(BaseView):
         self.total.configure(text=self.c.selection_config_text())
         self.ack_var.set(self.c.state.secrets_ack)
         self.all_var.set(all_mode)
+        self.explorer.refresh()  # 표를 다시 그렸으니 '폴더 보기' 단추 상태를 맞춘다
 
     def _visible_keys(self) -> list:
         return [r.key for r in self.rows.values()]  # 메인 표만: 전체 선택은 '자체 이전 필요' 구역의 항목을 선택하지 않는다
@@ -321,6 +331,7 @@ class DiscoverView(BaseView):
         if r is not None:
             turning_on = r.key not in self.c.state.selected
             self.guarded(self.c.set_selected, r.key, turning_on)  # 막지 않는다: 안내만 띄운다
+            self._last_toggle = ("st", r.key) if (r.key in self.c.state.selected) == turning_on else None
             if turning_on and r.key in self.c.state.selected:
                 messagebox.showinfo(T.DISC_SELF_TITLE, T.DISC_SELF_CHECK.format(reason=r.self_transfer["reason"], todo=r.self_transfer["todo"]),
                                     parent=self)
@@ -355,11 +366,25 @@ class DiscoverView(BaseView):
         n = self.c.clear_all_candidates(self._visible_keys() + [r.key for r in self.st_rows.values()])  # 해제는 구역 항목도 함께(안전한 쪽)
         self.bulk_msg.configure(text=T.DISC_BULK_CLEARED.format(n=n))
 
+    def _undo_toggle(self, iid: str) -> None:
+        """줄 더블클릭으로 탐색기를 열 때, 첫 클릭이 바꾼 체크를 원래대로 되돌린다."""
+        r = self.rows.get(iid)
+        if r is not None and self._last_toggle == ("main", r.key):  # 표를 다시 그리면 줄 번호가 바뀌므로 항목 키로 비교한다
+            self._last_toggle = None
+            self.guarded(self.c.set_selected, r.key, r.key not in self.c.state.selected)
+
+    def _undo_toggle_st(self, iid: str) -> None:
+        r = self.st_rows.get(iid)
+        if r is not None and self._last_toggle == ("st", r.key):
+            self._last_toggle = None
+            self.guarded(self.c.set_selected, r.key, r.key not in self.c.state.selected)
+
     def _toggle(self, iid: str) -> None:
         r = self.rows.get(iid)
         if r is not None:
             turning_on = r.key not in self.c.state.selected
             self.guarded(self.c.set_selected, r.key, turning_on)
+            self._last_toggle = ("main", r.key) if (r.key in self.c.state.selected) == turning_on else None
             if turning_on and r.key in self.c.state.selected and self.c.is_no_config(r.key):
                 messagebox.showinfo(T.DISC_NO_CONFIG_TITLE, T.DISC_NO_CONFIG_CHECK, parent=self)  # 안내만(체크는 그대로)
 
@@ -617,7 +642,8 @@ class ExportView(BaseView):
         self.summary.pack(fill="x", pady=3)
         self.summary.box.pack_configure(pady=(3, 0))
         self.cov_fold = Collapsible(body, T.EXP_CHECK_FOLD, T.EXP_CHECK_FOLD_OPEN)  # 설정 확인표는 접어 둔다
-        self.cov = CoverageBox(self.cov_fold.body, title="")  # 끝난 뒤: 프로그램별 설정 확인표
+        self.cov = CoverageBox(self.cov_fold.body, title="",  # 끝난 뒤: 프로그램별 설정 확인표(빠진 파일 예시는 탐색기에서 볼 수 있다: 구 PC 에서만)
+                               explorer=(self.c.can_show_in_explorer, self.c.show_in_explorer))
         self.cov.title_label.pack_forget()
         self.cov.pack(fill="x")
         self.cache_note = ttk.Label(body, text="", justify="left", foreground=MUTED_FG)

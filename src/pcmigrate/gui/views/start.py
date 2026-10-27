@@ -1,4 +1,4 @@
-"""시작 화면: ① 쓰던 PC에서 준비 / ② 새 PC에서 가져오기 / ③ 큰 파일 옮기기 중 선택. 큰 버튼 3개 + 전체 순서 보기."""
+"""시작 화면: ① 쓰던 PC에서 준비 / ② 내 파일 옮기기 / ③ 새 PC에서 설치하고 가져오기 중 선택. 큰 버튼 3개 + 전체 순서 보기."""
 from __future__ import annotations
 
 import tkinter as tk
@@ -29,6 +29,7 @@ class StartView(BaseView):
         self.buttons: list[ActionButton] = []
         self.auto_buttons: list[ActionButton] = []  # '추천대로 한 번에' 보조 단추(카드마다)
         self.cards: list[tk.Frame] = []
+        self.where_labels: list[tk.Label] = []
         for i, (title, desc, btn_text, target) in enumerate(T.START_CHOICES):
             box = tk.Frame(grid, highlightbackground=INFO_BORDER, highlightthickness=1, padx=12, pady=10)
             box.grid(row=0, column=i, sticky="nsew", padx=6)
@@ -39,7 +40,11 @@ class StartView(BaseView):
             lbl = tk.Label(box, text=desc, justify="left", anchor="w", fg=MUTED_FG, font=BODY_FONT)
             lbl.pack(anchor="w", fill="x", pady=(6, 10))
             autowrap(lbl, 40)
-            flow = ("old", "new", "transfer")[i]
+            flow = ("old", "transfer", "new")[i]  # 카드 순서: ① 구 PC → ② 내 파일 옮기기 → ③ 새 PC
+            where = tk.Label(box, text=T.START_WHERE[i], anchor="w", justify="left", fg=MUTED_FG, font=BODY_FONT)
+            where.pack(side="bottom", fill="x", pady=(6, 0))  # 어느 PC 에서 하는 일인지(카드 맨 아래, 작게)
+            autowrap(where, 40)
+            self.where_labels.append(where)
             auto = ActionButton(box, text=T.BTN_AUTO, command=lambda f=flow: self.guarded(self.c.auto_run, f), kind="plain", pady=3)
             auto.pack(side="bottom", fill="x", pady=(6, 0))  # 보조 단추: 기본 단추 아래에 작게
             add_tooltip(auto, T.TIP_AUTO[flow])

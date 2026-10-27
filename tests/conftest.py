@@ -24,6 +24,13 @@ def _isolated_import_records(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(import_record, "RECORD_DIR", str(tmp_path_factory.mktemp("import-records")))
 
 
+@pytest.fixture(autouse=True)
+def _no_real_package_scan(monkeypatch):
+    """③ 첫 화면이 열릴 때의 '설정 묶음 자동 찾기'가 실제 바탕화면/드라이브를 훑지 않게 끈다(필요한 시험이 직접 켜고 가짜 위치를 넣는다)."""
+    from pcmigrate.gui.controller import Controller
+    monkeypatch.setattr(Controller, "scan_packages_on_show", False)
+
+
 def make_rules_dir(path):
     """흐름 시험용 규칙 폴더: 규칙 파일이 하나는 있어야 하고(비어 있으면 오류), 시험 프로그램과는 맞지 않는다."""
     import json

@@ -278,15 +278,30 @@ class CoverageBox(ttk.Frame):
     STATUS_TAGS = {coverage.ST_OK: OK_FG, coverage.ST_PART: WARN_FG, coverage.ST_UNREAD: DANGER_FG,
                    coverage.ST_MANUAL: INFO_FG, coverage.ST_EXCL: MUTED_FG, coverage.ST_EMPTY: MUTED_FG}
 
-    def __init__(self, parent: tk.Misc, title: str = T.COV_TITLE, max_rows: int = 8) -> None:
+    def __init__(self, parent: tk.Misc, title: str = T.COV_TITLE, max_rows: int = 8,
+                 explorer: tuple[Callable[[str, bool], bool], Callable[[str, bool], bool]] | None = None) -> None:
+        """explorer: (열 수 있는지 검사, 탐색기로 보여 주기) 함수 쌍. 주면 '빠진 파일 예시' 줄에 '탐색기에서 보기'가 생긴다(구 PC 에서만)."""
         super().__init__(parent)
         self.max_rows = max_rows
+        self.explorer = explorer
+        self.ex_paths: dict[str, tuple[str, bool] | None] = {}  # 예시 줄 -> (폴더 + 예시 이름의 절대 경로, 파일 선택) 또는 열 수 없음(None)
         self.title_label = ttk.Label(self, text=title, font=SUB_FONT)
         self.title_label.pack(anchor="w")
         cols = [("program", T.COV_COLS[0], 190), ("what", T.COV_COLS[1], 380), ("status", T.COV_COLS[2], 100),
                 ("files", T.COV_COLS[3], 70)]
         self.frame, self.tree = make_tree(self, cols, height=3)
         self.frame.pack(fill="x", pady=(2, 0))
+        self.open_btn: ActionButton | None = None
+        self.open_note: tk.Label | None = None
+        if explorer is not None:
+            self.open_row = ttk.Frame(self)
+            self.open_row.pack(fill="x", pady=(2, 0))
+            self.open_btn = ActionButton(self.open_row, text=T.BTN_OPEN_EXPLORER, kind="plain", command=self.open_example)
+            self.open_btn.pack(side="left")
+            self.open_btn.state(["disabled"])
+            add_tooltip(self.open_btn, T.TIP_OPEN_EXPLORER)
+            self.open_note = tk.Label(self.open_row, text="", anchor="w", justify="left", fg=WARN_FG)
+            self.open_note.pack(side="left", padx=(8, 0))
         for st, color in self.STATUS_TAGS.items():
             self.tree.tag_configure(st, foreground=color)
         self.full: dict[str, str] = {}
@@ -295,6 +310,9 @@ class CoverageBox(ttk.Frame):
         self.lines: set[str] = set()   # '제외 N개…' 줄(행 아래에 붙는 자식 행). 선택/눌러서 큰 파일 예시를 펼친다
         self.tree.bind("<ButtonRelease-1>", self._click_line, add="+")
         self.tree.bind("<Return>", self._key_line, add="+")
+        if explorer is not None:
+            self.tree.bind("<<TreeviewSelect>>", lambda e: self._example_selected(), add="+")
+            self.tree.bind("<Double-Button-1>", self._double_example, add="+")
         self.noext = Notice(self, "", "warn")  # 확장자 없는 파일이 빠졌을 때만 보이는 노란 안내
         self._noext_shown = False
         self.fold = Collapsible(self, T.COV_FOLD.format(n=0), T.COV_FOLD_OPEN.format(n=0))
@@ -309,6 +327,7 @@ class CoverageBox(ttk.Frame):
         clear(self.tree)
         self.full = {}
         self.lines = set()
+        self.ex_paths = {}
         self.rows_shown, self.rows_hidden = [], []
         self._set_noext(0)
         self._set_fold(0)
@@ -317,7 +336,7 @@ class CoverageBox(ttk.Frame):
         if n:
             self.noext.set(f"{T.ICON_WARN} {T.COV_NOEXT_HINT.format(n=n)}", "warn")
             if not self._noext_shown:
-                self.noext.pack(fill="x", pady=(3, 0), after=self.frame)
+                self.noext.pack(fill="x", pady=(3, 0), after=self.open_row if self.open_btn is not None else self.frame)
                 self._noext_shown = True
         elif self._noext_shown:
             self.noext.pack_forget()
@@ -340,6 +359,57 @@ class CoverageBox(ttk.Frame):
         for iid in self.tree.selection():
             if iid in self.lines:
                 self._toggle_line(iid)
+            elif iid in self.ex_paths:
+                self.open_example(iid)  # Enter: 예시 줄이면 탐색기에서 보기
+
+    # ---- 빠진 파일 예시를 탐색기로 보기(열거나 실행하지 않는다)
+    def _example_target(self, iid: str | None = None) -> tuple[str, bool] | None:
+        if iid is None:
+            sel = self.tree.selection()
+            iid = sel[0] if sel else None
+        return self.ex_paths.get(iid) if iid is not None else None
+
+    def _example_selected(self) -> None:
+        if self.open_btn is None or self.explorer is None:
+            return
+        sel = self.tree.selection()
+        on_example = bool(sel) and sel[0] in self.ex_paths
+        tgt = self._example_target() if on_example else None
+        ok = tgt is not None and self.explorer[0](tgt[0], tgt[1])
+        self.open_btn.state(["!disabled"] if ok else ["disabled"])
+        if self.open_note is not None:
+            self.open_note.configure(text=T.OPEN_NOT_HERE if on_example and not ok else "")
+
+    def open_example(self, iid: str | None = None) -> bool:
+        if self.explorer is None:
+            return False
+        tgt = self._example_target(iid)
+        if tgt is None or not self.explorer[0](tgt[0], tgt[1]):
+            if self.open_note is not None:
+                self.open_note.configure(text=T.OPEN_NOT_HERE)
+            return False
+        ok = self.explorer[1](tgt[0], tgt[1])
+        if self.open_note is not None:
+            self.open_note.configure(text="" if ok else T.OPEN_FAILED)
+        return ok
+
+    def _double_example(self, e) -> str | None:
+        iid = self.tree.identify_row(e.y)
+        if iid and iid in self.ex_paths:
+            self.tree.selection_set(iid)
+            self.open_example(iid)
+            return "break"
+        return None
+
+    @staticmethod
+    def example_abs_path(folder: str, name: str) -> tuple[str, bool] | None:
+        """설정 폴더 경로와 폴더 기준 예시 이름을 합쳐 절대 경로를 만든다. 안전한 로컬 경로를 만들 수 없으면 None(탐색기에서 볼 수 없음)."""
+        import ntpath
+        from ..explorer import clean_local_path
+        if not folder or not name or ntpath.isabs(name) or ntpath.splitdrive(name)[0]:
+            return None
+        joined = clean_local_path(ntpath.join(folder, name.replace("/", "\\")))
+        return (joined, True) if joined else None
 
     def _fit_height(self) -> None:
         n = 0
@@ -366,6 +436,10 @@ class CoverageBox(ttk.Frame):
         clear(self.tree)
         self.full = {}
         self.lines = set()
+        self.ex_paths = {}
+        if self.open_btn is not None:
+            self.open_btn.state(["disabled"])
+            self.open_note.configure(text="")
         shown, hidden = coverage.fold(table)
         self.rows_shown, self.rows_hidden = shown, hidden
         if not table:
@@ -383,6 +457,8 @@ class CoverageBox(ttk.Frame):
                 for e in r.get("excluded_examples", []):
                     ex = self.tree.insert(ln, "end", tags=("exc",), values=("", T.COV_EX_INDENT + coverage.example_text(e), "", ""))
                     self.full[ex] = coverage.example_text(e)
+                    if self.explorer is not None:
+                        self.ex_paths[ex] = self.example_abs_path(str(r.get("path") or ""), str(e.get("name") or ""))
         self.tree.configure(height=min(self.max_rows, max(2, len(shown) + len(self.lines) or 1)))
         self._set_noext(coverage.noext_total(shown))
         self.fold_list.configure(text="\n".join(f"· {r['program']} — {r['what']}" for r in hidden))
@@ -595,6 +671,106 @@ class Tooltip:
 
 def add_tooltip(widget: tk.Misc, text: str) -> Tooltip:
     return Tooltip(widget, text)
+
+
+class ExplorerLink:
+    """표의 줄을 탐색기로 '보기만' 하는 기능을 붙인다(stage34). 파일을 열거나 실행하지 않는다.
+
+    - '폴더 보기' 단추(self.button), 줄 더블클릭(체크 칸 제외), Enter 키. 체크 칸의 더블클릭은 원래대로 체크를 바꾼다.
+    - resolve(iid) -> (경로, 파일을 선택해서 보여 줄지) 또는 None. 경로는 컨트롤러가 검사한다(존재하는 로컬 디스크 경로만).
+      열 수 없으면 단추를 끄고 '이 PC에서는 열 수 없습니다' 안내(self.note)를 보인다.
+    - 표를 다시 그린 뒤에는 refresh() 를 불러 단추 상태를 맞춘다.
+    """
+
+    def __init__(self, view, button_parent: tk.Misc, text: str = "", note_parent: tk.Misc | None = None,
+                 note_pack: dict | None = None) -> None:
+        self.view, self.c = view, view.c
+        self.button = ActionButton(button_parent, text=text or T.BTN_OPEN_FOLDER, kind="plain", command=self.open_selected)
+        self.button.state(["disabled"])
+        add_tooltip(self.button, T.TIP_OPEN_EXPLORER)
+        self.note = tk.Label(note_parent or button_parent, text="", anchor="w", justify="left", fg=WARN_FG)
+        add_tooltip(self.note, T.OPEN_NOT_HERE_WHY)
+        self.note_pack = note_pack or {"side": "right", "padx": (0, 6)}
+        self._trees: dict = {}  # tree -> (resolve, click, undo, check_col)
+        self._active = None
+
+    def attach(self, tree: ttk.Treeview, resolve: Callable[[str], tuple[str, bool | None] | None], click: Callable | None = None,
+               undo: Callable[[str], None] | None = None, check_col: str | None = "#1") -> None:
+        """click: 체크 칸 더블클릭 때 두 번째 클릭을 처리(체크 바꾸기). undo: 첫 클릭이 바꾼 체크를 되돌린다(체크 칸이 아닌 곳을 더블클릭할 때)."""
+        self._trees[tree] = (resolve, click, undo, check_col)
+        tree.bind("<<TreeviewSelect>>", lambda e, t=tree: self._selected(t), add="+")
+        tree.bind("<Double-Button-1>", lambda e, t=tree: self.on_double(t, e), add="+")
+        tree.bind("<Return>", lambda e, t=tree: self.on_enter(t), add="+")
+
+    # ---- 대상
+    def target(self) -> tuple[str, bool | None] | None:
+        tree = self._active
+        if tree is None or tree not in self._trees:
+            return None
+        sel = tree.selection()
+        return self._trees[tree][0](sel[0]) if sel else None
+
+    def refresh(self) -> None:
+        """고른 줄에 맞춰 단추를 켜거나 끄고, 열 수 없으면 안내를 보인다."""
+        tgt = self.target()
+        ok = tgt is not None and self.c.can_show_in_explorer(tgt[0], tgt[1])
+        self.button.state(["!disabled"] if ok else ["disabled"])
+        self._note("" if ok or self._active is None or not self._active.selection() else T.OPEN_NOT_HERE)
+
+    def _note(self, text: str) -> None:
+        self.note.configure(text=text)
+        if text and not self.note.winfo_manager():
+            self.note.pack(**self.note_pack)
+        elif not text and self.note.winfo_manager():
+            self.note.pack_forget()
+
+    def _selected(self, tree) -> None:
+        self._active = tree
+        self.refresh()
+
+    # ---- 동작
+    def open_selected(self) -> bool:
+        return self._open(self.target())
+
+    def _open(self, tgt: tuple[str, bool | None] | None) -> bool:
+        if tgt is None:
+            return False
+        if not self.c.can_show_in_explorer(tgt[0], tgt[1]):
+            self.button.state(["disabled"])
+            self._note(T.OPEN_NOT_HERE)
+            return False
+        if not self.c.show_in_explorer(tgt[0], tgt[1]):
+            self._note(T.OPEN_FAILED)
+            return False
+        self._note("")
+        return True
+
+    def on_enter(self, tree) -> str:
+        self._active = tree
+        self.open_selected()
+        return "break"
+
+    def on_double(self, tree, event) -> str | None:
+        if tree.identify_region(event.x, event.y) != "cell":
+            return None
+        iid = tree.identify_row(event.y)
+        if not iid:
+            return None
+        resolve, click, undo, check_col = self._trees[tree]
+        if check_col is not None and tree.identify_column(event.x) == check_col:
+            if click is not None:
+                click(event)  # 체크 칸은 더블클릭도 체크 바꾸기(열지 않는다)
+            return "break"
+        tgt = resolve(iid)  # 체크를 되돌리면 표를 다시 그려 줄 번호가 바뀌므로 먼저 대상을 정해 둔다
+        self._active = tree
+        if undo is not None:
+            undo(iid)  # 첫 클릭이 바꾼 체크를 되돌린다(열기만 하고 선택은 그대로)
+        try:
+            tree.selection_set(iid)
+        except tk.TclError:
+            pass
+        self._open(tgt)
+        return "break"
 
 
 class TreeTooltip:

@@ -1,4 +1,4 @@
-"""'내 파일 옮기기'(③)의 상태와 순수 계산(stage30a). tkinter 와 무관해서 화면 없이 시험할 수 있다.
+"""'내 파일 옮기기'(②)의 상태와 순수 계산(stage30a). tkinter 와 무관해서 화면 없이 시험할 수 있다.
 
 WizardState 에 필드를 더하지 않고 이 모듈의 FilesState 를 컨트롤러가 따로 들고 있다(병합 충돌을 줄이기 위해).
 화면(views/find.py, method.py, lan_recv.py, lan_send.py)은 컨트롤러의 메서드만 부른다.
@@ -65,6 +65,8 @@ class FilesState:
     role: str = ""  # send | receive
     use_selection: bool = False  # 복사 화면이 '선택 목록' 흐름인가
     transfer_items: list = field(default_factory=list)  # 복사 화면에 넘긴 SelectedItem 목록
+    bundle_include: bool = False  # ② 첫 화면의 '설정 묶음 함께 보내기' 체크(기본 꺼짐, 자동으로 켜지 않는다)
+    tx_bundle: bool = False  # 마지막으로 보낸 목록에 설정 묶음이 들어 있었는가(결과 문구용)
     signature: str = ""
     # ---- 3/4 받는 쪽
     dest: str = ""

@@ -79,12 +79,12 @@ def find_and_pick(ctx, n=1):
 
 
 # =========================================================================== 시작 화면 / 단계 표시줄
-def test_start_card_three_opens_find_screen(ctx):
+def test_start_card_two_opens_find_screen(ctx):  # stage34: ② 카드
     v = ctx.app.views[S.START]
     assert len(v.cards) == 3
-    texts = " ".join(labels_of(v.cards[2]))
-    assert "③ 내 파일 옮기기" in texts and "자동으로 찾아서" in texts and "대용량" not in texts
-    v.buttons[2].invoke()
+    texts = " ".join(labels_of(v.cards[1]))
+    assert "② 내 파일 옮기기" in texts and "자동으로 찾아서" in texts and "대용량" not in texts
+    v.buttons[1].invoke()
     ctx.app.update()
     assert ctx.c.state.screen == S.FIND and ctx.app.current == S.FIND
     assert ctx.app.crumb.cget("text") == T.TITLES[S.FIND]

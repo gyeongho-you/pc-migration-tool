@@ -534,7 +534,7 @@ class TransferView(BaseView):
             self.result.clear()
             self.preview_box.configure(text=T.TR_PREVIEW_RESULT.format(
                 new=c.get("would_copy", 0), over=c.get("would_overwrite", 0), same=c.get("skipped_identical", 0),
-                cloud=sm["cloud_only"]))
+                cloud=sm["cloud_only"]) + (" · " + T.BUNDLE_INCLUDED if sm.get("bundle") else ""))
             self._preview_notes()
             self._focus_result()
         elif self.c.is_verify_flow() or sm["mode"] == "verify":
@@ -556,6 +556,8 @@ class TransferView(BaseView):
             else:
                 text = T.TR_RESULT.format(ok=sm["verified"], mismatch=sm["mismatch"], missing=sm["missing"], failed=sm["failed"],
                                           cloud=sm["cloud_only"]) + extra
+            if sm.get("bundle"):
+                text += " · " + T.BUNDLE_INCLUDED  # 설정 묶음 1개가 보낼 목록에 들어 있었다
             io = sm.get("io") or {}
             if io:
                 text += "\n" + T.TR_IO_LINE.format(src_files=io.get("source_files_read", 0), src_bytes=fmt_bytes(io.get("source_read_bytes", 0)),

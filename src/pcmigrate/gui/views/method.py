@@ -86,8 +86,10 @@ class MethodView(BaseView):
         self.method_var.set(f.method)
         self.role_var.set(f.role)
         n, size, unknown = c.data_total()
-        self.sub.configure(text=T.MV_SUB.format(n=n, size=("약 " + fmt_bytes(size)) + (" 이상" if unknown else ""))
-                           if n else T.MV_SUB_UNKNOWN.format(n=n))
+        note = c.bundle_note()  # '설정 묶음 1개 포함'(체크했을 때만)
+        text = (T.MV_SUB.format(n=n, size=("약 " + fmt_bytes(size)) + (" 이상" if unknown else "")) if n
+                else T.MV_SUB_BUNDLE_ONLY if note else T.MV_SUB_UNKNOWN.format(n=n))
+        self.sub.configure(text=text + (f" ({note})" if note and n else ""))
         for key, box in self.boxes.items():  # 고른 상자는 굵은 파란 테두리(배경색은 그대로: 안쪽 라디오 단추와 색이 어긋나지 않게)
             on = key == f.method
             box.configure(highlightbackground=INFO_FG if on else INFO_BORDER, highlightthickness=3 if on else 1)

@@ -10,7 +10,7 @@ from tkinter import filedialog, ttk
 
 from .. import state as S
 from .. import texts as T
-from .common import (MUTED_FG, SUB_FONT, WARN_BG, WARN_FG, ActionButton, BaseView, Collapsible, ScrollBody, TreeTooltip, add_tooltip,
+from .common import (MUTED_FG, SUB_FONT, WARN_BG, WARN_FG, ActionButton, BaseView, Collapsible, ExplorerLink, ScrollBody, TreeTooltip, add_tooltip,
                      autowrap, bind_alt, clean_path, clear, make_tree)
 
 
@@ -20,8 +20,10 @@ class FindView(BaseView):
     def __init__(self, app, controller) -> None:
         super().__init__(app, controller)
         self.navbar(back=lambda: self.c.go(S.START), next_=lambda: self.guarded(self.c.files_go_method), next_text=T.BTN_FD_NEXT)
-        self.total = ttk.Label(self, text=T.FD_TOTAL_NONE, font=SUB_FONT)  # 하단 합계(이동 막대 바로 위)
-        self.total.pack(side="bottom", anchor="w", pady=(4, 0))
+        self.total_row = ttk.Frame(self)  # 하단 합계(이동 막대 바로 위) + '폴더 보기' 단추(창이 낮아도 항상 보인다)
+        self.total_row.pack(side="bottom", fill="x", pady=(4, 0))
+        self.total = ttk.Label(self.total_row, text=T.FD_TOTAL_NONE, font=SUB_FONT)
+        self.total.pack(side="left")
         self.header(T.FD_HEADING, T.FD_SUB)
         self.add_status_card({T.TASK_FIND_DATA})
         scroll = ScrollBody(self)
@@ -31,8 +33,18 @@ class FindView(BaseView):
         body.pack(fill="both", expand=True)
         self.body = body
 
+        # ---- ① 에서 만든 설정 묶음 함께 보내기(맨 위. 묶음이 있을 때만 보이고, 기본은 체크 해제)
+        self.bundle_row = ttk.Frame(body)
+        self.bundle_var = tk.BooleanVar(value=False)
+        self.bundle_cb = ttk.Checkbutton(self.bundle_row, text="", variable=self.bundle_var, command=self._bundle_changed)
+        self.bundle_cb.pack(anchor="w")
+        self.bundle_note = ttk.Label(self.bundle_row, text=T.FD_BUNDLE_NOTE, justify="left", foreground=MUTED_FG)
+        self.bundle_note.pack(anchor="w", fill="x", padx=(24, 0))
+        autowrap(self.bundle_note, 40)
+
         # ---- 찾기 / 직접 추가
         top = ttk.Frame(body)
+        self.top_row = top
         top.pack(fill="x", pady=(2, 4))
         self.find_btn = ActionButton(top, text=T.BTN_FD_FIND, command=lambda: self.guarded(self.c.find_data_start))
         self.find_btn.pack(side="left")
@@ -75,7 +87,7 @@ class FindView(BaseView):
         self.empty = ttk.Label(body, text=T.FD_EMPTY, justify="left", foreground=MUTED_FG)
         self.empty.pack(anchor="w", fill="x")
         autowrap(self.empty)
-        self.detail = ttk.Label(body, text=T.FD_ROW_HINT, justify="left", foreground=MUTED_FG)
+        self.detail = ttk.Label(body, text=T.FD_ROW_HINT + " " + T.OPEN_HINT, justify="left", foreground=MUTED_FG)
         self.detail.pack(anchor="w", fill="x")
         autowrap(self.detail)
 
@@ -86,6 +98,12 @@ class FindView(BaseView):
         self.clear_all_btn = ttk.Button(bulk, text=T.BTN_FD_CLEAR_ALL, command=self._clear_all)
         self.select_all_btn.pack(side="left")
         self.clear_all_btn.pack(side="left", padx=6)
+        # 탐색기에서 보기(폴더 줄 더블클릭은 체크 칸 제외, Enter, '폴더 보기'): 열거나 실행하지 않고 폴더만 보여 준다
+        self.explorer = ExplorerLink(self, self.total_row)
+        self.explorer.button.pack(side="right")
+        self.explorer.attach(self.tree, lambda iid: (self.rows[iid].path, None) if iid in self.rows else None,
+                             click=self._click, undo=self._undo_toggle)
+        self._last_toggle: str | None = None
         self.bulk_msg = ttk.Label(bulk, text="", justify="left")
         self.bulk_msg.pack(side="left", padx=6)
 
@@ -155,7 +173,8 @@ class FindView(BaseView):
         self.summary.configure(text=c.data_summary_text())
         self._notice(rows)
         self.total.configure(text=c.data_total_text())
-        n_sel = c.data_total()[0]
+        self._bundle_sync()
+        n_sel = c.data_total()[0] or int(c.bundle_included())  # 설정 묶음만 보내도 된다
         self.next_btn.state(["!disabled"] if n_sel else ["disabled"])
         self.next_btn.emphasize(bool(n_sel))
         self.set_next_reason("" if n_sel else T.WHY_FD_NEED_SELECTION)
@@ -171,6 +190,25 @@ class FindView(BaseView):
             var.set(cat in f.filters)
         self._empty_text(rows)
         self._fold_sections()
+        self.explorer.refresh()
+
+    def _bundle_sync(self) -> None:
+        """① 에서 만든 설정 묶음이 있을 때만 맨 위 체크 줄을 보인다(없으면 줄 자체가 안 보인다). 체크 상태는 사용자가 바꾼 대로만."""
+        c = self.c
+        label = c.bundle_label()
+        if label:
+            self.bundle_cb.configure(text=label)
+            self.bundle_var.set(c.bundle_included())
+            if not self.bundle_row.winfo_manager():
+                self.bundle_row.pack(fill="x", pady=(2, 6), before=self.top_row)
+            self.bundle_cb.state(["disabled"] if c.state.busy else ["!disabled"])
+        elif self.bundle_row.winfo_manager():
+            self.bundle_row.pack_forget()
+            self.bundle_var.set(False)
+
+    def _bundle_changed(self) -> None:
+        self.guarded(self.c.set_bundle_included, self.bundle_var.get())
+        self.bundle_var.set(self.c.bundle_included())  # 거부되면 원래대로
 
     def _empty_text(self, rows) -> None:
         f = self.c.files
@@ -261,6 +299,15 @@ class FindView(BaseView):
     def _toggle(self, iid: str) -> None:
         r = self.rows.get(iid)
         if r is not None:
+            was = r.selected
+            self.guarded(self.c.set_data_selected, r.path, not r.selected)
+            self._last_toggle = r.path if self.rows.get(iid) is not None and self.rows[iid].selected != was else None
+
+    def _undo_toggle(self, iid: str) -> None:
+        """줄 더블클릭으로 탐색기를 열 때, 첫 클릭이 바꾼 체크를 원래대로 되돌린다."""
+        r = self.rows.get(iid)
+        if r is not None and self._last_toggle == r.path:
+            self._last_toggle = None
             self.guarded(self.c.set_data_selected, r.path, not r.selected)
 
     def _click(self, event) -> None:
@@ -277,7 +324,7 @@ class FindView(BaseView):
     def _show_basis(self, _e=None) -> None:
         sel = self.tree.selection()
         r = self.rows.get(sel[0]) if sel else None
-        self.detail.configure(text=(T.FD_BASIS.format(text=r.basis) if r is not None and r.basis else T.FD_ROW_HINT))
+        self.detail.configure(text=(T.FD_BASIS.format(text=r.basis) if r is not None and r.basis else T.FD_ROW_HINT + " " + T.OPEN_HINT))
 
     def _select_all(self) -> None:
         n = self.c.select_visible_data(True)

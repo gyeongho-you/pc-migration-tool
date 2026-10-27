@@ -1,6 +1,8 @@
 """신 PC 흐름: 설정 묶음 파일 선택 -> 검사와 미리보기 -> 복원 확인 -> 결과."""
 from __future__ import annotations
 
+import os
+import time
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
@@ -24,7 +26,16 @@ class PackageView(BaseView):
                                     on_drive=lambda root: self._browse(root))
         self.path_field.pack(fill="x")
         self.browse = self.path_field.browse_btn
+        # 이 PC 에서 찾은 설정 묶음(받은 폴더·바탕화면·다운로드·외장 드라이브, 최신 순). 찾은 것이 있을 때만 보인다. ③ 은 이 PC 안의 작업이라 연결 기능은 없다
+        self.found_row = ttk.Frame(self)
+        ttk.Label(self.found_row, text=T.PKG_FOUND_LABEL).pack(side="left")
+        self.found_var = tk.StringVar(value="")
+        self.found_box = ttk.Combobox(self.found_row, textvariable=self.found_var, state="readonly", width=60, values=[])
+        self.found_box.pack(side="left", fill="x", expand=True, padx=6)
+        self.found_box.bind("<<ComboboxSelected>>", self._found_picked)
+        self.found_entries: list[tuple[str, float, int, str]] = []
         note = ttk.Label(self, text=T.PKG_NOTE, justify="left", foreground=MUTED_FG)
+        self.note = note
         note.pack(anchor="w", fill="x", pady=10)
         autowrap(note)
         self.primary = self.next_btn
@@ -38,7 +49,26 @@ class PackageView(BaseView):
 
     def on_show(self) -> None:
         self._update()
+        self._scan_found()
         self.browse.focus_set()
+
+    def _scan_found(self) -> None:
+        """이 PC 에서 설정 묶음을 찾아 목록에 채운다(읽기만 한다). 없으면 줄 자체를 숨긴다."""
+        self.found_entries = self.c.package_choices()
+        labels = [T.PKG_FOUND_ITEM.format(name=os.path.basename(p), when=time.strftime("%Y-%m-%d %H:%M", time.localtime(m)), where=where,
+                                          folder=T.ellipsize_path(os.path.dirname(p), 40)) for p, m, _size, where in self.found_entries]
+        self.found_box.configure(values=labels)
+        self.found_var.set("")
+        if labels:
+            if not self.found_row.winfo_manager():
+                self.found_row.pack(fill="x", pady=(8, 0), before=self.note)
+        else:
+            self.found_row.pack_forget()
+
+    def _found_picked(self, _e=None) -> None:
+        idx = self.found_box.current()
+        if 0 <= idx < len(self.found_entries):
+            self.path_var.set(self.found_entries[idx][0])
 
     def _browse(self, initialdir: str | None = None) -> None:
         p = filedialog.askopenfilename(parent=self, title=T.PKG_OPEN_TITLE, initialdir=initialdir or None,
