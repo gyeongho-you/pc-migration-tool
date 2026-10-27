@@ -189,6 +189,15 @@ pcmigrate.exe transfer D:\프로젝트 E:\이전\프로젝트 --split-large --ma
 ```
 pcmigrate.exe join E:\이전\프로젝트 --output D:\Migrate\프로젝트 --manifest C:\이전기록\목록.jsonl
 ```
+구 PC: 옮길 파일을 도구가 찾아 목록으로 보기 (읽기만, 아무것도 선택하지 않음)
+```
+pcmigrate.exe find-data --output-selection C:\이전기록\선택.json
+```
+선택.json 에서 옮길 폴더의 include 를 true 로 바꾼 뒤, 여러 폴더를 한 번에 복사 (대상 아래 D\폴더 구조 그대로)
+```
+pcmigrate.exe transfer --from-selection C:\이전기록\선택.json E:\이전 --exclude-junk --manifest-out C:\이전기록\목록.jsonl
+```
+--exclude-junk 는 Thumbs.db, desktop.ini, ~$ Office 잠금, *.tmp, CAD 잠금(*.dwl 등)을 복사하지 않습니다(기본은 제외 안 함). *.bak 와 Revit 백업 사본은 기본으로 복사하며, --exclude-backup-copies 를 더하면 Revit 백업 사본도 뺍니다. find-data 는 Windows, Program Files, AppData, 휴지통을 자동으로 뺍니다. OneDrive 클라우드 전용 파일은 내려받지 않고 개수만 따로 셉니다.
 원본을 건드리는 robocopy 옵션(/MIR, /PURGE, /MOV)은 이 도구가 쓰지 않습니다. 복사가 끝나면 대상 폴더에 .pcmigrate-state.json과 로그 파일이 남습니다. 외장 2단계(--use-manifest)와 랜선 1단계(--manifest-out)는 화면의 단계 안내를 따르는 편이 안전합니다.
 **이 도구의 exe는 서명이 없습니다.** 처음 실행하면 "Windows의 PC 보호" 창이 뜰 수 있습니다. 받은 빌드와 함께 전달받은 SHA-256 값이 아래 명령 결과와 같은지 확인한 뒤 "추가 정보, 실행"을 누르세요.
 ```

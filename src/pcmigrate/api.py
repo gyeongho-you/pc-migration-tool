@@ -276,7 +276,7 @@ def run_transfer(src: str | Path, dst: str | Path, *, dry_run: bool = False, inc
                  chunk: int | None = None, keep_awake: bool = True, manifest_out: str | Path | None = None,
                  use_manifest: str | Path | None = None, verify_dest: bool | None = None,
                  copy_mode: str = "restartable", copy_threads: int | None = None,
-                 split_large: bool = False) -> Report:
+                 split_large: bool = False, exclude_junk: bool = False, junk_backup_copies: bool = False) -> Report:
     """대용량 전송. TransferError/OSError 는 그대로 전파한다. 취소하면 Cancelled(진행 상태는 저장됨).
 
     기본값이 아닌 인자만 하위 함수로 넘기므로 이전 호출 형태가 그대로 동작한다.
@@ -306,6 +306,11 @@ def run_transfer(src: str | Path, dst: str | Path, *, dry_run: bool = False, inc
         kw["copy_threads"] = copy_threads
     if split_large:  # 4GB 넘는 파일을 조각(.pcm001...)으로 나눠 저장(켠 경우에만 넘긴다)
         kw["split_large"] = True
+    if junk_backup_copies and not exclude_junk:
+        raise ApiError("백업 사본 제외(junk_backup_copies)는 정크 제외(exclude_junk)와 함께만 쓸 수 있습니다")
+    if exclude_junk:  # 임시/잠금/캐시 파일 제외(junk.py 의 목록). 꺼져 있으면 아무것도 넘기지 않는다
+        from .junk import make_spec
+        kw["junk_spec"] = make_spec(include_backup_copies=junk_backup_copies)
     return deps.transfer(Path(src), Path(dst), **kw)
 
 

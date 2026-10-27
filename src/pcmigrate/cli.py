@@ -27,6 +27,7 @@ from .discover import summarize
 from .package import export_package, plan_import, retry_failed_export
 from .rules import default_rules_dir
 from .transfer import TransferError, transfer
+from . import data_api, find_data as fd, multi_transfer
 
 
 def _deps() -> Deps:
@@ -235,6 +236,14 @@ def _cmd_transfer(args: argparse.Namespace) -> int:
     def warn(msg: str) -> None:
         _err(f"[경고] {msg}")
 
+    if args.from_selection:
+        return _cmd_transfer_selection(args)
+    if args.dst is None:
+        _err("대상 폴더가 필요합니다: pcmigrate transfer <원본 폴더> <대상>  (여러 폴더는 --from-selection <선택 파일> <대상>)")
+        return 2
+    if args.exclude_backup_copies and not args.exclude_junk:
+        _err("--exclude-backup-copies 는 --exclude-junk 와 함께만 쓸 수 있습니다")
+        return 2
     if _unexpanded(src=args.src, dst=args.dst, report=args.report, log=args.log, state_file=args.state_file,
                    manifest_out=args.manifest_out, use_manifest=args.use_manifest):
         return 1
@@ -253,7 +262,8 @@ def _cmd_transfer(args: argparse.Namespace) -> int:
                               chunk=_chunk_bytes(args.chunk_mb), keep_awake=not args.no_keep_awake,
                               manifest_out=args.manifest_out, use_manifest=args.use_manifest,
                               verify_dest=args.verify_dest, copy_mode=args.copy_mode,
-                              copy_threads=args.copy_threads, split_large=args.split_large)
+                              copy_threads=args.copy_threads, split_large=args.split_large,
+                              exclude_junk=args.exclude_junk, junk_backup_copies=args.exclude_backup_copies)
     except ApiError as e:
         return _fail(e)
     except TransferError as e:
@@ -311,6 +321,102 @@ def _cmd_transfer(args: argparse.Namespace) -> int:
     elif args.clean_state:
         _err("[정리] 검사가 끝나지 않았거나 실패가 있어 기록 파일을 지우지 않았습니다.")
     return 1 if report.failures else 0
+
+
+def _size_arg(text: str) -> int:
+    import re as _re
+    m = _re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*(B|KB|MB|GB|TB)?\s*", text, _re.I)
+    if not m:
+        raise argparse.ArgumentTypeError(f"크기를 100MB, 1GB 처럼 입력하세요(입력: {text!r})")
+    return int(float(m.group(1)) * 1024 ** {"B": 0, "KB": 1, "MB": 2, "GB": 3, "TB": 4}[(m.group(2) or "B").upper()])
+
+
+def _cmd_find_data(args: argparse.Namespace) -> int:
+    if _unexpanded(output_selection=args.output_selection, **{f"roots{i}": r for i, r in enumerate(args.roots or [])}):
+        return 1
+    cats = [c.strip() for c in args.categories.split(",") if c.strip()]
+    try:
+        res = data_api.run_find_data(args.roots, categories=cats, min_size=args.min_size, max_depth=args.max_depth,
+                                     time_limit=args.time_limit, include_removable=args.include_removable,
+                                     progress=_cli_progress(), output_selection=args.output_selection)
+    except ApiError as e:
+        return _fail(e)
+    except OSError as e:
+        return _write_failed(args.output_selection or "", e)
+    if args.json:
+        _json_out(res.to_dict())
+    else:
+        _print_lines(fd.summary_lines(res))
+    if args.output_selection:
+        _err(f"[선택 파일] {args.output_selection} 를 저장했습니다. 옮길 폴더의 include 를 true 로 바꾼 뒤: "
+             "pcmigrate transfer --from-selection <선택 파일> <대상>")
+    return 0
+
+
+def _cmd_transfer_selection(args: argparse.Namespace) -> int:
+    """transfer --from-selection: src 자리의 인자가 대상이다."""
+    def warn(msg: str) -> None:
+        _err(f"[경고] {msg}")
+
+    if args.dst is not None:
+        _err("--from-selection 을 쓸 때는 원본 폴더를 적지 않고 대상만 적습니다: pcmigrate transfer --from-selection 선택.json <대상>")
+        return 2
+    dst = args.src
+    if args.exclude_backup_copies and not args.exclude_junk:
+        _err("--exclude-backup-copies 는 --exclude-junk 와 함께만 쓸 수 있습니다")
+        return 2
+    if args.log or args.state_file or args.use_manifest:
+        _err("--from-selection 에서는 --log/--state-file/--use-manifest 를 쓸 수 없습니다(폴더마다 대상 폴더 안에 기록합니다)")
+        return 2
+    if _unexpanded(selection=args.from_selection, dst=dst, report=args.report, manifest_out=args.manifest_out):
+        return 1
+    if not (args.dry_run or args.verify_only):
+        _err(*PRECHECK_LINES)
+    try:
+        rep = data_api.run_transfer_selection(
+            args.from_selection, dst, dry_run=args.dry_run, include_cloud=args.include_cloud, strict=args.strict, warn=warn,
+            deps=_deps(), progress=_cli_progress(), progress_info=_cli_hint(), verify_only=args.verify_only,
+            retry_failed=args.retry_failed, workers=args.workers, chunk=_chunk_bytes(args.chunk_mb),
+            keep_awake=not args.no_keep_awake, manifest_out=args.manifest_out, verify_dest=args.verify_dest,
+            copy_mode=args.copy_mode, copy_threads=args.copy_threads, split_large=args.split_large,
+            exclude_junk=args.exclude_junk, junk_backup_copies=args.exclude_backup_copies, skip_done=args.skip_done_items)
+    except ApiError as e:
+        return _fail(e)
+    except TransferError as e:
+        _err(f"전송 실패: {e}")
+        return 1
+    except ManifestError as e:
+        _err(f"해시 목록 오류: {e}")
+        return 1
+    except OSError as e:
+        return _write_failed(dst, e)
+    if args.report:
+        try:
+            rep.write(Path(args.report))
+        except OSError as e:
+            return _write_failed(args.report, e)
+    d = rep.to_dict()
+    if args.json:
+        keys = ("dry_run", "mode", "summary", "total_items", "items_ok", "items_failed", "failed_count", "total_files",
+                "total_bytes", "cloud_only_count", "verification_complete", "success", "dropped", "junk_excluded",
+                "required_bytes", "dest_free_bytes", "manifest_out")
+        out = {k: d.get(k) for k in keys}
+        out["items"] = [{k: i.get(k) for k in ("src", "dest", "status", "failed_count", "total_files", "total_bytes", "error")}
+                        for i in d["items"]]
+        _json_out(out)
+    else:
+        _print_lines(multi_transfer.summary_lines(rep, dst))
+    if d.get("manifest_out"):
+        _err(f"[목록] 합친 해시 목록을 저장했습니다: {d['manifest_out']} (파일 {d.get('manifest_files', 0):,}개). "
+             "새 PC 에서: pcmigrate verify --manifest <목록> --target <대상 폴더>")
+    for _it, r in rep.failures[:50]:
+        _err(f"실패: {r.src} -> {r.error}")
+    if args.clean_state and not rep.dry_run and not rep.failed_total and d.get("verification_complete"):
+        n = sum(len(clean_state_files(i.dest)) for i in rep.items)
+        _err(f"[정리] 기록 파일 {n}개를 지웠습니다. 복사한 데이터는 그대로입니다.")
+    elif args.clean_state:
+        _err("[정리] 검사가 끝나지 않았거나 실패가 있어 기록 파일을 지우지 않았습니다.")
+    return 1 if rep.failed_total else 0
 
 
 def _cmd_join(args: argparse.Namespace) -> int:
@@ -844,8 +950,8 @@ def build_parser() -> argparse.ArgumentParser:
     w.set_defaults(func=_cmd_winget_extract)
 
     t = sub.add_parser("transfer", help="모드 B: 대용량 폴더를 robocopy 로 전송 + SHA-256 검증")
-    t.add_argument("src", type=_path_arg, help="원본 폴더(읽기만 함)")
-    t.add_argument("dst", type=_path_arg, help="대상(로컬/외장 드라이브/UNC 경로)")
+    t.add_argument("src", type=_path_arg, help="원본 폴더(읽기만 함). --from-selection 을 쓰면 이 자리에 대상 하나만 적습니다")
+    t.add_argument("dst", type=_path_arg, nargs="?", help="대상(로컬/외장 드라이브/UNC 경로)")
     t.add_argument("--report", type=_path_arg, help="결과 리포트(JSON) 저장 경로")
     t.add_argument("--log", type=_path_arg, help="robocopy 로그 경로(기본: 대상 폴더 안 .pcmigrate-robocopy.log)")
     t.add_argument("--state-file", type=_path_arg, help="이어받기 진행 상태 파일 경로(기본: 대상 폴더 안 .pcmigrate-state.json)")
@@ -876,7 +982,29 @@ def build_parser() -> argparse.ArgumentParser:
     t.add_argument("--json", action="store_true", help="사람이 읽는 요약 대신 JSON 으로 출력")
     t.add_argument("--clean-state", action="store_true",
                    help="전송 성공 + 검사 통과 뒤에 대상 폴더의 기록 파일(.pcmigrate-*)을 자동으로 지운다(복사한 데이터는 그대로)")
+    t.add_argument("--exclude-junk", action="store_true",
+                   help="Thumbs.db, desktop.ini, ~$ Office 잠금, *.tmp, CAD 잠금(*.dwl 등), 휴지통 등 다시 만들어지는 임시/잠금 파일을 복사하지 않음"
+                        "(기본은 제외 안 함). 제외한 개수/용량을 결과에 표시. 목록과 근거는 junk.py")
+    t.add_argument("--exclude-backup-copies", action="store_true",
+                   help="--exclude-junk 와 함께: Revit 백업 사본(이름.0001.rvt), *_backup 폴더, Rhino *.3dmbak, SketchUp *.skb 도 제외(기본은 포함해 복사)")
+    t.add_argument("--from-selection", type=_path_arg, metavar="선택파일",
+                   help="find-data 가 만든 선택 파일(include:true 인 폴더 여러 개)을 <대상>\\<드라이브 문자>\\<경로> 구조로 한 번에 전송. 이 경우 src 자리에 대상만 적음")
+    t.add_argument("--skip-done-items", action="store_true",
+                   help="--from-selection: 지난 실행에서 끝난 폴더는 다시 확인하지 않고 건너뜀(기본은 모든 폴더를 다시 확인하며 파일 단위로 이어받음)")
     t.set_defaults(func=_cmd_transfer)
+
+    fdp = sub.add_parser("find-data", help="내 파일 자동 찾기: 고정 드라이브를 읽기 전용으로 훑어 도면/사진/영상/문서 폴더 후보 목록을 보여 줌")
+    fdp.add_argument("--roots", nargs="+", type=_path_arg, metavar="폴더", help="훑을 폴더/드라이브(기본: 모든 고정 드라이브)")
+    fdp.add_argument("--include-removable", action="store_true", help="이동식 드라이브도 훑음(기본은 고정 드라이브만. 옮길 대상 외장 드라이브가 섞이지 않게 주의)")
+    fdp.add_argument("--categories", default=",".join(fd.DEFAULT_CATEGORIES),
+                     help="후보 조건에 쓸 분류(쉼표): design,photo,video,doc,archive,other (기본 design,photo,video,doc,archive)")
+    fdp.add_argument("--min-size", type=_size_arg, default=0, metavar="크기", help="이보다 작은 후보 숨김(예: 100MB, 1GB)")
+    fdp.add_argument("--max-depth", type=_int_range(1, 12), default=4, help="후보 폴더를 묶는 최대 깊이(기본 4)")
+    fdp.add_argument("--time-limit", type=_int_range(5, 86400), metavar="초", help="이 시간(초)이 넘으면 그때까지 찾은 것만 보여 줌")
+    fdp.add_argument("--json", action="store_true", help="사람이 읽는 요약 대신 JSON 으로 출력")
+    fdp.add_argument("--output-selection", type=_path_arg, metavar="파일",
+                     help="선택 파일(JSON)을 저장. 모든 폴더가 include:false 로 시작하므로 옮길 것만 true 로 바꾼 뒤 transfer --from-selection 에 사용")
+    fdp.set_defaults(func=_cmd_find_data)
 
     j = sub.add_parser("join", help="--split-large 로 나눠 저장된 조각(.pcm001 ...)을 원래 파일로 합친다(조각은 읽기만 함)")
     j.add_argument("src", type=_path_arg, help="조각이 있는 폴더(하위 폴더 포함) 또는 첫 조각 파일(.pcm001)")

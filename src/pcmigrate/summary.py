@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from . import coverage, fs
+from .junk import summary_line as junk_summary_line
 from .progress import fmt_bytes
 
 _IMPORT_LABELS = (("would_copy", "새로 만듦"), ("would_overwrite", "덮어씀(.bak 으로 백업)"),
@@ -199,6 +200,7 @@ def transfer_lines(d: dict, rep, src: str, dst: str) -> list[str]:
                 f"덮어쓰기 전 .bak 보존 {counts.get('would_overwrite', 0)}개, 이미 같음 {counts.get('skipped_identical', 0)}개",
                 *( [f"- OneDrive 클라우드 전용(건너뜀) {d['cloud_only_count']}개"] if d.get("cloud_only_count") else []),
                 *split_line(d, False),
+                *junk_summary_line(d),
                 "다음 할 일: 이상 없으면 같은 명령에서 --dry-run 만 빼고 실행하세요."]
     mode = d.get("mode")
     verb = {"verify-only": "검사를 마쳤습니다", "retry-failed": "실패한 파일을 다시 처리했습니다"}.get(mode, "전송을 마쳤습니다")
@@ -209,6 +211,7 @@ def transfer_lines(d: dict, rep, src: str, dst: str) -> list[str]:
              + f", 실패 {bad}개"
              + (f", 클라우드 전용 건너뜀 {counts.get('cloud_only', 0)}개" if counts.get("cloud_only") else "")]
     lines += split_line(d, True)
+    lines += junk_summary_line(d)
     trusted = d.get("trusted_state_files")
     if trusted and not d.get("strict"):
         lines.append(f"- 이전 검사 기록을 믿고 다시 읽지 않은 파일 {trusted}개(크기·수정시각이 같음). "
