@@ -54,6 +54,10 @@ REASON_TEXT = {
 }
 
 
+NEED_ADMIN_UNDO = ("프로그램 설치 폴더에 쓸 수 있는 권한이 없어 되돌리지 못했습니다. 관리자 권한으로 프로그램을 다시 실행해 "
+                   "되돌리기를 다시 하세요(이 파일은 그대로 남아 있습니다)")
+
+
 class RecordError(ValueError):
     """복원 기록 파일이 없거나 형식이 올바르지 않음."""
 
@@ -88,6 +92,8 @@ def build_record(package: str | Path, plan, report: Report, now: Callable[[], da
              "base_dir": it.get("base_dir", ""), "backup": fs.plain_path_text(r.backup) if r.backup else "",
              "backup_size": 0, "backup_sha256": "", "new_size": r.size, "new_sha256": r.sha256,
              "undone": False, "undone_at": "", "undo_action": ""}
+        if it.get("install"):  # 설치 폴더 설정(Program Files 등): 되돌릴 때 관리자 권한이 필요할 수 있다
+            e["install"] = True
         if r.backup:
             try:
                 e["backup_size"] = os.stat(fs.long_path(r.backup)).st_size
@@ -278,6 +284,8 @@ def apply_undo(rec: dict, plan: UndoPlan, now: Callable[[], datetime] = _now) ->
                 e["undone"], e["undone_at"], e["undo_action"] = True, removed_stamp, it.result
             except OSError as ex:
                 it.result, it.detail = FAILED_UNDO, f"{type(ex).__name__}: {ex.strerror or ex}"
+                if e.get("install") and isinstance(ex, PermissionError):  # 설치 폴더는 관리자 권한이 없으면 되돌릴 수 없다: 쉬운 안내
+                    it.detail = NEED_ADMIN_UNDO + " (" + it.detail + ")"
     finally:
         try:
             _write_json(Path(plan.record_path), rec)

@@ -30,6 +30,9 @@ from .rules import Rule
 Expand = Callable[[str], str]
 CERTAIN, PROBABLE, NONE = "확실", "추정", "없음"
 SELECTION_FORMAT = 1
+CONFIG_YES, CONFIG_NONE, CONFIG_UNKNOWN = "있음", "없음", "확인 안 됨"  # Candidate.config_check 값(있음은 뒤에 ' N개')
+NO_CONFIG_LINE = ("설정 파일로 보이는 파일이 없습니다(폴더 용량 {size}는 설정 형식이 아닌 파일입니다. "
+                  "필요하면 --extra-mode all)")
 MAX_LINKED_NAMES = 5
 SECRET_SAMPLES = 5
 
@@ -75,6 +78,30 @@ class Candidate:
     config_limit_files: int | None = None  # 상한을 넘어 빠질 파일 수
     config_ext_counts: dict = field(default_factory=dict)
     config_complete: bool = False  # False 면 시간 상한에 걸려 '이상'(또는 계산하지 않음)
+    install_program: str = ""  # 설치 폴더 설정 파일 후보(프로그램 설치 폴더 안의 파일 하나)면 그 프로그램 이름. 이때 root 는 %ProgramFiles% 등 토큰, rel 은 루트 기준 파일 경로
+    install_folder: str = ""   # 위 후보의 루트 기준 프로그램 폴더(posix)
+
+    @property
+    def is_install(self) -> bool:
+        return bool(self.install_program)
+
+    @property
+    def no_config_found(self) -> bool:
+        """설정 형식 파일이 하나도 없고(상한으로 빠진 것도 없음), 그 계산이 시간 상한 없이 끝났다. 계산하지 않았거나 못 끝냈으면 False."""
+        return (not self.is_install and not self.license_only and self.config_files == 0 and not (self.config_limit_files or 0)
+                and self.config_complete)
+
+    @property
+    def config_check(self) -> str:
+        """설정 파일 유무 판정 문자열: '있음 N개' / '없음' / '확인 안 됨'(계산 전이거나 시간 상한에 걸려 0개로 단정할 수 없음).
+        '없음'은 이 폴더 안에 허용 방식 기준 설정 형식 파일이 하나도 없다는 뜻이다(폴더 용량은 설정 형식이 아닌 파일의 것)."""
+        if self.is_install:
+            return f"{CONFIG_YES} 1개"  # 설치 폴더 설정 후보는 설정 형식 파일 하나 자체다
+        if self.license_only or self.config_files is None:
+            return CONFIG_UNKNOWN
+        if self.config_files > 0 or (self.config_limit_files or 0) > 0:
+            return f"{CONFIG_YES} {self.config_files}개"
+        return CONFIG_NONE if self.config_complete else CONFIG_UNKNOWN
 
     @property
     def key(self) -> tuple[str, str]:
@@ -518,6 +545,8 @@ def to_dict(d: Discovery, show_all: bool = False) -> dict:
     def cdict(c: Candidate) -> dict:
         x = asdict(c)
         x["secret_risk"] = bool(c.secret)
+        x["no_config_found"] = c.no_config_found
+        x["config_check"] = c.config_check
         return x
     out = {
         "programs_without_rule": [{"name": e.program.name, "version": e.program.version,
@@ -591,11 +620,14 @@ def render(d: Discovery, fmt: str = "text", show_all: bool = False) -> str:
 
 def build_selection(d: Discovery, show_all: bool = False) -> dict:
     """후보 템플릿(모두 include:false). 사용자가 포함할 항목만 true 로 바꾼다."""
-    cands = d.candidates()
+    from .install_dir import SELECTION_KEY as INSTALL_KEY
+    all_cands = d.candidates()
+    cands = [c for c in all_cands if not c.is_install]
+    installs = [c for c in all_cands if c.is_install]  # 설치 폴더 설정 후보: 별도 목록(이전 버전은 이 키를 무시하므로 호환)
     if show_all:
         seen = {c.key for c in cands}
         cands += [c for c in d.unlinked + d.rule_linked if c.key not in seen]
-    return {
+    sel = {
         "format": SELECTION_FORMAT,
         "created": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "note": "포함할 항목의 include 를 true 로 바꾸세요. secret 이 있는 항목은 export --allow-secrets 가 필요합니다. "
@@ -608,6 +640,14 @@ def build_selection(d: Discovery, show_all: bool = False) -> dict:
             **({"license_only": True, "include": False} if c.license_only else {}),
         } for c in cands],
     }
+    if installs:
+        sel[INSTALL_KEY] = [{
+            "include": False, "kind": "install_dir", "program": c.install_program, "root": c.root, "folder": c.install_folder,
+            "rel": c.rel, "path": c.path, "size": c.size, "secret": c.secret, "requires_allow_secrets": bool(c.secret),
+        } for c in installs]
+        sel["note"] += (" install_dir 는 프로그램 설치 폴더(Program Files 등) 안의 설정 파일입니다. 복원할 때 관리자 권한과 같은 버전의 "
+                        "프로그램이 필요하며, 복원은 기본으로 꺼져 있습니다(import --allow-install-dir).")
+    return sel
 
 
 @dataclass

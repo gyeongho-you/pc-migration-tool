@@ -363,7 +363,8 @@ PREV_PROBLEMS = f"{ICON_FAIL} 설정 묶음 파일에 문제가 있어 복원할
 PREV_OK = f"{ICON_OK} 검사 통과(모든 파일 내용이 정확함)"
 PREV_COLS = ("처리", "복원 위치", "백업 파일(.bak) 위치", "구분")
 PREV_STATUS = {"would_copy": "새로 만듦", "would_overwrite": "덮어씀(백업함)", "skipped_identical": "같음(건너뜀)",
-               "rejected": "복원 안 함(링크)", "denied": "복원 안 함(보안)"}
+               "rejected": "복원 안 함(링크)", "denied": "복원 안 함(보안)",
+               "missing_dir": "복원 안 함(폴더 없음)", "missing_program": "복원 안 함(프로그램 없음)"}
 PREV_DENIED_NOTE = f"{ICON_WARN} 보안상 복원하지 않는 형식 {{n}}개 · 나머지는 복원됩니다"
 PREV_REJECTED_NOTE = (f"{ICON_WARN} 복원 위치가 바로가기(정션/링크)를 거치는 파일 {{n}}개는 복원되지 않습니다. "
                       "링크를 없애거나 실제 폴더로 바꾼 뒤 다시 시도해 주세요(링크 너머에는 쓰지 않습니다).")
@@ -1030,6 +1031,26 @@ G_STAGE_UNSUPPORTED = "이 버전에서는 임시 파일 위치를 바꿀 수 �
 PREV_GIT_NOTE = f"{ICON_WARN} Git 설정 파일에 명령 실행 설정이 들어 있을 수 있으니 복원 전에 내용을 확인해 주세요"
 RES_GIT_NOTE = f"{ICON_WARN} 복원한 Git 설정 파일에 명령 실행 설정이 들어 있을 수 있으니 내용을 확인해 주세요"
 
+# 설치 폴더 설정(프로그램 설치 폴더 안의 설정 파일): 찾기 결과에서는 체크 가능한 후보, 신 PC 복원은 기본 꺼짐
+BADGE_INSTALL_DIR = "설치 폴더 설정"
+DISC_INSTALL_BADGE_FULL = "설치 폴더 설정 · 복원 시 관리자 권한과 같은 버전의 프로그램이 필요합니다"
+DISC_DETAIL_INSTALL = ("\n프로그램 설치 폴더 안의 설정 파일입니다. 복원할 때 관리자 권한과 같은 버전의 프로그램이 필요하며, "
+                       "새 PC에서는 직접 켜기 전까지 복원하지 않습니다.")
+FIND_INSTALL_CANDIDATES = "설치 폴더 안의 설정 형식 파일 {n}개를 표에 더했습니다(체크한 것만 담습니다, 자동 선택은 하지 않습니다): {names}"
+FIND_INSTALL_MORE = " 개수 상한으로 {k}개는 뺐습니다."
+FIND_INSTALL_EXCLUDED = " 크기 상한(5MB)을 넘어 뺀 파일 {k}개."
+G_INSTALL_UNSUPPORTED = "이 버전에서는 설치 폴더 설정을 쓸 수 없습니다. 해당 항목의 선택을 해제하고 다시 시도해 주세요."
+PREV_KIND_INSTALL = "설치 폴더 설정"
+PREV_INSTALL_CHECK = "설치 폴더 설정도 복원(관리자 권한 필요)"
+PREV_INSTALL_OFF = ("{icon} 설치 폴더 설정 {n}개 — 복원하려면 아래 [설치 폴더 설정도 복원]을 체크해 주세요(관리자 권한 필요). "
+                    "지금은 복원하지 않습니다.")
+PREV_INSTALL_ON = "{icon} 설치 폴더 설정 {n}개도 복원합니다(관리자 권한 필요). 덮어쓰는 파일은 백업 파일(.bak)로 남습니다."
+PREV_INSTALL_MISSING = "{icon} 대상 프로그램 폴더가 없어 건너뛰는 설치 폴더 설정 {k}개 — 먼저 프로그램을 설치한 뒤 다시 복원해 주세요."
+PREV_INSTALL_VERSION = "{icon} 이 설정 파일은 같은 버전의 프로그램에서 가져온 것입니다. 버전이 다르면 프로그램이 오작동할 수 있습니다."
+PREV_INSTALL_VERSION_DIFF = "{icon} {name}: 구 PC 버전 {old}, 이 PC 버전 {new} — 버전이 달라 오작동할 수 있습니다."
+PREV_INSTALL_NOT_RESTORED = "복원 안 함(설치 폴더)"
+CONF_INSTALL_INFO = "설치 폴더 설정 {n}개도 복원합니다(관리자 권한으로 실행 중이어야 합니다)."
+
 
 def roadmap_lines(marks=frozenset(), markdown: bool = False) -> list[str]:
     """전체 이전 순서를 줄 목록으로 만든다. 화면 도움말과 README 가 같은 원본(ROADMAP_*)에서 나오게 한다."""
@@ -1129,6 +1150,13 @@ DISC_CFG_COUNT = "{n}개"
 DISC_CFG_COUNT_MORE = "{n}개 이상"
 DISC_SIZE_FOLDER = "폴더 {size}"
 DISC_CFG_TIP_UNKNOWN = "설정 파일 수는 '이 프로그램 설정 찾기'를 누르면 계산됩니다. 그 전에는 폴더 전체 크기만 보여 줍니다."
+DISC_CFG_NONE = "없음"
+DISC_NO_CONFIG_TITLE = "안내"
+DISC_NO_CONFIG_DETAIL = "설정 파일로 보이는 파일이 없습니다. 폴더 {size} 는 설정이 아닌 파일입니다."
+DISC_NO_CONFIG_CHECK = ("담을 설정 파일이 없습니다. 폴더 전체 담기를 켜면 담을 수 있습니다. "
+                        "(체크는 되지만 지금 방식으로는 담기는 파일이 0개입니다)")
+FIND_NO_CONFIG = "설정 파일로 보이는 파일이 없습니다. 찾은 폴더 {size} 는 설정이 아닌 파일입니다."
+FIND_NO_CONFIG_INSTALL = " 설치 폴더 안에도 설정 형식 파일이 없습니다."
 DISC_EXCLUDED_TIP = "제외: 설정 형식이 아니거나 캐시라서 담지 않는 파일의 용량입니다."
 DISC_TOTAL_V2 = "선택 {n}개 · 설정 파일 {files}개 · 약 {size}"
 DISC_TOTAL_V2_ALL = "선택 {n}개 · 폴더 전체 파일 {files}개 · 약 {size}"

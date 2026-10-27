@@ -118,6 +118,7 @@ class DiscoverView(BaseView):
         frame.pack(fill="x", pady=(4, 0))
         self.tree.tag_configure("secret", background=DANGER_BG, foreground=DANGER_FG)
         self.tree.tag_configure("weak", foreground=WARN_FG)
+        self.tree.tag_configure("noconfig", foreground="#767676")  # 설정 파일 없음: 회색
         self.tree.bind("<Button-1>", self._click)
         self.tree.bind("<space>", self._key_toggle)
         self.tree.bind("<<TreeviewSelect>>", self._show_detail)
@@ -223,7 +224,7 @@ class DiscoverView(BaseView):
         if r is None:
             return ""
         cell = self.cells.get(iid, {})
-        return {1: ", ".join(r.secret), 2: f"{r.programs} ({r.grade})", 3: r.path, 4: cell.get("tip", ""),
+        return {1: ", ".join(r.secret) or r.badge_note, 2: f"{r.programs} ({r.grade})", 3: r.path, 4: cell.get("tip", ""),
                 6: T.DISC_EXCLUDED_TIP}.get(col, "")
 
     def _refresh(self) -> None:
@@ -239,6 +240,8 @@ class DiscoverView(BaseView):
             warn = T.DISC_WARN_SECRET if r.secret else (r.badge or (T.DISC_WARN_WEAK if r.weak else ""))
             tags = ("secret",) if r.secret else (("weak",) if r.weak else ())
             cell = cells.get(r.key, {"cfg": T.DISC_CFG_UNKNOWN, "size": "-", "excl": "-", "tip": ""})
+            if cell.get("none") and not r.secret:
+                tags = ("noconfig",)
             iid = self.tree.insert("", "end", values=(mark, warn, r.programs, T.ellipsize_path(r.path), cell["cfg"], cell["size"],
                                                       cell["excl"]), tags=tags)
             self.rows[iid] = r
@@ -281,7 +284,10 @@ class DiscoverView(BaseView):
     def _toggle(self, iid: str) -> None:
         r = self.rows.get(iid)
         if r is not None:
-            self.guarded(self.c.set_selected, r.key, r.key not in self.c.state.selected)
+            turning_on = r.key not in self.c.state.selected
+            self.guarded(self.c.set_selected, r.key, turning_on)
+            if turning_on and r.key in self.c.state.selected and self.c.is_no_config(r.key):
+                messagebox.showinfo(T.DISC_NO_CONFIG_TITLE, T.DISC_NO_CONFIG_CHECK, parent=self)  # 안내만(체크는 그대로)
 
     def _click(self, event) -> None:
         iid = self.tree.identify_row(event.y)

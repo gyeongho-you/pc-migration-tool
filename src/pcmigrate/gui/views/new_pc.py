@@ -70,6 +70,9 @@ class PreviewView(BaseView):
         self.summary = ttk.Label(self, text="", justify="left", font=SUB_FONT)
         self.summary.pack(anchor="w", fill="x")
         autowrap(self.summary)
+        # 설치 폴더 설정(있을 때만 보임): 기본은 복원 안 함. 체크하면 미리보기를 다시 만든다
+        self.install_var = tk.BooleanVar(value=False)
+        self.install_check = ttk.Checkbutton(self, variable=self.install_var, command=self._install_changed, text=T.PREV_INSTALL_CHECK)
         self.problem_box = tk.Label(self, text="", anchor="w", justify="left", padx=10, pady=6)  # 이 화면의 유일한 안내 상자
         self.problem_box.pack(fill="x", pady=4)
         self._empty_bg = self.problem_box.cget("bg")
@@ -217,6 +220,10 @@ class PreviewView(BaseView):
             self.next_btn.state(["!disabled"])
             self.set_next_reason("")
 
+    def _install_changed(self) -> None:
+        self.guarded(self.c.set_install_consent, self.install_var.get())
+        self.install_var.set(self.c.state.install_consent)  # 거부되면 체크도 되돌린다
+
     def _render(self) -> None:
         p = self.c.state.preview
         clear(self.tree)
@@ -231,7 +238,12 @@ class PreviewView(BaseView):
         counts = p.summary()
         text = T.PREV_SUMMARY.format(new=counts.get("would_copy", 0), over=counts.get("would_overwrite", 0),
                                      same=counts.get("skipped_identical", 0))
-        notes = [x for x in (self.c.denied_note(), self.c.git_config_note()) if x]
+        notes = [x for x in (self.c.denied_note(), self.c.git_config_note(), *self.c.install_note_lines()) if x]
+        if self.c.install_view():
+            self.install_var.set(self.c.state.install_consent)
+            self.install_check.pack(anchor="w", pady=(2, 0), before=self.problem_box)
+        else:
+            self.install_check.pack_forget()
         self.summary.configure(text=text + "".join(f"\n{x}" for x in notes))  # 별도 상자 없이 요약 아래 한 줄씩
         problems = self.c.preview_problems()
         if problems:
@@ -245,9 +257,9 @@ class PreviewView(BaseView):
             self.set_next_reason("")
         for r in self.c.preview_rows():
             tags = ("extra",) if r["extra"] else (("over",) if r["backup"] else ())
+            kind = T.PREV_KIND_INSTALL if r.get("install") else (T.PREV_KIND_EXTRA if r["extra"] else T.PREV_KIND_RULE)
             iid = self.tree.insert("", "end", tags=tags, values=(
-                r["status"], T.ellipsize_path(r["target"]), T.ellipsize_path(r["backup"]),
-                T.PREV_KIND_EXTRA if r["extra"] else T.PREV_KIND_RULE))
+                r["status"], T.ellipsize_path(r["target"]), T.ellipsize_path(r["backup"]), kind))
             self.full[iid] = (r["target"], r["backup"])
         lines = (self.c.preview_lines()
                  + [f"{w.get('name', '')}: {i}" for w in p.plan.warnings for i in w.get("items", [])])
@@ -321,6 +333,9 @@ class ConfirmView(BaseView):
         picked, total = self.c.restore_selected_count()
         if total and picked < total:  # 프로그램별로 일부만 복원하는 경우: 숫자는 선택을 반영한 미리보기 값이다
             info += "\n" + T.CONF_SELECTED_NOTE.format(n=picked, m=total, k=total - picked)
+        n_inst = self.c.install_count()
+        if n_inst:
+            info += "\n" + T.CONF_INSTALL_INFO.format(n=n_inst)
         self.info.configure(text=info)
         if over:
             self.big_label.configure(text=T.CONF_BIG.format(over=over), fg=WARN_FG)

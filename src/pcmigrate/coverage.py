@@ -11,6 +11,8 @@ ST_OK, ST_PART, ST_NONE = "담김", "일부만 담김", "이 PC에 없음"
 ST_UNREAD, ST_MANUAL, ST_EXCL, ST_EMPTY = "읽지 못함", "직접 해야 함", "제외됨", "비어 있음"
 NONE_NOTE = "이 PC에 이 설정이 만들어진 적이 없을 수 있습니다"
 EXTRA_PROGRAM = "목록 밖 프로그램(직접 고른 폴더)"
+INSTALL_DIR_WHAT = "설치 폴더 설정"
+INSTALL_DIR_NOTE = "복원하려면 관리자 권한과 같은 버전의 프로그램이 필요합니다"
 NO_AUTO_SETTINGS = "자동으로 옮기는 설정이 없습니다(아래 직접 할 일 참고)"
 OLD_PACKAGE_WHAT = "설정 파일(이전 버전 패키지라 설정별 내역은 없음)"
 STATUS_ORDER = (ST_OK, ST_PART, ST_UNREAD, ST_EXCL, ST_EMPTY, ST_MANUAL, ST_NONE)
@@ -52,6 +54,8 @@ def rows(manifest: dict) -> list[dict]:
             extra_note = _config_note(c)
             if extra_note:
                 note = f"{note}; {extra_note}" if note else extra_note
+            if c.get("rule") == "install" and status in (ST_OK, ST_PART):
+                note = (note + " / " if note else "") + INSTALL_DIR_NOTE
             row = {"program": str(c.get("name") or c.get("rule") or "?"), "what": str(c.get("description") or c.get("path") or ""),
                    "status": status, "files": files, "note": note, "rule": str(c.get("rule", "")),
                    "path": str(c.get("path", ""))}
