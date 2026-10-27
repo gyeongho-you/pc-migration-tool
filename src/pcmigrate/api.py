@@ -22,6 +22,7 @@ from typing import Callable
 
 from .cancel import Cancelled, CancelToken  # noqa: F401  (GUI 가 api 에서 가져다 쓴다)
 from . import coverage
+from .settings_filter import DEFAULT_EXTRA_MODE, EXTRA_MODE_ALL, EXTRA_MODES
 from .checklist import (Checklist, build_checklist, bundle_reason, load_package_programs,
                         manifest_warning_pairs, render as render_checklist, rule_warning_pairs)
 from .copier import Report, copy_tree
@@ -33,7 +34,8 @@ from .discover import (Discovery, ExtraItem, SelectionError, build_selection, di
 import inspect
 from .find_program import ProgramFind, find_program
 from .install_check import InstallCheck, NewState, check_install, read_new_state
-from .package import (COMPRESS_MODES, ImportPlan, PackageError, apply_import, export_package, extract_winget,
+from . import import_record
+from .package import (COMPRESS_MODES, NOT_SELECTED, ImportPlan, PackageError, apply_import, export_package, extract_winget,
                       is_unfinished_part, plan_import, retry_failed_export, verify_package)
 from .rules import Rule, RuleError, load_rules
 from . import fs
@@ -563,6 +565,13 @@ class ExportResult:
             d["resumed_files"] = self.resume["kept_files"]
         if n_cache:
             d["cache_dirs_skipped"], d["cache_files_skipped"], d["cache_bytes_skipped"] = n_cache, f_cache, b_cache
+        cfg = coverage.config_totals(m)
+        if cfg["items"]:
+            d["extra_mode"] = m.get("extra_mode", EXTRA_MODE_ALL)
+            d["config_files"], d["config_bytes"] = cfg["allowed_files"], cfg["allowed_bytes"]
+            d["config_ext_counts"] = cfg["ext_counts"]
+            d["not_config_files"], d["not_config_bytes"] = cfg["not_config_files"], cfg["not_config_bytes"]
+            d["limit_files"], d["limit_bytes"] = cfg["limit_files"], cfg["limit_bytes"]
         d["coverage"] = [{k: r[k] for k in ("program", "what", "status", "files")} for r in coverage.rows(m)]
         return d
 
@@ -577,15 +586,18 @@ def run_export(rules_dir: str | Path, output: str | Path, *, extra: str | Path |
                resume: bool = True, compress: str = "auto",
                notice: Callable[[str], None] | None = None,
                stage_dir: str | Path | None = None, include_caches: bool = False,
-               allow_unverified: bool = False) -> ExportResult:
+               allow_unverified: bool = False, extra_mode: str = DEFAULT_EXTRA_MODE) -> ExportResult:
     """설정 패키지 내보내기. OSError(출력 경로 문제)는 전파, 나머지 실패는 ApiError.
 
     resume=True 면 같은 출력 경로의 이전 저장점(.part)을 이어받고, False 면 이전 임시물을 지우고 처음부터 만든다.
     compress 는 auto/always/never. notice 는 '이어서 하는 중' 같은 안내 문장을 받는다.
     stage_dir 는 64MB 넘는 파일을 담기 전에 임시로 읽어 두는 폴더의 위치(기본: 출력 폴더). 원본 폴더 안은 거부한다.
     include_caches=False(기본)면 직접 고른 폴더 안의 재생성되는 임시 저장물(Cache, node_modules 등)은 담지 않는다(skipped 에 기록).
+    extra_mode: 'config'(기본, 허용 방식) 직접 고른 폴더에서 설정 형식 파일만 담고 크기/파일 수 상한을 적용한다. 'all' 은 예전 방식(폴더 전체).
     """
     deps = deps or Deps()
+    if extra_mode not in EXTRA_MODES:
+        raise ApiError(f"--extra-mode 는 {', '.join(EXTRA_MODES)} 중 하나여야 합니다: {extra_mode}")
     if compress not in COMPRESS_MODES:
         raise ApiError(f"--compress 는 {', '.join(COMPRESS_MODES)} 중 하나여야 합니다: {compress}")
     extras = prepare_extras(extra, allow_secrets, items=extra_items, allow_unverified=allow_unverified)
@@ -604,8 +616,9 @@ def run_export(rules_dir: str | Path, output: str | Path, *, extra: str | Path |
         kw = {"progress_info": progress_info} if progress_info else {}
         # 기본값이 아닌 선택만 넘기고, 받지 못하는(예전/가짜) export 구현에는 넘기지 않는다
         want = {"resume": resume, "compress": compress, "notice": notice, "stage_dir": str(stage_dir) if stage_dir else None,
-                "include_caches": include_caches}
-        defaults = {"resume": True, "compress": "auto", "notice": None, "stage_dir": None, "include_caches": False}
+                "include_caches": include_caches, "extra_mode": extra_mode}
+        defaults = {"resume": True, "compress": "auto", "notice": None, "stage_dir": None, "include_caches": False,
+                    "extra_mode": DEFAULT_EXTRA_MODE}
         try:
             params = inspect.signature(deps.export).parameters
             varkw = any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
@@ -707,6 +720,15 @@ class ImportResult:
     mode: str
     n_extra: int
     report: Report | None = None
+    record_path: str = ""   # 복원 기록 파일(되돌리기 근거). 실제로 복원했을 때만 있다
+    record_error: str = ""  # 기록을 저장하지 못했을 때의 사유(복원 자체는 끝난 뒤이므로 실패로 보지 않고 알린다)
+    only: tuple = ()
+    skip: tuple = ()
+
+    @property
+    def programs(self) -> list[dict]:
+        """프로그램별 표(화면의 프로그램별 체크용): id/name/kind/selected/files/bytes/new/overwrite/same/denied/rejected/not_selected."""
+        return self.plan.programs
 
     @property
     def written(self) -> bool:
@@ -731,7 +753,10 @@ class ImportResult:
     def preview_dict(self) -> dict:
         """미리보기 JSON. 쓰기가 없었으면 dry_run 은 true(실제 상태)로 표시한다."""
         d = {"dry_run": not self.written, "mode": self.mode, "written": self.written,
-             "summary": self.summary(), "problems": self.plan.problems, "items": self.plan.items}
+             "summary": self.summary(), "problems": self.plan.problems, "items": self.plan.items,
+             "programs": self.plan.programs, "selection": {"only": list(self.only), "skip": list(self.skip)}}
+        if self.record_path:
+            d["import_record"] = self.record_path
         d["coverage"] = [{k: r[k] for k in ("program", "what", "status", "files")} for r in coverage.rows(self.plan.manifest)]
         if self.git_config_warning:
             d["git_config_warning"] = self.git_config_warning
@@ -740,22 +765,114 @@ class ImportResult:
 
 def run_import(package: str | Path, rules_dir: str | Path, *, dry_run: bool = False, yes: bool = False,
                allow_extra: bool = False, deps: Deps | None = None,
-               progress_info: Callable[[ProgressInfo], None] | None = None) -> ImportResult:
+               progress_info: Callable[[ProgressInfo], None] | None = None,
+               only_programs: list[str] | str | None = None, skip_programs: list[str] | str | None = None,
+               record_dir: str | Path | None = None) -> ImportResult:
+    """설정 패키지 복원. only_programs/skip_programs 로 프로그램(규칙 id 또는 extra 항목)별 복원을 고를 수 있다
+    (쉼표로 이은 문자열이나 목록). 선택에서 뺀 프로그램은 쓰지 않고 '선택에서 제외됨'으로 기록한다. 묶음에 없는 이름이면 ApiError.
+    실제로 복원하면 복원 기록(import_record)을 record_dir(기본: %LOCALAPPDATA%\\pcmigrate\\import-records)에 남긴다(undo-import 의 근거)."""
     deps = deps or Deps()
     rules = load_rules_checked(rules_dir)
+    only, skip = tuple(_tokens(only_programs)), tuple(_tokens(skip_programs))
+    sel = {}
+    if only:
+        sel["only_programs"] = list(only)
+    if skip:
+        sel["skip_programs"] = list(skip)
     try:
-        plan = deps.plan(Path(package), rules)
+        plan = deps.plan(Path(package), rules, **sel)
     except PackageError as e:
         raise ApiError(str(e) if str(e).startswith("패키지 검증 실패") else f"패키지 검증 실패: {e}") from e
-    n_extra = sum(1 for it in plan.items if it.get("extra"))
+    n_extra = sum(1 for it in plan.items if it.get("extra") and it.get("status") != NOT_SELECTED)
     if plan.problems:
-        return ImportResult(plan, "blocked", n_extra)
+        return ImportResult(plan, "blocked", n_extra, only=only, skip=skip)
+    if plan.unknown_programs:
+        raise ApiError("고른 프로그램이 이 패키지에 없습니다: " + ", ".join(plan.unknown_programs),
+                       lines=["패키지에 있는 프로그램(--only/--skip 에 쓸 수 있는 이름):"]
+                       + [f"  - {p['id']} ({p['name']})" for p in plan.programs])
     if dry_run or not yes:  # --dry-run 이 --yes 보다 우선
-        return ImportResult(plan, "dry-run" if dry_run else "needs-confirm", n_extra)
+        return ImportResult(plan, "dry-run" if dry_run else "needs-confirm", n_extra, only=only, skip=skip)
     if n_extra and not allow_extra:
-        return ImportResult(plan, "needs-allow-extra", n_extra)
+        return ImportResult(plan, "needs-allow-extra", n_extra, only=only, skip=skip)
     report = apply_import(Path(package), plan, progress_info) if progress_info else apply_import(Path(package), plan)
-    return ImportResult(plan, "applied", n_extra, report)
+    report.meta["programs"] = plan.programs
+    res = ImportResult(plan, "applied", n_extra, report, only=only, skip=skip)
+    try:  # 되돌리기의 근거: 복원 기록. 저장하지 못해도 이미 끝난 복원은 성공으로 두고 알린다
+        rec = import_record.build_record(package, plan, report)
+        res.record_path = str(import_record.write_record(rec, record_dir))
+        report.meta["import_record"] = res.record_path
+    except OSError as e:
+        res.record_error = f"{type(e).__name__}: {e.strerror or e}"
+    return res
+
+
+def _tokens(v) -> list[str]:
+    if v is None:
+        return []
+    if isinstance(v, str):
+        v = v.split(",")
+    return [t.strip() for t in v if isinstance(t, str) and t.strip()]
+
+
+# --------------------------------------------------------------------------- import: 프로그램별 되돌리기
+
+@dataclass
+class UndoResult:
+    """mode: dry-run / needs-confirm / applied / nothing(되돌릴 것이 없음)"""
+    plan: import_record.UndoPlan
+    mode: str
+    record: dict
+
+    @property
+    def written(self) -> bool:
+        return self.mode == "applied"
+
+    def summary_dict(self) -> dict:
+        p = self.plan
+        d = {"mode": self.mode, "dry_run": not self.written, "written": self.written, "record": p.record_path,
+             "programs": p.programs, **p.summary(),
+             "items": [{"program": i.program, "target": i.target, "backup": i.backup, "action": i.action,
+                        "result": i.result, "detail": i.detail} for i in p.items]}
+        if self.written:
+            d["restored"] = sum(1 for i in p.items if i.result == import_record.RESTORED)
+            d["moved_new"] = sum(1 for i in p.items if i.result == import_record.MOVED)
+            d["failed"] = sum(1 for i in p.items if i.result == import_record.FAILED_UNDO)
+        return d
+
+
+def run_undo_import(only_programs: list[str] | str | None, *, record: str | Path | None = None,
+                    record_dir: str | Path | None = None, dry_run: bool = False, yes: bool = False,
+                    move_new: bool = False) -> UndoResult:
+    """복원 기록(기본: 가장 최근)을 근거로 선택한 프로그램의 .bak 을 원래 이름으로 되돌린다.
+
+    복원이 새로 만든 파일은 지우지 않는다(move_new=True 면 '<이름>.removed' 로 옮긴다). 되돌릴 .bak 이 없거나 바뀌었으면 그 파일만
+    되돌리지 않고 이유를 알린다. dry_run 이거나 yes 가 아니면 파일을 바꾸지 않는다. 기록이 없거나 프로그램이 기록에 없으면 ApiError."""
+    only = _tokens(only_programs)
+    if not only:
+        raise ApiError("되돌릴 프로그램을 --only 로 지정하세요(예: --only revit,autocad).")
+    path = Path(record) if record else import_record.latest_record(record_dir)
+    if path is None:
+        raise ApiError("복원 기록이 없습니다. 이 PC 에서 import --yes 로 복원한 적이 없거나 기록 폴더가 다릅니다.",
+                       lines=["이전 기록 파일 경로를 알면 --record 로 직접 지정하세요."])
+    try:
+        rec = import_record.load_record(path)
+    except import_record.RecordError as e:
+        raise ApiError(str(e)) from e
+    from .package import program_matches
+    known = import_record.record_programs(rec)
+    missing = [t for t in only if not any(program_matches(t, k) for k in known)]
+    if missing:
+        raise ApiError("복원 기록에 없는 프로그램입니다: " + ", ".join(missing),
+                       lines=["기록에서 되돌릴 수 있는 프로그램:"] + [f"  - {k}" for k in known] if known
+                       else ["이 기록에는 되돌릴 파일(실제로 복원한 파일)이 없습니다."])
+    plan = import_record.plan_undo(rec, path, only, move_new=move_new)
+    todo = plan.count(import_record.RESTORE, import_record.MOVE_NEW)
+    if dry_run or not yes:
+        return UndoResult(plan, "dry-run" if dry_run else "needs-confirm", rec)
+    if not todo:
+        return UndoResult(plan, "nothing", rec)
+    import_record.apply_undo(rec, plan)
+    return UndoResult(plan, "applied", rec)
 
 
 # --------------------------------------------------------------------------- winget-extract

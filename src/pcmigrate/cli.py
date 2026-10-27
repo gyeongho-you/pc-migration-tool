@@ -14,7 +14,7 @@ from .api import (NEEDS_CONFIRM, ApiError, Deps, check_outputs_outside, check_pa
                   clean_state_files, format_write_error, load_rules_checked, report_inside, run_checklist, run_copy,
                   run_discover, run_export, run_export_retry, run_find_program, run_import, run_install_check, run_join, run_manifest,
                   run_scan, run_transfer,
-                  run_verify, run_winget_extract, same_file, selection_json)
+                  run_undo_import, run_verify, run_winget_extract, same_file, selection_json)
 from .checklist import write_output
 from .detect import read_registry_programs, winget_export_raw, winget_list_raw
 from . import install_check as ic
@@ -539,7 +539,8 @@ def _cmd_export_retry(args: argparse.Namespace) -> int:
         return 1
     conflict = [flag for flag, on in (("--extra", args.extra), ("--allow-secrets", args.allow_secrets),
                                       ("--restart/--no-resume", args.restart or not args.resume),
-                                      ("--compress", args.compress != "auto")) if on]
+                                      ("--compress", args.compress != "auto"),
+                                      ("--extra-mode", args.extra_mode != "config")) if on]
     if conflict:
         _err(f"--retry-failed 는 기존 묶음만 갱신하므로 {', '.join(conflict)} 와 함께 쓸 수 없습니다. "
              "처음부터 새로 만들려면 --retry-failed 를 빼고 실행하세요.")
@@ -570,7 +571,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
         r = run_export(args.rules, args.output, extra=args.extra, allow_secrets=args.allow_secrets,
                        deps=_deps(), progress_info=_cli_info_progress(), resume=args.resume and not args.restart,
                        compress=args.compress, notice=lambda m: _err(f"[이어받기] {m}"), stage_dir=args.stage_dir,
-                       include_caches=args.include_caches)
+                       include_caches=args.include_caches, extra_mode=args.extra_mode)
     except ApiError as e:
         return _fail(e)
     except OSError as e:
@@ -609,7 +610,8 @@ def _cmd_import(args: argparse.Namespace) -> int:
         _err("[진행] 패키지를 검사하는 중입니다. 파일이 많으면 몇 분 걸릴 수 있으며, 진행 상황이 10초마다 표시됩니다.")
     try:
         r = run_import(args.package, args.rules, dry_run=args.dry_run, yes=args.yes,
-                       allow_extra=args.allow_extra, deps=_deps(), progress_info=_cli_info_progress())
+                       allow_extra=args.allow_extra, deps=_deps(), progress_info=_cli_info_progress(),
+                       only_programs=args.only, skip_programs=args.skip, record_dir=args.record_dir)
     except ApiError as e:
         return _fail(e)
     if r.mode == "blocked":
@@ -643,6 +645,11 @@ def _cmd_import(args: argparse.Namespace) -> int:
         return 1
     report = r.report
     _err("실제 복원을 시작합니다. 덮어쓸 파일은 .bak 으로 백업됩니다.")
+    if r.record_path:
+        _err(f"[기록] 복원 기록을 저장했습니다(프로그램별 되돌리기 근거): {r.record_path}")
+    if r.record_error:
+        _err(f"[주의] 복원은 끝났지만 복원 기록을 저장하지 못했습니다({r.record_error}). undo-import 로 되돌릴 수 없습니다. "
+             "--record-dir 로 쓸 수 있는 폴더를 지정하세요.")
     if args.report:
         try:
             report.write(Path(args.report))
@@ -652,6 +659,7 @@ def _cmd_import(args: argparse.Namespace) -> int:
     if args.json:
         _json_out({"dry_run": False, "summary": rd["summary"], "failed_count": rd["failed_count"],
                    "success": not report.failures,
+                   "programs": r.plan.programs, **({"import_record": r.record_path} if r.record_path else {}),
                    **({"git_config_warning": rd["git_config_warning"]} if rd.get("git_config_warning") else {})})
     else:
         _print_lines(summary.import_lines(r, args.package, report))
@@ -663,6 +671,24 @@ def _cmd_import(args: argparse.Namespace) -> int:
         _err(f"실패: {f.dst} -> {f.error}")
     _print_warnings(r.plan.warnings)
     return 1 if report.failures else 0
+
+
+def _cmd_undo_import(args: argparse.Namespace) -> int:
+    if _unexpanded(record=args.record, record_dir=args.record_dir):
+        return 1
+    try:
+        r = run_undo_import(args.only, record=args.record, record_dir=args.record_dir, dry_run=args.dry_run, yes=args.yes,
+                            move_new=args.move_new)
+    except ApiError as e:
+        return _fail(e)
+    if args.json:
+        _json_out(r.summary_dict(), indent=2)
+    else:
+        _print_lines(summary.undo_lines(r))
+    bad = bool(r.plan.problems) or any(i.result == "failed" for i in r.plan.items)
+    if r.mode == "needs-confirm":
+        return NEEDS_CONFIRM
+    return 1 if bad else 0
 
 
 def _cmd_winget_extract(args: argparse.Namespace) -> int:
@@ -766,6 +792,10 @@ def build_parser() -> argparse.ArgumentParser:
     e.add_argument("--include-caches", action="store_true",
                    help="직접 고른 폴더 안의 재생성되는 임시 저장물(Cache, GPUCache, Code Cache, node_modules, logs 등 정확히 일치하는 이름)도 포함. "
                         "기본은 제외하고 이름/파일 수/용량만 기록(규칙 경로 안은 규칙이 정함)")
+    e.add_argument("--extra-mode", choices=("config", "all"), default="config",
+                   help="--extra 로 고른 규칙 없는 폴더에서 무엇을 담을지. config(기본, 허용 방식): 설정 형식 파일(.ini .json .xml .cfg .yaml .toml "
+                        ".pgp .cuix .dwt .ctb .rte 등)만 담고 파일 크기/폴더 용량/파일 수 상한을 적용, 나머지는 제외하고 개수와 용량만 기록. "
+                        "all: 예전 방식(폴더 전체에서 캐시/라이선스/보안 거부 형식만 제외, 용량이 커지고 정크가 섞임). 규칙이 있는 프로그램은 이 옵션과 무관")
     e.add_argument("--rules", type=_path_arg, default=str(default_rules_dir()), help="규칙 JSON 폴더")
     e.add_argument("--resume", action=argparse.BooleanOptionalAction, default=True,
                    help="이전에 중단된 같은 내보내기(<출력>.part)가 있으면 저장점부터 이어서 합니다(기본 켬). "
@@ -787,10 +817,26 @@ def build_parser() -> argparse.ArgumentParser:
     i.add_argument("--dry-run", action="store_true", help="변경 없이 미리보기만 출력(--yes 보다 우선)")
     i.add_argument("--yes", action="store_true", help="미리보기 확인 후 실제 복원 수행")
     i.add_argument("--allow-extra", action="store_true", help="규칙 없이 선택 포함된 파일의 복원을 허용")
+    i.add_argument("--only", metavar="규칙id[,..]",
+                   help="이 프로그램(규칙 id, 쉼표로 여러 개)만 복원. 규칙 없는 선택 항목은 extra:<루트키>/<이름>(예: extra:appdata/AcmePaint) 또는 extra(전부). "
+                        "목록은 --dry-run 의 '프로그램별' 표(--json 의 programs)에서 확인")
+    i.add_argument("--skip", metavar="규칙id[,..]", help="이 프로그램은 복원하지 않음(새 PC 에서 설정이 맞지 않아 오류가 나는 프로그램 등). '선택에서 제외됨'으로 기록하고 쓰지 않음")
+    i.add_argument("--record-dir", type=_path_arg, help="복원 기록(undo-import 의 근거)을 저장할 폴더(기본: %%LOCALAPPDATA%%\\pcmigrate\\import-records)")
     i.add_argument("--rules", type=_path_arg, default=str(default_rules_dir()), help="규칙 JSON 폴더")
     i.add_argument("--report", type=_path_arg, help="결과 리포트(JSON) 저장 경로")
     i.add_argument("--json", action="store_true", help="사람이 읽는 요약 대신 JSON 으로 출력")
     i.set_defaults(func=_cmd_import)
+
+    u = sub.add_parser("undo-import", help="복원을 프로그램 단위로 되돌린다(복원이 만든 .bak 을 원래 이름으로, --dry-run 먼저 권장)")
+    u.add_argument("--only", metavar="규칙id[,..]", required=True, help="되돌릴 프로그램(규칙 id, 쉼표로 여러 개; 복원 기록의 프로그램 id)")
+    u.add_argument("--record", type=_path_arg, help="복원 기록 파일(기본: 기록 폴더의 가장 최근 것)")
+    u.add_argument("--record-dir", type=_path_arg, help="복원 기록 폴더(기본: %%LOCALAPPDATA%%\\pcmigrate\\import-records)")
+    u.add_argument("--dry-run", action="store_true", help="변경 없이 미리보기만 출력(--yes 보다 우선)")
+    u.add_argument("--yes", action="store_true", help="미리보기를 확인한 뒤 실제로 되돌림")
+    u.add_argument("--move-new", action="store_true",
+                   help="복원 때 새로 만든 파일(원래 없던 파일)도 '<이름>.removed' 로 옮김. 기본은 지우지 않고 개수만 알림. 파일을 삭제하지는 않음")
+    u.add_argument("--json", action="store_true", help="사람이 읽는 요약 대신 JSON 으로 출력")
+    u.set_defaults(func=_cmd_undo_import)
 
     w = sub.add_parser("winget-extract", help="패키지(.zip) 안의 winget 목록(winget.json)을 폴더로 꺼낸다(신 PC 에서 winget import 용)")
     w.add_argument("package", type=_path_arg, help="export 로 만든 .zip")

@@ -117,7 +117,7 @@ def test_extra_items_exclude_lock_names(tmp_path):
     (d / "SingletonLock").write_bytes(b"")
     (d / "Preferences").write_bytes(b"{}")
     ex = SimpleNamespace(path=str(tmp_path / "Google"), root="%LOCALAPPDATA%", rel="Google")
-    items, _ = package.collect_extra_items([ex])
+    items, _ = package.collect_extra_items([ex], extra_mode="all")
     assert [i.src.name for i in items] == ["Preferences"]
 
 

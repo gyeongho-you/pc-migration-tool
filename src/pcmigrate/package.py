@@ -37,13 +37,15 @@ from . import __version__, failure, fs
 from .copier import (COPIED, DENIED, FAILED, REJECTED, SKIPPED_SAME, WOULD_COPY, WOULD_OVERWRITE,
                      FileResult, Report, _backup_path, copy_file, sha256_file)
 from .detect import Program
-from . import coverage
+from . import coverage, settings_filter
 from .discover_data import EXTRA_ROOTS, REGENERABLE_REASON, RESTORE_DENY_SUBSTRINGS, ROOTS, is_regenerable
 from .progress import FAILED_KIND, OK, SKIPPED, UNREADABLE, ProgressInfo, ProgressTracker, categorize, fmt_bytes
 from .rules import PathRule, Rule
 
 FORMAT_VERSION = 1
 EXTRA_ID = "extra"  # 규칙 없는 프로그램 중 사용자가 선택해 포함한 항목(manifest rule id)
+NOT_SELECTED = "not_selected"  # 사용자가 프로그램별 복원 선택(only/skip)에서 뺀 항목: 쓰지 않고 '선택에서 제외됨'으로 기록
+NOT_SELECTED_TEXT = "선택에서 제외됨"
 MANIFEST = "manifest.json"
 CHUNK = 1024 * 1024
 ZIP64_THRESHOLD = 2 * 1024 ** 3
@@ -231,7 +233,8 @@ def _path_coverage(rule: Rule, pr: PathRule, items: list, skipped: list, failed:
     n_files = len(items) - snap[0]
     mine = skipped[snap[1]:]
     n_failed = (len(failed) - snap[2]) if failed is not None else 0
-    bad = sum(1 for x in mine if not any(b in x.get("reason", "") for b in _BENIGN_SKIPS) and not x.get("cache"))
+    bad = sum(1 for x in mine if not any(b in x.get("reason", "") for b in _BENIGN_SKIPS)
+              and not x.get("cache") and not x.get("not_config"))
     return {"rule": rule.id, "name": rule.name, "path": pr.path, "description": pr.description, "files": n_files,
             "failed": n_failed, "excluded": bad,
             "status": coverage.classify(found=found, files=n_files, failed=n_failed, excluded=bad)}
@@ -322,14 +325,28 @@ def _pruned_skip(path: Path) -> dict:
             "files": nfiles, "bytes": size, "complete": bool(complete)}
 
 
+def _size_or_zero(path: Path) -> int:
+    try:
+        return os.stat(fs.long_path(path)).st_size
+    except OSError:
+        return 0
+
+
 def collect_extra_items(extras: list, expand: Expand = expand_env, *, avoid: Callable[[Path], bool] | None = None,
                         roots: list[Path] | None = None, failed: list[dict] | None = None,
-                        include_caches: bool = False, cov: list[dict] | None = None
+                        include_caches: bool = False, cov: list[dict] | None = None,
+                        extra_mode: str = settings_filter.DEFAULT_EXTRA_MODE,
+                        limits: settings_filter.ConfigLimits | None = None
                         ) -> tuple[list[Item], list[dict]]:
     """discover 선택 파일로 고른 항목(ExtraItem)의 파일 목록. 읽기 전용, 라이선스/임시/링크 제외, 복원 거부 형식은 skipped(denied).
 
     include_caches=False(기본)면 폴더 안의 재생성되는 임시 저장물 폴더(Cache, GPUCache, node_modules 등 정확히 일치하는 이름)는
-    건너뛰고 skipped(reason='재생성되는 임시 저장물', 이름·파일 수·용량 포함)에 기록한다."""
+    건너뛰고 skipped(reason='재생성되는 임시 저장물', 이름·파일 수·용량 포함)에 기록한다.
+
+    extra_mode='config'(기본, 허용 방식)면 settings_filter 의 설정 형식 파일만 담고(상한 포함) 나머지는 항목마다 요약 1~2개로 skipped 에
+    기록한다(not_config / limit). 'all' 이면 예전 방식(폴더 전체)이다."""
+    if extra_mode not in settings_filter.EXTRA_MODES:
+        raise ValueError(f"extra_mode 는 {', '.join(settings_filter.EXTRA_MODES)} 중 하나여야 합니다: {extra_mode!r}")
     keys = {r.template: r.key for r in ROOTS}
     items: list[Item] = []
     skipped: list[dict] = []
@@ -338,6 +355,7 @@ def collect_extra_items(extras: list, expand: Expand = expand_env, *, avoid: Cal
         top = Path(ex.path)
         files: list[Path] = []
         pruned: list[Path] = []
+        gate = settings_filter.ConfigGate(limits) if extra_mode == settings_filter.EXTRA_MODE_CONFIG else None
         if top.is_symlink() or (top.is_dir() and fs.is_reparse(top)):
             skipped.append({"rule": EXTRA_ID, "path": str(top), "reason": "심볼릭 링크/정션은 따라가지 않음"})
         else:
@@ -364,7 +382,11 @@ def collect_extra_items(extras: list, expand: Expand = expand_env, *, avoid: Cal
                 if why:
                     skipped.append(_denied_skip(EXTRA_ID, f, why))
                     continue
+                if gate is not None and gate.judge(f.name, _size_or_zero(f), str(f)) is not None:
+                    continue  # 허용 방식: 설정 형식이 아니거나 상한 초과(요약은 아래에서 한 번에 기록)
                 items.append(Item(f"data/{EXTRA_ID}/{keys[ex.root]}/{rel}", f, EXTRA_ID, ex.root, rel))
+            if gate is not None:
+                skipped += gate.skipped_records(EXTRA_ID, str(top), top.name)
         if cov is not None:
             where = f"{ex.root}\\{ex.rel}"
             c = _path_coverage(Rule(EXTRA_ID, coverage.EXTRA_PROGRAM), PathRule(where, EXTRA_ID, "dir", where),
@@ -373,8 +395,72 @@ def collect_extra_items(extras: list, expand: Expand = expand_env, *, avoid: Cal
             mine = [x for x in skipped[snap[1]:] if x.get("cache")]
             if mine:
                 c.update(cache_dirs=len(mine), cache_files=sum(x["files"] for x in mine), cache_bytes=sum(x["bytes"] for x in mine))
+            if gate is not None:
+                c.update(gate.coverage_fields())
+                if c["files"] == 0 and gate.nc_files and c["status"] == coverage.ST_EMPTY:
+                    c["status"] = coverage.ST_EXCL  # 담을 설정 형식 파일이 하나도 없다(폴더 자체는 비어 있지 않음)
             cov.append(c)
     return items, skipped
+
+
+def estimate_extra_config(root: str, rel: str, path: Path | str, expand: Expand = expand_env, *,
+                          include_caches: bool = False, deadline: float | None = None,
+                          clock: Callable[[], float] = time.monotonic,
+                          limits: settings_filter.ConfigLimits | None = None) -> settings_filter.ConfigEstimate:
+    """직접 고를 항목 하나(root 템플릿 + 최상위 rel)를 허용 방식으로 내보내면 담길 파일 수/용량을 미리 센다(읽기 전용).
+
+    collect_extra_items(extra_mode='config')와 같은 기준(링크 안 따라감, 재생성 폴더 제외, 안전한 이름, 복원 거부 형식 제외,
+    설정 형식 확장자, 파일/폴더 상한)을 같은 순서로 적용한다. deadline(clock 기준)을 넘으면 거기서 멈추고 complete=False 로 돌려준다(이상)."""
+    top = Path(path)
+    gate = settings_filter.ConfigGate(limits)
+    est = settings_filter.ConfigEstimate()
+    complete = True
+
+    def judge(f: Path, rel_f: str) -> None:
+        if unsafe_name(rel_f):
+            return
+        if restore_denied(rel_f, Path(expand(root)) / rel_f, None, root):
+            return
+        if os.path.islink(fs.long_path(f)) or _excluded(f.name, None):
+            return
+        gate.judge(f.name, _size_or_zero(f), str(f))
+
+    try:
+        if top.is_symlink() or (top.is_dir() and fs.is_reparse(top)):
+            pass
+        elif top.is_file():
+            judge(top, rel)
+        elif top.is_dir():
+            lp = fs.long_path(str(top))
+            tick = 0
+            for cur, dirs, names in os.walk(lp, followlinks=False):
+                plain = str(top) + cur[len(lp):]
+                dirs.sort()
+                keep = []
+                for d in dirs:
+                    dp = Path(plain) / d
+                    if fs.is_reparse(dp):
+                        continue
+                    if not include_caches and is_regenerable(dp.relative_to(top).parts):
+                        continue
+                    keep.append(d)
+                dirs[:] = keep
+                for n in sorted(names):
+                    tick += 1
+                    if deadline is not None and tick % 100 == 0 and clock() > deadline:
+                        complete = False
+                        break
+                    f = Path(plain) / n
+                    judge(f, f"{rel}/{f.relative_to(top).as_posix()}")
+                if not complete:
+                    break
+    except OSError:
+        complete = False
+    est.files, est.bytes, est.complete = gate.files, gate.bytes, complete
+    est.excluded_files, est.excluded_bytes = gate.nc_files, gate.nc_bytes
+    est.limit_files, est.limit_bytes = gate.lim_files, gate.lim_bytes
+    est.ext_counts = dict(gate.ext_counts)
+    return est
 
 
 # --------------------------------------------------------------------------- 압축 방식
@@ -521,8 +607,12 @@ def is_unfinished_part(path: Path | str) -> bool:
     return str(path).lower().endswith(PART_SUFFIX)
 
 
-def _fingerprint(rules: list[Rule], extras: list | None, compress: str, include_caches: bool = False) -> tuple[str, dict]:
+def _fingerprint(rules: list[Rule], extras: list | None, compress: str, include_caches: bool = False,
+                 extra_mode: str = settings_filter.DEFAULT_EXTRA_MODE) -> tuple[str, dict]:
+    lim = settings_filter.default_limits()
     info = {"tool": __version__, "format": FORMAT_VERSION, "compress": compress, "include_caches": bool(include_caches),
+            "extra_mode": extra_mode,
+            "extra_limits": [lim.file_bytes, lim.folder_bytes, lim.folder_files] if extra_mode == settings_filter.EXTRA_MODE_CONFIG else None,
             "rules": [[r.id, str(r.version)] for r in rules],
             "extras": sorted([e.root, e.rel] + (["caches"] if getattr(e, "include_caches", False) else [])
                              for e in (extras or []))}
@@ -537,6 +627,8 @@ def _fp_reason(old: dict, new: dict) -> str:
         return "프로그램 규칙의 버전이 달라졌습니다"
     if old.get("extras") != new["extras"]:
         return "직접 고른 추가 항목이 달라졌습니다"
+    if old.get("extra_mode") != new["extra_mode"] or old.get("extra_limits") != new["extra_limits"]:
+        return "목록 밖 항목의 담을 범위(허용 방식/전체) 설정이 달라졌습니다"
     if old.get("compress") != new["compress"]:
         return "압축 설정이 달라졌습니다"
     if bool(old.get("include_caches")) != bool(new.get("include_caches")):
@@ -938,7 +1030,8 @@ def export_package(rules: list[Rule], out: Path, programs: list[Program],
                    notice: Callable[[str], None] | None = None,
                    clock: Callable[[], float] = time.monotonic,
                    dest_info_fn: Callable[[str], fs.DestInfo] | None = None,
-                   stage_dir: Path | str | None = None, include_caches: bool = False) -> dict:
+                   stage_dir: Path | str | None = None, include_caches: bool = False,
+                   extra_mode: str = settings_filter.DEFAULT_EXTRA_MODE) -> dict:
     """감지된 프로그램의 규칙(rules)으로 설정 패키지를 만든다. manifest dict 반환.
 
     stage_dir: 64MB 를 넘는 파일을 담기 전에 임시로 읽어 두는 폴더의 위치(기본: 출력 파일이 있는 폴더). 출력 드라이브가 느리거나
@@ -953,17 +1046,22 @@ def export_package(rules: list[Rule], out: Path, programs: list[Program],
     compress: auto(이미 압축된 형식은 STORED) / always(모두 deflate) / never(모두 STORED).
     include_caches: 기본 False. 직접 고른 폴더(extras) 안의 재생성되는 임시 저장물 폴더(Cache, GPUCache, node_modules 등)는 담지 않고
     skipped 에 이름·파일 수·용량을 기록한다. True 면 모두 담는다(규칙 경로 안은 이 옵션과 무관, 규칙의 exclude 를 따른다).
+    extra_mode: 'config'(기본, 허용 방식) 목록 밖 항목(extras)에서 설정 형식 파일(settings_filter)만 담고 크기/파일 수 상한을 적용한다.
+    'all' 은 예전 방식(폴더 전체에서 캐시/라이선스/보안 거부 형식만 제외). 이어받기 지문에 들어가므로 바꾸면 처음부터 다시 만든다.
     반환 manifest 에는 패키지에 저장되지 않는 "resume" 항목({resumed, kept_files, kept_bytes, dropped, reason})이 추가된다.
     파일 단위 실패는 manifest["failed"] 에 기록(읽지 못한 파일은 다음 시도에서 다시 읽는다).
     """
     if compress not in COMPRESS_MODES:
         raise ValueError(f"compress 는 {', '.join(COMPRESS_MODES)} 중 하나여야 합니다: {compress!r}")
+    if extra_mode not in settings_filter.EXTRA_MODES:
+        raise ValueError(f"extra_mode 는 {', '.join(settings_filter.EXTRA_MODES)} 중 하나여야 합니다: {extra_mode!r}")
     out = Path(out)
     if out.is_dir():  # 기존 폴더를 .bak 으로 옮기고 같은 이름의 파일을 만들게 되므로 시작하지 않는다
         raise IsADirectoryError(errno.EISDIR, "대상이 폴더입니다", str(out))
     args = (rules, out, programs, winget_text, expand, winget_list_text, extras, now, progress_info)
     kw = dict(compress=compress, savepoint_bytes=savepoint_bytes, savepoint_seconds=savepoint_seconds,
-              notice=notice, clock=clock, dest_info_fn=dest_info_fn, stage_dir=stage_dir, include_caches=include_caches)
+              notice=notice, clock=clock, dest_info_fn=dest_info_fn, stage_dir=stage_dir, include_caches=include_caches,
+              extra_mode=extra_mode)
     lock = _OutputLock(out)
     lock.acquire()  # 같은 출력 이름으로 동시에 내보내면 .part 를 서로 망가뜨린다(R1-6)
     try:
@@ -981,7 +1079,7 @@ def export_package(rules: list[Rule], out: Path, programs: list[Program],
 
 def _export_once(rules, out, programs, winget_text, expand, winget_list_text, extras, now, progress_info, *,
                  resume, compress, savepoint_bytes, savepoint_seconds, notice, clock, dest_info_fn=None, stage_dir=None,
-                 include_caches=False) -> dict:
+                 include_caches=False, extra_mode=settings_filter.DEFAULT_EXTRA_MODE) -> dict:
     part, jpath = part_paths(out)
     manifest: dict = {
         "format": FORMAT_VERSION,
@@ -1031,9 +1129,15 @@ def _export_once(rules, out, programs, winget_text, expand, winget_list_text, ex
             groups.append(items)
         if extras:
             items, skipped = collect_extra_items(extras, expand, avoid=avoid, roots=roots, failed=manifest["failed"],
-                                                 include_caches=include_caches, cov=manifest["coverage"])
+                                                 include_caches=include_caches, cov=manifest["coverage"],
+                                                 extra_mode=extra_mode)
             manifest["skipped"] += skipped
             manifest["extras"] = [{"root": e.root, "rel": e.rel} for e in extras]
+            manifest["extra_mode"] = extra_mode
+            if extra_mode == settings_filter.EXTRA_MODE_CONFIG:
+                lim = settings_filter.default_limits()
+                manifest["extra_limits"] = {"file_bytes": lim.file_bytes, "folder_bytes": lim.folder_bytes,
+                                            "folder_files": lim.folder_files}
             manifest["manual_warnings"].append({
                 "rule": EXTRA_ID, "name": "규칙 없는 프로그램(선택 포함)",
                 "items": ["규칙 없이 사용자가 직접 골라 포함한 폴더입니다. 신 PC 에서 같은 버전의 프로그램을 설치한 뒤 "
@@ -1076,7 +1180,7 @@ def _export_once(rules, out, programs, winget_text, expand, winget_list_text, ex
                 last_emit[0] = t
                 progress_info(tracker.snapshot())
 
-        fp, fp_info = _fingerprint(rules, extras, compress, include_caches)
+        fp, fp_info = _fingerprint(rules, extras, compress, include_caches, extra_mode)
         head = {"t": "head", "v": JOURNAL_VERSION, "fp": fp, "info": fp_info}
         by_arc: dict[str, Item] = {}
         for g in groups:
@@ -1478,14 +1582,45 @@ def is_git_config_name(name: str) -> bool:
 
 def git_config_targets(items: list[dict]) -> list[str]:
     """복원 계획에서 실제로 복원될(거부/링크 거부가 아닌) Git 설정 파일의 대상 경로."""
-    return [it["target"] for it in items if it.get("status") not in (DENIED, REJECTED) and is_git_config_name(Path(it["target"]).name)]
+    return [it["target"] for it in items if it.get("status") not in (DENIED, REJECTED, NOT_SELECTED) and is_git_config_name(Path(it["target"]).name)]
+
+
+def program_key(f: dict) -> str:
+    """manifest 파일 항목의 프로그램 단위 식별자. 규칙은 규칙 id, 규칙 없는 항목(extra)은 'extra:<루트키>/<최상위 이름>'."""
+    if f.get("rule") != EXTRA_ID:
+        return str(f.get("rule"))
+    keys = {r.template: r.key for r in ROOTS}
+    top = str(f.get("rel", "")).split("/")[0]
+    return f"{EXTRA_ID}:{keys.get(f.get('base'), '?')}/{top}"
+
+
+def program_matches(token: str, key: str) -> bool:
+    """--only/--skip 의 항목 하나(token)가 프로그램 식별자(key)에 해당하는지. 대소문자 무시.
+    규칙 id 는 정확히 일치. extra 는 'extra'(전부), 'extra:<루트키>/<이름>'(정확히), 'extra:<이름>'(루트 무관)으로 고를 수 있다."""
+    t, k = token.strip().casefold(), key.casefold()
+    if t == k:
+        return True
+    if k.startswith(EXTRA_ID + ":"):
+        return t == EXTRA_ID or t == f"{EXTRA_ID}:{k.split('/', 1)[1]}"
+    return False
+
+
+def _norm_tokens(v) -> list[str]:
+    if v is None:
+        return []
+    if isinstance(v, str):
+        v = v.split(",")
+    return [t.strip() for t in v if isinstance(t, str) and t.strip()]
 
 
 @dataclass
 class ImportPlan:
     manifest: dict
-    items: list[dict] = field(default_factory=list)  # {entry, target, status, backup}
+    items: list[dict] = field(default_factory=list)  # {entry, target, status, backup, program}
     problems: list[str] = field(default_factory=list)
+    # 프로그램별 요약(화면의 프로그램별 체크용): {id, name, kind, selected, files, bytes, new, overwrite, same, denied, rejected, not_selected}
+    programs: list[dict] = field(default_factory=list)
+    unknown_programs: list[str] = field(default_factory=list)  # only/skip 에 적었지만 묶음에 없는 항목
 
     @property
     def warnings(self) -> list[dict]:
@@ -1497,13 +1632,18 @@ class ImportPlan:
         return GIT_CONFIG_WARNING if git_config_targets(self.items) else ""
 
 
-def plan_import(path: Path, rules: list[Rule], expand: Expand = expand_env) -> ImportPlan:
+def plan_import(path: Path, rules: list[Rule], expand: Expand = expand_env, *,
+                only_programs: list[str] | str | None = None, skip_programs: list[str] | str | None = None) -> ImportPlan:
     """검증 후 복원 계획을 만든다. 파일 시스템은 읽기만 한다.
 
     검증 단계가 놓친 구조 오류로 예외가 나더라도 traceback 대신 PackageError('패키지 검증 실패: …')로 알린다.
+
+    only_programs/skip_programs: 프로그램(규칙 id 또는 extra 항목) 단위 복원 선택. only 가 있으면 그것만, skip 은 그것만 뺀다(둘 다면 only 후 skip).
+    선택에서 빠진 프로그램의 파일은 대상을 읽지도 쓰지도 않고 status='not_selected' 로 기록한다. 묶음에 없는 이름은 plan.unknown_programs 에 남긴다.
+    검증/보안 판정(허용 범위, 해시, 링크)은 선택과 무관하게 모든 항목에 똑같이 적용한다.
     """
     try:
-        return _plan_import(path, rules, expand)
+        return _plan_import(path, rules, expand, _norm_tokens(only_programs), _norm_tokens(skip_programs))
     except PackageError:
         raise
     except (KeyError, TypeError, AttributeError, ValueError, IndexError, RecursionError) as e:
@@ -1523,7 +1663,48 @@ def _denied_item(f: dict, target: Path, why: str, is_extra: bool, base_path: Pat
             "error": f"복원 안 함: {why}"}
 
 
-def _plan_import(path: Path, rules: list[Rule], expand: Expand) -> ImportPlan:
+def _not_selected_item(f: dict, target: Path, is_extra: bool, base_path: Path, pkey: str) -> dict:
+    return {"entry": f["arc"], "target": str(target), "status": NOT_SELECTED, "backup": "", "size": f["size"],
+            "base_dir": str(base_path), "sha256": f["sha256"], "extra": is_extra, "program": pkey, "reason": NOT_SELECTED,
+            "error": NOT_SELECTED_TEXT}
+
+
+def _fill_programs(plan: ImportPlan, by_id: dict, only: list[str], skip: list[str]) -> None:
+    """plan.items 에서 프로그램별 표(plan.programs)를 만들고, 묶음에 없는 only/skip 항목을 plan.unknown_programs 에 모은다."""
+    order: list[str] = []
+    rows: dict[str, dict] = {}
+    for it in plan.items:
+        k = it["program"]
+        if k not in rows:
+            order.append(k)
+            if k.startswith(EXTRA_ID + ":"):
+                name, kind = f"{coverage.EXTRA_PROGRAM}: {k.split('/', 1)[1]}", "extra"
+            else:
+                name, kind = (by_id[k].name if k in by_id else k), "rule"
+            rows[k] = {"id": k, "name": name, "kind": kind, "selected": True, "files": 0, "bytes": 0, "new": 0, "overwrite": 0,
+                       "same": 0, "denied": 0, "rejected": 0, "not_selected": 0}
+        r = rows[k]
+        r["files"] += 1
+        r["bytes"] += it["size"]
+        st = it["status"]
+        key = {WOULD_COPY: "new", WOULD_OVERWRITE: "overwrite", SKIPPED_SAME: "same", DENIED: "denied", REJECTED: "rejected",
+               NOT_SELECTED: "not_selected"}.get(st)
+        if key:
+            r[key] += 1
+        if st == NOT_SELECTED:
+            r["selected"] = False
+    plan.programs = [rows[k] for k in order]
+    ids = list(rows)
+    plan.unknown_programs = [t for t in only + skip if not any(program_matches(t, k) for k in ids)]
+
+
+def _plan_import(path: Path, rules: list[Rule], expand: Expand, only: list[str] | None = None,
+                 skip: list[str] | None = None) -> ImportPlan:
+    only, skip = only or [], skip or []
+    return _plan_import_inner(path, rules, expand, only, skip)
+
+
+def _plan_import_inner(path: Path, rules: list[Rule], expand: Expand, only: list[str], skip: list[str]) -> ImportPlan:
     if is_unfinished_part(path):  # 만드는 중/중단된 임시 파일: 완성본이 아니다
         raise PackageError("이 파일(.part)은 아직 완성되지 않은 임시 파일입니다. 내보내기를 같은 저장 위치로 다시 실행해 "
                            "끝내거나(이어서 합니다), 완성된 .zip 파일을 선택하세요.")
@@ -1559,9 +1740,12 @@ def _plan_import(path: Path, rules: list[Rule], expand: Expand) -> ImportPlan:
             plan.problems.append(f"복원 위치의 환경변수를 확장할 수 없거나 상대 경로임: {base}")
             continue
         target = base_path.joinpath(*PurePosixPath(f["rel"]).parts)
+        pkey = program_key(f)
+        selected = (not only or any(program_matches(t, pkey) for t in only)) and not any(program_matches(t, pkey) for t in skip)
         link = fs.reparse_in_chain(base_path, target)  # 복원 위치가 링크/정션을 거치면 링크 너머에 쓰게 되므로 따라가지 않는다(F-5)
         if link:
-            plan.items.append(_rejected_item(f, target, link, is_extra, base_path))
+            plan.items.append(_rejected_item(f, target, link, is_extra, base_path) | {"program": pkey} if selected
+                              else _not_selected_item(f, target, is_extra, base_path, pkey))
             continue
         if not _within(target, base_path):
             plan.problems.append(f"복원 대상이 허용 루트 밖: {target}")
@@ -1576,9 +1760,12 @@ def _plan_import(path: Path, rules: list[Rule], expand: Expand) -> ImportPlan:
             plan.problems.append(f"같은 대상으로 복원되는 중복 항목: {target}")
             continue
         seen_targets.add(key)
+        if not selected:  # 선택에서 뺀 프로그램: 대상 파일은 읽지도 않는다
+            plan.items.append(_not_selected_item(f, target, is_extra, base_path, pkey))
+            continue
         why = restore_denied(f["rel"], target, None if is_extra else by_id[rid], base)
         if why:  # 패키지 전체를 막지 않고 이 파일만 '복원 안 함'(쓰지 않는다). 나머지는 정상 복원(R1-1)
-            plan.items.append(_denied_item(f, target, why, is_extra, base_path))
+            plan.items.append(_denied_item(f, target, why, is_extra, base_path) | {"program": pkey})
             continue
         backup = ""
         if target.is_file() and target.stat().st_size == f["size"] and sha256_file(target) == f["sha256"]:
@@ -1590,7 +1777,8 @@ def _plan_import(path: Path, rules: list[Rule], expand: Expand) -> ImportPlan:
             status = WOULD_COPY
         plan.items.append({"entry": f["arc"], "target": str(target), "status": status,
                            "backup": backup, "size": f["size"], "sha256": f["sha256"],
-                           "extra": is_extra, "base_dir": str(base_path)})
+                           "extra": is_extra, "base_dir": str(base_path), "program": pkey})
+    _fill_programs(plan, by_id, only, skip)
     return plan
 
 
@@ -1627,6 +1815,10 @@ def apply_import(path: Path, plan: ImportPlan,
                 done(FileResult(it["entry"], it["target"], SKIPPED_SAME, it["size"], it["sha256"]))
                 continue
             target = Path(it["target"])
+            if it["status"] == NOT_SELECTED:  # 선택에서 제외된 프로그램: 패키지에서 꺼내지도, 대상에 쓰지도 않는다
+                done(FileResult(it["entry"], it["target"], NOT_SELECTED, it["size"], it["sha256"], error=NOT_SELECTED_TEXT,
+                                reason=NOT_SELECTED))
+                continue
             if it["status"] == DENIED:  # 거부 항목은 패키지에서 꺼내지도, 대상에 쓰지도 않는다
                 done(FileResult(it["entry"], it["target"], DENIED, it["size"], it["sha256"], error=it["error"], reason=DENIED))
                 continue
@@ -1891,7 +2083,15 @@ def _retry_once(out: Path, rules: list[Rule], expand: Expand, progress_info, not
         items += its
     refs = _extra_refs(manifest, expand)
     if refs:
-        its, _ = collect_extra_items(refs, expand, avoid=avoid, roots=roots, failed=scan_failed)
+        saved = manifest.get("extra_mode")  # 이전 버전 묶음(기록 없음)은 예전 방식(전체)으로 담았다
+        lim_d = manifest.get("extra_limits") if isinstance(manifest.get("extra_limits"), dict) else {}
+        try:
+            lim = settings_filter.ConfigLimits(**{k: int(lim_d[k]) for k in ("file_bytes", "folder_bytes", "folder_files")}) if lim_d else None
+        except (KeyError, TypeError, ValueError):
+            lim = None
+        its, _ = collect_extra_items(refs, expand, avoid=avoid, roots=roots, failed=scan_failed,
+                                     extra_mode=saved if saved in settings_filter.EXTRA_MODES else settings_filter.EXTRA_MODE_ALL,
+                                     limits=lim)
         items += its
 
     failed_norm = {_norm_src(f["src"]): f for f in unreadable}

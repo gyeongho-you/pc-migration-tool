@@ -318,7 +318,7 @@ def test_export_extra_applies_existing_safeguards(env, rules, tmp_path):
     items = load_selection(select(env, tmp_path, ("%APPDATA%", "Foo Bar")), env.expand)
     src_before = {p: p.read_bytes() for p in (env.appdata / "Foo Bar").rglob("*") if p.is_file()}
     out = tmp_path / "pkg.zip"
-    m = export_package([], out, [], None, expand=env.expand, extras=items)
+    m = export_package([], out, [], None, expand=env.expand, extras=items, extra_mode="all")
     assert {f["rule"] for f in m["files"]} == {EXTRA_ID}
     assert not any(f["arc"].endswith(".lic") for f in m["files"])
     assert {f["rel"] for f in m["files"]} == {"Foo Bar/data.db", "Foo Bar/sub/keep.txt"}
@@ -333,7 +333,7 @@ def test_extra_restore_roundtrip_and_allowed_roots(env, rules, tmp_path):
     items = load_selection(select(env, tmp_path, ("%APPDATA%", "Foo Bar"), ("%USERPROFILE%", ".gitconfig")),
                            env.expand)
     out = tmp_path / "pkg.zip"
-    export_package([], out, [], None, expand=env.expand, extras=items)
+    export_package([], out, [], None, expand=env.expand, extras=items, extra_mode="all")
     new = Env(tmp_path / "newpc")
     plan = plan_import(out, rules, new.expand)
     assert plan.problems == [] and all(i["extra"] for i in plan.items)
@@ -357,7 +357,7 @@ def forge(out, mutate):
 def test_extra_import_rejects_forged_manifest(env, rules, tmp_path):
     items = load_selection(select(env, tmp_path, ("%APPDATA%", "Foo Bar")), env.expand)
     out = tmp_path / "pkg.zip"
-    export_package([], out, [], None, expand=env.expand, extras=items)
+    export_package([], out, [], None, expand=env.expand, extras=items, extra_mode="all")
     new = Env(tmp_path / "newpc")
     cases = [
         (lambda m: m["files"][0].update(base="C:\\Windows\\System32"), "허용되지 않은"),
@@ -382,7 +382,7 @@ def test_deny_list_blocks_startup_and_authorized_keys(env, rules, tmp_path):
     touch(env.home / ".ssh" / "authorized_keys")
     items = load_selection(select(env, tmp_path, ("%APPDATA%", "Foo Bar"), ("%USERPROFILE%", ".ssh")), env.expand)
     out = tmp_path / "pkg.zip"
-    export_package([], out, [], None, expand=env.expand, extras=items)
+    export_package([], out, [], None, expand=env.expand, extras=items, extra_mode="all")
     plan = plan_import(out, rules, Env(tmp_path / "n2").expand)
     # 19a: 내보내기 단계에서 같은 판정으로 걸러지고(skipped), 가져오기에서도 항목별 '복원 안 함'
     assert plan.problems == []
@@ -427,7 +427,7 @@ def test_cli_export_extra_selection_error(env, tmp_path, monkeypatch, capsys):
 def test_cli_import_extra_needs_allow_extra(env, rules, tmp_path, monkeypatch, capsys):
     items = load_selection(select(env, tmp_path, ("%APPDATA%", "Foo Bar")), env.expand)
     out = tmp_path / "pkg.zip"
-    export_package([], out, [], None, expand=env.expand, extras=items)
+    export_package([], out, [], None, expand=env.expand, extras=items, extra_mode="all")
     new = Env(tmp_path / "newpc")
     new.setenv(monkeypatch)
     rd = make_rules_dir(tmp_path / "rules")

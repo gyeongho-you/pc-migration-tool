@@ -17,6 +17,13 @@ def _isolated_error_log(tmp_path_factory, monkeypatch):
     errorlog.reset_throttle()  # 중복 제거/속도 제한/쓰기 확인 캐시는 시험끼리 공유하지 않는다
 
 
+@pytest.fixture(autouse=True)
+def _isolated_import_records(tmp_path_factory, monkeypatch):
+    """복원(import --yes)이 남기는 복원 기록이 사용자의 실제 %LOCALAPPDATA% 폴더에 쌓이지 않게 한다."""
+    from pcmigrate import import_record
+    monkeypatch.setattr(import_record, "RECORD_DIR", str(tmp_path_factory.mktemp("import-records")))
+
+
 def make_rules_dir(path):
     """흐름 시험용 규칙 폴더: 규칙 파일이 하나는 있어야 하고(비어 있으면 오류), 시험 프로그램과는 맞지 않는다."""
     import json
