@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from . import failure, fs, split
+from . import failure, fs, junk as junk_mod, split
 from .cancel import Cancelled
 from .copier import (CLOUD_ONLY, FAILED, MISMATCH, MISSING, PENDING_VERIFY, SKIPPED_SAME, VERIFIED, WOULD_COPY,
                      WOULD_OVERWRITE, FileResult, IoStats, Report, copy_verified, repair_file, sha256_file, verify_file)
@@ -168,7 +168,8 @@ DEFAULT_COPY_THREADS = 4  # 작은 파일이 많을 때 /MT:4 가 로컬 SSD 에
 
 
 def base_args(src: Path, dst: Path, log: Path | None, dry_run: bool, copy_mode: str = "restartable",
-              retries: int = 3, wait: int = 5, threads: int = 1) -> list[str]:
+              retries: int = 3, wait: int = 5, threads: int = 1, xf_extra: tuple[str, ...] = (),
+              xd: tuple[str, ...] = ()) -> list[str]:
     """robocopy 인자. copy_mode: restartable(/Z, 기본·끊겨도 파일 중간부터 이어받음) / normal(옵션 없음) / unbuffered(/J, 아주 큰 파일에 유리).
 
     threads 가 2 이상이면 /MT:n(여러 파일을 동시에 복사)을 붙인다. 목록만 보는 미리보기(/L)에는 쓰지 않는다."""
@@ -186,7 +187,9 @@ def base_args(src: Path, dst: Path, log: Path | None, dry_run: bool, copy_mode: 
         args.append("/L")  # 목록만. 로그 파일도 쓰지 않는다.
     elif log is not None:
         args.append(f"/LOG+:{log}")
-    args += ["/XF", OWN_PATTERN]  # 이 도구의 기록 파일(상태/로그/목록)은 옮기지 않는다. 뒤에 파일 이름을 더 이어 붙일 수 있다.
+    if xd:  # 정크 제외(--exclude-junk): 폴더 이름 패턴. /XF 목록 뒤에 이름을 이어 붙이는 코드가 있으므로 /XF 앞에 둔다.
+        args += ["/XD", *xd]
+    args += ["/XF", OWN_PATTERN, *xf_extra]  # 이 도구의 기록 파일(상태/로그/목록)은 옮기지 않는다. 뒤에 파일 이름을 더 이어 붙일 수 있다.
     return args
 
 
@@ -662,7 +665,8 @@ def transfer(src: Path, dst: Path, *, dry_run: bool = False, include_cloud: bool
              verify_dest: bool | None = None, copy_mode: str = "restartable",
              retries: int | None = None, wait: int | None = None,
              clock: Callable[[], float] = time.monotonic, alive_fn: Callable[[], bool] | None = None,
-             min_report_interval: float = 1.0, copy_threads: int | None = None, split_large: bool = False) -> Report:
+             min_report_interval: float = 1.0, copy_threads: int | None = None, split_large: bool = False,
+             junk_spec: "junk_mod.JunkSpec | None" = None) -> Report:
     """src 폴더를 dst 로 복사하고 SHA-256 으로 검사한다.
 
     - strict: 상태 파일을 믿지 않고 모든 파일을 다시 검사하고, 내용이 어긋난 파일은 원본에서 다시 복사(.bak 보존)한다.
@@ -674,6 +678,8 @@ def transfer(src: Path, dst: Path, *, dry_run: bool = False, include_cloud: bool
     - use_manifest: 원본 해시를 이 목록에서 가져와 원본을 다시 읽지 않는다(외장 드라이브 2단계: 외장에서 새 PC 로 복사).
     - copy_mode: restartable(/Z) | normal | unbuffered(/J).
     - split_large: 4GiB-1 바이트를 넘는 파일을 조각(.pcm001...)으로 나눠 저장한다(FAT32 대상 포함). 끄면 동작이 전과 같다.
+    - junk_spec: junk.make_spec() 결과. 주면 그 규칙의 파일/폴더를 robocopy /XF /XD 로 빼고 원본 조사에서도 뺀 뒤
+      report.meta["junk_excluded"] 에 개수/용량을 남긴다. None(기본)이면 아무것도 제외하지 않는다.
     """
     src, dst = Path(src), Path(dst)
     if not src.is_dir():
@@ -720,6 +726,7 @@ def transfer(src: Path, dst: Path, *, dry_run: bool = False, include_cloud: bool
     say("원본 파일을 조사하는 중입니다… 파일이 많으면 몇 분 걸릴 수 있습니다.")
     scan = scan_source_info(src, attr_getter=None if attr_getter is default_attr_getter else attr_getter,
                             progress=progress, progress_info=progress_info, cancel=cancel, clock=clock)
+    junk_info = junk_mod.apply_to_scan(scan, junk_spec) if junk_spec is not None else None
     entries = scan.entries + (scan.cloud if include_cloud else [])
     skipped_cloud = [] if include_cloud else scan.cloud
     total_bytes = scan.total_bytes + (scan.cloud_bytes if include_cloud else 0)
@@ -750,6 +757,8 @@ def transfer(src: Path, dst: Path, *, dry_run: bool = False, include_cloud: bool
                        total_bytes=total_bytes, source_root=scan.root, source_layout=scan.layout(),
                        scan_seconds=round(scan.seconds, 2), skipped_links=scan.skipped_links, skipped_link_paths=list(scan.skipped_link_paths),
                        results_truncated=not detail_ok)
+    if junk_info is not None:
+        report.meta["junk_excluded"] = junk_info.as_dict(junk_spec)
     say(f"원본 조사 완료: 파일 {len(entries):,}개, 총 {fmt_bytes(total_bytes)} (조사 {scan.seconds:.0f}초).")
 
     # ---- 파일 시스템/여유 공간 사전 검사(복사 전에 막는다). export 와 같은 fs.check_space 를 쓴다
@@ -796,7 +805,7 @@ def transfer(src: Path, dst: Path, *, dry_run: bool = False, include_cloud: bool
         if progress_info:
             progress_info(ProgressInfo("compare", 0, 0, 0, len(entries), message="복사될 파일을 비교하는 중입니다…",
                                        skipped=len(skipped_cloud)))
-        return _dry_run(report, plain, skipped_cloud, scan, dst, runner, copy_mode, network, warn, dscan, sctx)
+        return _dry_run(report, plain, skipped_cloud, scan, dst, runner, copy_mode, network, warn, dscan, sctx, junk_spec)
 
     # ---- 실제 실행
     _friendly_makedirs(dst)
@@ -871,7 +880,7 @@ def transfer(src: Path, dst: Path, *, dry_run: bool = False, include_cloud: bool
                 say("복사 도구로 복사하는 중입니다(파일이 크면 오래 걸립니다)…")
                 code, text, runs = _copy_with_robocopy(src, dst, log, skipped_cloud + (sctx.entries if sctx else []), runner, cancel, copy_mode,
                                                        retries if retries is not None else (10 if network else 3),
-                                                       wait if wait is not None else (30 if network else 5), on_line, scan, alive, threads)
+                                                       wait if wait is not None else (30 if network else 5), on_line, scan, alive, threads, junk_spec)
                 ok, notes = interpret_exit(code)
                 report.meta.update(robocopy_exit=code, robocopy_ok=ok, robocopy_notes=notes, robocopy_runs=runs,
                                    robocopy_log=str(log))
@@ -957,9 +966,9 @@ def _first(path: Path):
 
 def _dry_run(report: Report, entries, skipped_cloud, scan: ScanInfo, dst: Path, runner, copy_mode: str, network: bool,
              warn: Callable[[str], None] = lambda m: None, dscan: DestScan | None = None,
-             sctx: "SplitCtx | None" = None) -> Report:
+             sctx: "SplitCtx | None" = None, junk_spec: "junk_mod.JunkSpec | None" = None) -> Report:
     """robocopy /L 은 목록 확인용, 리포트는 크기 비교로 만든다. 아무것도 쓰지 않는다. entries 는 분할 대상을 뺀 파일 목록이다."""
-    args = base_args(Path(scan.root), dst, None, True, copy_mode)
+    args = base_args(Path(scan.root), dst, None, True, copy_mode, xf_extra=junk_spec.xf if junk_spec else (), xd=junk_spec.xd if junk_spec else ())
     skipped_names = list(skipped_cloud) + (sctx.entries if sctx else [])
     xf = sorted({os.path.basename(scan.abs_path(r)) for r, _s, _m in skipped_names})
     if xf and sum(len(n) + 3 for n in xf) <= MAX_XF_CHARS:
@@ -1004,10 +1013,12 @@ def _dry_run(report: Report, entries, skipped_cloud, scan: ScanInfo, dst: Path, 
 
 
 def _copy_with_robocopy(src: Path, dst: Path, log: Path, cloud: list, runner: Runner, cancel, copy_mode: str,
-                        retries: int, wait: int, on_line, scan: ScanInfo, alive, threads: int = 1) -> tuple[int, str, int]:
+                        retries: int, wait: int, on_line, scan: ScanInfo, alive, threads: int = 1,
+                        junk_spec: "junk_mod.JunkSpec | None" = None) -> tuple[int, str, int]:
     """robocopy 실행. (최악 종료코드, 오류 줄 모음, 실행 횟수). 클라우드 전용 파일은 /XF 로 제외."""
+    jxf, jxd = (junk_spec.xf, junk_spec.xd) if junk_spec else ((), ())
     if not cloud:
-        code, text = _call_runner(runner, base_args(src, dst, log, False, copy_mode, retries, wait, threads), on_line, alive)
+        code, text = _call_runner(runner, base_args(src, dst, log, False, copy_mode, retries, wait, threads, jxf, jxd), on_line, alive)
         return code, text, 1
     # 폴더별 실행: /LEV:1 + 해당 폴더의 클라우드 파일명만 /XF (전체 경로를 한 명령줄에 넣지 않는다)
     skip_by_dir: dict[str, list[str]] = {}
@@ -1021,9 +1032,11 @@ def _copy_with_robocopy(src: Path, dst: Path, log: Path, cloud: list, runner: Ru
             raise Cancelled()
         dirs.sort()
         dirs[:] = [d for d in dirs if not fs.is_reparse(os.path.join(root, d))]  # robocopy /XJ 와 같은 기준: 정션/링크는 따라가지 않는다
+        if junk_spec is not None:
+            dirs[:] = [d for d in dirs if not junk_spec.skip_dir(d)]  # 정크 폴더는 내려가지 않는다(/XD 와 같은 기준)
         relp = os.path.relpath(root, src)
         key = "" if relp == "." else relp.replace(os.sep, "/")
-        args = base_args(Path(root), dst / ("" if relp == "." else relp), log, False, copy_mode, retries, wait, threads)
+        args = base_args(Path(root), dst / ("" if relp == "." else relp), log, False, copy_mode, retries, wait, threads, jxf, jxd)
         args[args.index("/E")] = "/LEV:1"
         if key in skip_by_dir:
             args += skip_by_dir[key]
