@@ -41,16 +41,16 @@ class RetryPanel(ttk.Frame):
         """guarded: BaseView.guarded(fn, *args, **kw) (GuardError 를 안내 대화상자로 보여 주는 함수)."""
         super().__init__(parent)
         self.c, self._guarded = controller, guarded
-        self.box = tk.Frame(self, bg=WARN_BG, highlightbackground=WARN_FG, highlightthickness=1, padx=12, pady=8)
+        self.box = tk.Frame(self, bg=WARN_BG, highlightbackground=WARN_FG, highlightthickness=1, padx=10, pady=4)
         self.head = tk.Label(self.box, text="", bg=WARN_BG, fg=WARN_FG, font=SUB_FONT, anchor="w")
         self.head.pack(anchor="w")
         self.hint = tk.Label(self.box, text=T.EXP_RETRY_HINT, bg=WARN_BG, justify="left", anchor="w")
-        self.hint.pack(anchor="w", fill="x", pady=2)
+        self.hint.pack(anchor="w", fill="x", pady=1)
         autowrap(self.hint, 30)
         self.result = tk.Label(self.box, text="", bg=WARN_BG, justify="left", anchor="w")
         autowrap(self.result, 30)
         self.btn = ttk.Button(self.box, text=T.BTN_EXP_RETRY, command=self.retry)
-        self.btn.pack(anchor="w", pady=(6, 0))
+        self.btn.pack(anchor="w", pady=(3, 0))
         self._shown = False
         self._result_text = ""
 
@@ -77,8 +77,8 @@ class RetryPanel(ttk.Frame):
             return
         if n:
             self.head.configure(text=T.EXP_RETRY_HEAD.format(n=n))
-            self.hint.pack(anchor="w", fill="x", pady=2, before=self.btn)
-            self.btn.pack(anchor="w", pady=(6, 0))
+            self.hint.pack(anchor="w", fill="x", pady=1, before=self.btn)
+            self.btn.pack(anchor="w", pady=(3, 0))
         else:  # 모두 담겼다: 결과 안내만 남긴다
             self.head.configure(text=T.EXP_RETRY_ALL_DONE)
             self.hint.pack_forget()
@@ -89,7 +89,7 @@ class RetryPanel(ttk.Frame):
         else:
             self.result.pack_forget()
         if not self._shown:
-            self.box.pack(fill="x", pady=(6, 0))
+            self.box.pack(fill="x", pady=(3, 0))
             self._shown = True
         self._update_button()
 

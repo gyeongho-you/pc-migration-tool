@@ -174,11 +174,12 @@ def test_discover_view_columns_total_and_find_row(ctx):
     v = app.views[S.OLD_DISCOVER]
     assert len(v.tree["columns"]) == 7
     rows = children(v.tree)
-    assert rows[0]["values"][4] == "6.0MB" and rows[0]["values"][5] == "40개"
-    assert T.DISC_TOTAL_NONE in v.total.cget("text")
+    assert rows[0]["values"][4] == T.DISC_CFG_UNKNOWN and rows[0]["values"][5] == T.DISC_SIZE_FOLDER.format(size="6.0MB")  # 설정 파일 수는 아직 모름
+    assert rows[0]["values"][6] == "4.0MB"  # 제외(캐시)
+    assert T.DISC_TOTAL_V2.format(n=0, files=0, size="0B") in v.total.cget("text")
     v._select_all()
     app.update()
-    assert "선택한 1개" in v.total.cget("text") and "캐시 제외 후" in v.total.cget("text")
+    assert "선택 1개" in v.total.cget("text") and "설정 파일 0개" in v.total.cget("text") and "확인 안 된 1개" in v.total.cget("text")
     assert "Acme Tool" in v.find_box.cget("values") and v.find_var.get() == T.FIND_PICK
     v._find()  # 프로그램을 고르지 않음: 안내 대화상자(가짜)만
     assert ctx.shown and ctx.shown[-1][0] == "warn"
@@ -219,7 +220,7 @@ def test_export_view_include_caches_checkbox_and_coverage_box(ctx, tmp_path):
     app.update()
     assert "플러그인" in v.cov.fold_list.cget("text")
     v._reset_done()
-    assert not v.cov.winfo_manager()
+    assert not v.cov_fold.winfo_manager()
 
 
 def test_preview_and_result_show_coverage(ctx):

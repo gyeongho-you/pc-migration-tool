@@ -104,6 +104,12 @@ class WizardState:
     transfer_progress: Any = None  # progress.ProgressInfo
     verify_manifest: str = ""  # 2단계(랜선): 목록 파일
     verify_target: str = ""  # 2단계(랜선): 검사할 폴더
+    # ---- stage30b 구획(프로그램별 복원 선택, 되돌리기, 폴더 전체 담기)
+    extra_mode: str = "config"  # 직접 고른 폴더를 담는 방식: config(설정 파일만, 기본) | all(폴더 전체)
+    restore_skip: set = field(default_factory=set)  # 복원에서 체크를 끈 프로그램 id
+    preview_skip: tuple = ()  # 지금 미리보기를 계산할 때 쓴 skip(체크 상태와 다르면 복원 불가)
+    undo_results: dict = field(default_factory=dict)  # 프로그램 id -> 되돌리기 결과(api.UndoResult)
+    undo_preview: dict = field(default_factory=dict)  # 프로그램 id -> 되돌리기 미리보기(api.UndoResult)
 
 
 # =========================================================================== stage30a: 내 파일 옮기기(찾기 → 방법 → 연결·복사 → 결과)
