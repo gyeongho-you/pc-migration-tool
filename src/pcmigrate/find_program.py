@@ -218,6 +218,12 @@ def find_program(program: Program, rules: list[Rule], expand: Expand = expand_en
         scan_candidate(c, per_limit, clock, budget_end)
         if not c.scan_complete and c.is_dir:
             res.budget_hit = True
+    for c in cands:  # 허용 방식(설정 파일만)으로 내보내면 담길 파일 수/용량(후보 표용, 시간 상한 안에서)
+        check()
+        if not c.license_only:
+            fill_config_estimate(c, expand, min(budget_end, clock() + per_limit), clock)
+            if not c.config_complete:
+                res.budget_hit = True
     cands.sort(key=lambda c: (0 if c.link and c.link.grade == CERTAIN else 1, 1 if c.link and c.link.weak else 0, c.path.lower()))
     res.candidates = cands
     check()
@@ -226,6 +232,29 @@ def find_program(program: Program, rules: list[Rule], expand: Expand = expand_en
     res.nested, res.nested_more = _nested_cache_settings([c for c in cands if c.is_dir and not c.badge],
                                                          min(budget_end, clock() + per_limit), clock)
     return res
+
+
+def fill_config_estimate(c: Candidate, expand: Expand, deadline: float, clock: Callable[[], float] = time.monotonic) -> None:
+    """후보에 허용 방식 기준 '담길 파일 수/용량'을 채운다(package.estimate_extra_config 와 같은 기준, 읽기 전용)."""
+    from .package import estimate_extra_config
+    est = estimate_extra_config(c.root, c.rel, c.path, expand, include_caches=c.include_caches, deadline=deadline, clock=clock)
+    c.config_files, c.config_bytes = est.files, est.bytes
+    c.config_excluded_files, c.config_excluded_bytes = est.excluded_files, est.excluded_bytes
+    c.config_limit_files, c.config_ext_counts, c.config_complete = est.limit_files, dict(est.ext_counts), est.complete
+
+
+def config_line(c: Candidate) -> str:
+    """후보 표/CLI 의 한 줄: 허용 방식으로 담길 파일 수/용량."""
+    if c.config_files is None:
+        return ""
+    from .progress import fmt_bytes
+    more = "" if c.config_complete else " 이상(시간 상한)"
+    text = f"허용 방식으로 담길 파일 {c.config_files}개{more}, {fmt_bytes(c.config_bytes or 0)}"
+    if c.config_excluded_files:
+        text += f" / 설정 형식이 아니라 빠질 파일 {c.config_excluded_files}개({fmt_bytes(c.config_excluded_bytes or 0)})"
+    if c.config_limit_files:
+        text += f" / 상한 초과로 빠질 파일 {c.config_limit_files}개"
+    return text
 
 
 def _nested_cache_settings(dirs: list[Candidate], deadline: float, clock: Callable[[], float]) -> tuple[list[dict], int]:
@@ -291,6 +320,9 @@ def render(f: ProgramFind, fmt: str = "text") -> str:
                      "프로그램 안의 '설정 내보내기' 기능이나 설치 폴더를 직접 확인하세요.")
     for c in f.candidates:
         lines.append("  - " + _cand_line(c, True))
+        cl = config_line(c)
+        if cl:
+            lines.append("      · " + cl)
     if f.budget_hit:
         lines.append("※ 시간 상한에 걸려 일부 크기는 '이상' 또는 '크기 미확인'으로 표시됩니다.")
     lines.append("※ 캐시/로그/임시 폴더도 포함해 찾았습니다. 배지([임시 저장물일 수 있음]/[로그])가 붙은 후보는 직접 확인하고 고르세요(기본은 선택 안 함). "

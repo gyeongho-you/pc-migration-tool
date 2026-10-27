@@ -9,7 +9,8 @@ from .progress import fmt_bytes
 
 _IMPORT_LABELS = (("would_copy", "새로 만듦"), ("would_overwrite", "덮어씀(.bak 으로 백업)"),
                   ("skipped_identical", "이미 같음(건너뜀)"), ("copied", "복원함"), ("denied", "복원 안 함(보안상 거부 형식)"),
-                  ("rejected", "복원 안 함(링크를 거치는 위치)"), ("failed", "실패"))
+                  ("rejected", "복원 안 함(링크를 거치는 위치)"), ("not_selected", "선택에서 제외됨(복원 안 함)"),
+                  ("failed", "실패"))
 
 
 def _q(path: str) -> str:
@@ -32,12 +33,58 @@ def export_lines(r, output: str) -> list[str]:
     cl = coverage.cache_line(m)
     if cl:
         lines.append(f"- {cl}")
+    lines += coverage.config_lines(m, "- ")
     lines += coverage.lines(m)
     if r.unreadable:
         lines.append(f"- 사용 중이라 읽지 못한 파일 {len(r.unreadable)}개(해당 프로그램을 닫고 다시 실행하면 담깁니다)")
     if r.hard_failures:
         lines.append(f"- 실패 {len(r.hard_failures)}개(아래 '실패' 줄 참고)")
     lines.append(f"다음 할 일: 새 PC 로 옮긴 뒤 pcmigrate import {_q(output)} --dry-run 으로 미리 확인하고, 이상 없으면 --yes 로 복원하세요.")
+    return lines
+
+
+def program_table_lines(programs: list[dict]) -> list[str]:
+    """프로그램별 복원 표: 프로그램 / 파일 수 / 새로 만듦 / 덮어씀(.bak) / 이미 같음 / 선택 여부."""
+    if not programs:
+        return []
+    out = ["프로그램별(프로그램 id / 파일 수 / 새로 만듦 / 덮어씀 / 이미 같음):"]
+    for p in programs:
+        tail = "" if p["selected"] else " — 선택에서 제외됨(복원 안 함)"
+        extra = (f", 복원 안 함(보안) {p['denied']}" if p["denied"] else "") + (f", 링크 거부 {p['rejected']}" if p["rejected"] else "")
+        out.append(f"  {p['id']} ({p['name']}) / {p['files']}개 / 새로 {p['new']} / 덮어씀 {p['overwrite']} / 같음 {p['same']}{extra}{tail}")
+    return out
+
+
+def undo_lines(r, record_note: str = "") -> list[str]:
+    """undo-import 결과 요약(미리보기/확인/적용)."""
+    from . import import_record as ir
+    p = r.plan
+    s = p.summary()
+    head = {"dry-run": "되돌리기 미리보기(아무것도 바꾸지 않았습니다)", "needs-confirm": "되돌리기 확인(아무것도 바꾸지 않았습니다)",
+            "applied": "되돌리기를 마쳤습니다", "nothing": "되돌릴 파일이 없습니다"}[r.mode]
+    lines = [f"{head}: {', '.join(p.programs) or '-'}", f"- 복원 기록: {fs.plain_path_text(p.record_path)}"]
+    if r.written:
+        done = sum(1 for i in p.items if i.result == ir.RESTORED)
+        moved = sum(1 for i in p.items if i.result == ir.MOVED)
+        bad = sum(1 for i in p.items if i.result == ir.FAILED_UNDO)
+        lines.append(f"- 원래 이름으로 되돌림(.bak 복구) {done}개" + (f", 새 파일을 .removed 로 옮김 {moved}개" if moved else "")
+                     + (f", 실패 {bad}개" if bad else ""))
+    else:
+        lines.append(f"- 되돌릴 파일(.bak 을 원래 이름으로) {s['restore']}개" + (f", .removed 로 옮길 새 파일 {s['new_moved']}개" if s["new_moved"] else ""))
+    if s["new_kept"]:
+        lines.append(f"- 새 파일 {s['new_kept']}개는 지우지 않았습니다(복원 때 새로 만든 파일이라 사용자 데이터 보호를 위해 그대로 둡니다). "
+                     "필요하면 --move-new 로 '<이름>.removed' 로 옮길 수 있습니다.")
+    if s["already_undone"]:
+        lines.append(f"- 이미 되돌렸거나 제자리에 있어 건너뜀 {s['already_undone']}개")
+    for i in p.problems:
+        lines.append(f"- 되돌리지 않음: {fs.plain_path_text(i.target)} — {i.detail}")
+    for i in p.items:
+        if i.result == ir.FAILED_UNDO:
+            lines.append(f"- 실패: {fs.plain_path_text(i.target)} — {i.detail}")
+    if r.mode == "dry-run" and s["restore"] + s["new_moved"]:
+        lines.append("다음 할 일: 이상 없으면 같은 명령에서 --dry-run 을 빼고 --yes 를 붙여 실행하세요.")
+    elif r.mode == "needs-confirm":
+        lines.append("다음 할 일: 실제로 되돌리려면 --yes 를 붙여 다시 실행하세요.")
     return lines
 
 
@@ -65,6 +112,7 @@ def import_lines(r, package: str, report=None) -> list[str]:
         lines += [f"    · {fs.plain_path_text(it['target'])}" for it in denied[:5]]
         if len(denied) > 5:
             lines.append(f"    … 외 {len(denied) - 5}개")
+    lines += program_table_lines(plan.programs)
     lines += coverage.lines(plan.manifest)
     if r.git_config_warning:
         lines.append(f"- [주의] {r.git_config_warning}")

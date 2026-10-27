@@ -24,8 +24,8 @@ def categorize(status: str, reason: str = "") -> str:
     """파일 결과(copier 의 status/reason)를 카운터 분류로 바꾼다. 읽기 실패 중 '사용 중'은 따로 센다."""
     if status in ("copied", "verified", "pending_verify"):
         return OK
-    if status in ("skipped_identical", "cloud_only", "would_copy", "would_overwrite", "extra", "denied"):
-        return SKIPPED if status in ("skipped_identical", "cloud_only", "denied") else OK
+    if status in ("skipped_identical", "cloud_only", "would_copy", "would_overwrite", "extra", "denied", "not_selected"):
+        return SKIPPED if status in ("skipped_identical", "cloud_only", "denied", "not_selected") else OK
     return UNREADABLE if reason == "in_use" else FAILED_KIND
 NETWORK_SLOW_BYTES_PER_SEC = 11 * 1024 * 1024  # 100Mbps 급 링크의 실제 한계(약 11MB/s)
 SLOW_HINT = ("속도가 계속 느립니다(40MB/s 미만). 외장 드라이브가 USB 2.0 포트에 연결돼 있을 수 있습니다. "

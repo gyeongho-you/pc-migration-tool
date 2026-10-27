@@ -29,7 +29,7 @@ def make_controller(tmp_path, registry):
 
 def test_old_pc_to_new_pc_full_flow(tmp_path, monkeypatch):
     old = Env(tmp_path / "old")
-    touch(old.appdata / "Foo Bar" / "data.db", b"b" * 2048)
+    touch(old.appdata / "Foo Bar" / "data.json", b"b" * 2048)
     touch(old.appdata / "Foo Bar" / "license.lic", b"LICENSE")
     touch(old.appdata / "Acme Secrets" / "credentials.json", b"{}")
     touch(old.home / ".gitconfig", b"[user]")
@@ -56,21 +56,21 @@ def test_old_pc_to_new_pc_full_flow(tmp_path, monkeypatch):
     with zipfile.ZipFile(out) as zf:
         names = zf.namelist()
         manifest = json.loads(zf.read("manifest.json"))
-    assert any(n.endswith("Foo Bar/data.db") for n in names)
+    assert any(n.endswith("Foo Bar/data.json") for n in names)
     assert not any(n.endswith(".lic") for n in names)  # 라이선스 제외
     assert not any("credentials" in n or "gitconfig" in n for n in names)  # 선택하지 않은 항목은 자동 포함되지 않음
     assert manifest["extras"] == [{"root": "%APPDATA%", "rel": "Foo Bar"}]
 
     # ---- 신 PC
     new = Env(tmp_path / "new")
-    touch(new.appdata / "Foo Bar" / "data.db", b"OLD-CONTENT")
+    touch(new.appdata / "Foo Bar" / "data.json", b"OLD-CONTENT")
     new.setenv(monkeypatch)
     c2, events2 = make_controller(tmp_path, [])
     c2.set_package(str(out))
     c2.start_preview()
     rows = c2.preview_rows()
     assert [r["status"] for r in rows] == [T.PREV_STATUS["would_overwrite"]] and rows[0]["extra"] is True
-    assert (new.appdata / "Foo Bar" / "data.db").read_bytes() == b"OLD-CONTENT"  # 미리보기는 쓰지 않음
+    assert (new.appdata / "Foo Bar" / "data.json").read_bytes() == b"OLD-CONTENT"  # 미리보기는 쓰지 않음
     with pytest.raises(GuardError):
         c2.start_apply()
     c2.set_preview_checked(True)
@@ -80,8 +80,8 @@ def test_old_pc_to_new_pc_full_flow(tmp_path, monkeypatch):
     c2.set_extra_consent(True)
     c2.confirm_final(True)
     c2.start_apply()
-    assert (new.appdata / "Foo Bar" / "data.db").read_bytes() == b"b" * 2048
-    assert (new.appdata / "Foo Bar" / "data.db.bak").read_bytes() == b"OLD-CONTENT"
+    assert (new.appdata / "Foo Bar" / "data.json").read_bytes() == b"b" * 2048
+    assert (new.appdata / "Foo Bar" / "data.json.bak").read_bytes() == b"OLD-CONTENT"
     sm = c2.import_summary()
     assert sm["counts"] == {"copied": 1} and sm["backups"] and sm["failures"] == []
     assert "import_done" in [k for k, _ in events2]

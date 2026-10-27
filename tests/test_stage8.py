@@ -164,7 +164,7 @@ def test_all_locations_resolve_through_env_nothing_real_leaks(tmp_path, monkeypa
     sel_file.write_text(json.dumps(sel), encoding="utf-8")
     items = load_selection(sel_file)
     out = tmp_path / "pkg.zip"
-    manifest = export_package([], out, programs, None, extras=items)
+    manifest = export_package([], out, programs, None, extras=items, extra_mode="all")
     plan = plan_import(out, rules, env.expand)
     blob = (json.dumps(api_dump(d)) + json.dumps(sel) + json.dumps(manifest) + json.dumps(plan.items)).lower()
     for prefix in real:
@@ -200,7 +200,7 @@ def test_import_allowed_roots_use_same_expand(tmp_path, monkeypatch):
     touch(env.pd / "Foo Bar" / "p.db")
     sel = select(env, tmp_path, ("%PROGRAMDATA%", "Foo Bar"))
     out = tmp_path / "pkg.zip"
-    export_package([], out, [], None, expand=env.expand, extras=load_selection(sel, env.expand))
+    export_package([], out, [], None, expand=env.expand, extras=load_selection(sel, env.expand), extra_mode="all")
     new = Env(tmp_path / "new")
     new.setenv(monkeypatch)
     monkeypatch.setenv("ProgramData", str(new.pd))
@@ -323,7 +323,7 @@ def extras_package(tmp_path):
     touch(env.appdata / "Foo Bar" / "data.db")
     out = tmp_path / "pkg.zip"
     export_package([], out, [], None, expand=env.expand,
-                   extras=load_selection(select(env, tmp_path, ("%APPDATA%", "Foo Bar")), env.expand))
+                   extras=load_selection(select(env, tmp_path, ("%APPDATA%", "Foo Bar")), env.expand), extra_mode="all")
     return out
 
 

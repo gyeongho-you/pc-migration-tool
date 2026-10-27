@@ -75,7 +75,7 @@ def test_is_regenerable_exact_names_only():
 
 def test_collect_extra_skips_cache_dirs_and_records(env):
     app_tree(env)
-    items, skipped = collect_extra_items([extra(env, "Acme")], env.expand)
+    items, skipped = collect_extra_items([extra(env, "Acme")], env.expand, extra_mode="all")
     rels = {i.rel for i in items}
     assert rels == {"Acme/config.ini", "Acme/Service Worker/Database/keep.db", "Acme/CacheTool/user.cfg"}
     cache = [s for s in skipped if s.get("cache")]
@@ -87,14 +87,14 @@ def test_collect_extra_skips_cache_dirs_and_records(env):
 
 def test_collect_extra_include_caches_keeps_everything(env):
     app_tree(env)
-    items, skipped = collect_extra_items([extra(env, "Acme")], env.expand, include_caches=True)
+    items, skipped = collect_extra_items([extra(env, "Acme")], env.expand, include_caches=True, extra_mode="all")
     assert len(items) == 10  # node_modules/index.js 는 복원 거부 형식(.js)이라 제외
     assert not [s for s in skipped if s.get("cache")]
 
 
 def test_selected_top_folder_named_cache_is_not_pruned(env):
     touch(env.appdata / "Cache" / "a.bin")
-    items, skipped = collect_extra_items([extra(env, "Cache")], env.expand)
+    items, skipped = collect_extra_items([extra(env, "Cache")], env.expand, extra_mode="all")
     assert [i.rel for i in items] == ["Cache/a.bin"] and not skipped
 
 
@@ -108,7 +108,7 @@ def test_rule_paths_untouched_by_cache_filter(env):
 
 def _export(env, tmp_path, extras, rules=(), **kw):
     out = tmp_path / "o" / "pkg.zip"
-    m = export_package(list(rules), out, [], None, env.expand, extras=extras, **kw)
+    m = export_package(list(rules), out, [], None, env.expand, extras=extras, extra_mode="all", **kw)
     return out, m
 
 
@@ -141,8 +141,8 @@ def test_run_export_include_caches_passthrough(env, tmp_path):
     rd.mkdir()
     (rd / "x.json").write_text(json.dumps({"id": "x", "name": "X", "detect": {"display_name_patterns": ["zzz"]}}), encoding="utf-8")
     ex = [extra(env, "Acme")]
-    r1 = run_export(rd, tmp_path / "a.zip", extra_items=ex, deps=deps)
-    r2 = run_export(rd, tmp_path / "b.zip", extra_items=ex, deps=deps, include_caches=True)
+    r1 = run_export(rd, tmp_path / "a.zip", extra_items=ex, deps=deps, extra_mode="all")
+    r2 = run_export(rd, tmp_path / "b.zip", extra_items=ex, deps=deps, include_caches=True, extra_mode="all")
     assert len(r1.manifest["files"]) == 3 and len(r2.manifest["files"]) == 10
     assert r1.summary_dict("a.zip")["cache_dirs_skipped"] == 7 and "cache_dirs_skipped" not in r2.summary_dict("b.zip")
 
@@ -393,5 +393,5 @@ def test_selected_cache_named_candidate_is_exported_license_is_not(env, tmp_path
 def test_license_files_inside_selected_folder_still_excluded_by_global_rule(env):
     touch(env.appdata / "AcmePaint" / "k.lic", b"L")
     touch(env.appdata / "AcmePaint" / "ok.ini", b"i")
-    items, skipped = collect_extra_items([extra(env, "AcmePaint")], env.expand)
+    items, skipped = collect_extra_items([extra(env, "AcmePaint")], env.expand, extra_mode="all")
     assert [i.rel for i in items] == ["AcmePaint/ok.ini"] and any(s["path"].endswith("k.lic") for s in skipped)

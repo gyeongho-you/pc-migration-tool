@@ -597,6 +597,29 @@ python -m pcmigrate discover --output-selection <폴더>\selection.json
   남긴 채 끝까지 진행하며, 결과에 "읽지 못해 제외된 파일 N개(예: Chrome 실행 중이면 닫고 다시 하세요)"와 예시 경로 5개를 보여 줍니다.
   패키지를 만든 직후 다시 검사해 문제가 있으면 임시 파일을 남기지 않고 어떤 항목이 문제인지 알려 줍니다.
   `LOCK`, `lockfile`, `parent.lock`, `SingletonLock`, `SingletonCookie`, `SingletonSocket` 은 복사할 가치가 없어 항상 제외합니다.
+- **목록 밖 프로그램은 '설정 파일만' 담기(`export --extra-mode config|all`, 기본 `config`)**: 규칙이 없는 프로그램의 폴더(`--extra`)에서 예전에는
+  캐시만 빼고 폴더 전체를 담아 용량이 크고 정크가 섞였습니다. 기본은 허용 방식으로, `src/pcmigrate/settings_filter.py` 의 확장자 표(`ALLOWED_CONFIG_EXTS`, 근거 등급 A/B/C)에 있는
+  파일만 담습니다. A(텍스트 설정 표준): `.ini .cfg .conf .config .json .jsonc .xml .yaml .yml .toml .properties .code-snippets`;
+  B(건축 CAD/BIM 사용자 정의, 공식 문서에 설정/템플릿으로 적힌 형식): `.pgp .cui .cuix .mns .dwt .ctb .stb .pc3 .pmp .lin .pat .rte .rft .rui .plist`;
+  C(프로그램/버전별 편차, 현장 확인 권장): `.bpx .bfx .tpl`; 확장자 없는 점 파일은 `.gitconfig .gitattributes .editorconfig .gitignore_global` 만 허용합니다.
+  **허용하지 않는 것**: 실행/스크립트/라이브러리(복원도 거부), 라이선스(`.lic`, 이름에 license/eula), 로그, 캐시/임시/잠금, DB·바이너리(`.db .dat .bin`),
+  이미지/영상, 작업물(`.dwg .rvt .skp .3dm`), `.txt/.csv`(설정인지 메모인지 구별 불가), 글꼴, `desktop.ini`. `.reg` 는 더블클릭만으로 레지스트리를 바꾸는 실행성 파일이라
+  의도적으로 제외합니다(복원 거부 목록에도 있음). **상한**(폴더 항목 하나 기준, 정렬 순서대로 적용): 파일 하나 32MB, 폴더 256MB, 파일 5000개를 넘는 것은 담지 않고 사유(`limit`)를 기록합니다.
+  설정 형식이 아니라 뺀 파일은 파일마다가 아니라 폴더마다 요약(`manifest['skipped']` 의 `not_config`: 개수, 용량, 확장자별 개수)으로 기록하고, 설정 확인표(`coverage`)에
+  `config_mode/allowed_files/ext_counts/not_config_files/not_config_bytes/limit_files` 를 덧붙입니다(기존 키는 그대로, 이전 패키지도 읽힘). `--extra-mode all` 은 예전 방식입니다.
+  선택은 이어받기 지문에 들어가 바꾸면 처음부터 다시 만들고, `--retry-failed` 는 묶음에 기록된 모드와 상한으로 다시 찾습니다(기록 없는 이전 묶음은 `all`).
+  `discover --program` 의 후보에는 허용 방식 기준 '담길 파일 수/용량, 설정 형식이 아니라 빠질 파일'이 함께 나옵니다(JSON 의 `config_files` 등).
+  확장자 없는 설정 파일(예: `Preferences`)은 허용 방식에서 빠지므로 필요하면 `--extra-mode all` 을 쓰세요.
+- **프로그램별 복원 선택(`import --only 규칙id[,..]` / `--skip 규칙id[,..]`)**: 새 PC 에서 일부 프로그램만 복원하거나 뺍니다. 프로그램 단위는 규칙 id,
+  규칙 없는 항목은 `extra:<루트키>/<최상위 이름>`(예: `extra:appdata/AcmePaint`; `extra` 는 전부, `extra:AcmePaint` 는 루트 무관). `--only` 후 `--skip` 을 적용하고, 묶음에 없는 이름은 오류로 알립니다.
+  `--dry-run`/`--json` 미리보기에는 프로그램별 표(`programs`: id, name, kind, selected, files, bytes, new, overwrite, same, denied, rejected, not_selected)가 나옵니다.
+  뺀 프로그램은 대상 파일을 읽지도 쓰지도 않고 상태 `not_selected`('선택에서 제외됨')로 기록하며 `--allow-extra` 도 요구하지 않습니다. 허용 범위/해시 검증/링크 거부는 선택과 무관하게 똑같이 적용합니다.
+- **프로그램별 되돌리기(`pcmigrate undo-import --only 규칙id[,..]`)**: `import --yes` 가 끝나면 복원 기록(`%LOCALAPPDATA%\pcmigrate\import-records\import-YYYYMMDD-HHMMSS.json`,
+  `--record-dir` 로 바꿈, 리포트 `meta.import_record` 에도 경로)을 남깁니다. 형식: `{format:"pcmigrate-import-record", version:1, created, package, programs[], entries[]}`,
+  entries 항목은 `program, entry, target, base_dir, backup, backup_size, backup_sha256, new_size, new_sha256, undone, undone_at, undo_action`(실제로 복사한 파일만).
+  `--dry-run` 으로 미리 보고 `--yes` 로 실행합니다(기본은 가장 최근 기록, `--record` 로 지정). 덮어썼던 파일은 `.bak` 이 기록한 크기/해시 그대로이고 대상이 복원한 그대로일 때만 `.bak` 을 원래 이름으로 되돌립니다.
+  `.bak` 이 없거나 바뀌었거나 복원 뒤 사용자가 고친 파일은 되돌리지 않고 이유를 알립니다. 복원이 새로 만든 파일은 **지우지 않고** '새 파일 N개는 지우지 않았습니다'로 알리며 `--move-new` 면 `<이름>.removed` 로 옮깁니다.
+  기록 파일은 신뢰하지 않고 허용 루트/링크/`.bak` 이름을 다시 확인하며, 두 번 실행해도 안전합니다(되돌린 항목은 기록에 표시).
 - **읽지 못해 제외된 파일만 다시 담기(`export --retry-failed`)**: 해당 프로그램(예: Chrome)을 닫은 뒤 `pcmigrate export --output 묶음.zip --retry-failed`
   (GUI: 결과 영역의 "이 파일들만 다시 담기")를 실행하면 새로 만들지 않고, **이미 만든 묶음**의 `manifest['failed']` 항목만 현재 원본에서 다시 읽어 그 묶음에 추가합니다.
   담을 대상은 묶음에 적힌 규칙 id 와 직접 고른 항목(`extras`)으로 다시 찾으므로(이 PC 의 `--rules` 폴더에 같은 규칙이 있어야 함) 규칙 밖이거나 보안상 거부 대상인 파일은 다시 담지 않습니다.

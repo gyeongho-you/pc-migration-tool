@@ -67,6 +67,14 @@ class Candidate:
     include_caches: bool = False  # 이 후보 자체가 캐시/로그 이름이라 사용자가 고르면 임시 저장물 자동 제외를 적용하지 않는다
     license_only: bool = False  # 라이선스 폴더: 발견만 표시, 이 도구는 라이선스를 옮기지 않으므로 선택할 수 없다
     rule_programs: list[str] = field(default_factory=list)  # 연결된 프로그램 중 규칙이 있는 것(숨김 사유)
+    # 허용 방식(설정 파일만)으로 내보내면 담길 양('이 프로그램 설정 찾기'가 채움, 전역 discover 는 None). 후보 표용.
+    config_files: int | None = None
+    config_bytes: int | None = None
+    config_excluded_files: int | None = None  # 설정 형식이 아니라 빠질 파일 수/용량
+    config_excluded_bytes: int | None = None
+    config_limit_files: int | None = None  # 상한을 넘어 빠질 파일 수
+    config_ext_counts: dict = field(default_factory=dict)
+    config_complete: bool = False  # False 면 시간 상한에 걸려 '이상'(또는 계산하지 않음)
 
     @property
     def key(self) -> tuple[str, str]:

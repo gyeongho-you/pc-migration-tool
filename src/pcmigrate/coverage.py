@@ -49,9 +49,16 @@ def rows(manifest: dict) -> list[dict]:
                         f"{fmt_bytes(c.get('cache_bytes', 0))})는 다시 만들어지므로 뺐습니다")
             elif status == ST_MANUAL:
                 note = "자동으로 옮기지 않습니다"
-            out.append({"program": str(c.get("name") or c.get("rule") or "?"), "what": str(c.get("description") or c.get("path") or ""),
-                        "status": status, "files": files, "note": note, "rule": str(c.get("rule", "")),
-                        "path": str(c.get("path", ""))})
+            extra_note = _config_note(c)
+            if extra_note:
+                note = f"{note}; {extra_note}" if note else extra_note
+            row = {"program": str(c.get("name") or c.get("rule") or "?"), "what": str(c.get("description") or c.get("path") or ""),
+                   "status": status, "files": files, "note": note, "rule": str(c.get("rule", "")),
+                   "path": str(c.get("path", ""))}
+            if c.get("config_mode"):  # 허용 방식(설정 파일만)으로 담은 항목: 화면/표가 더 보여 줄 수 있는 세부(없으면 키 자체가 없다)
+                row.update({k: c.get(k) for k in ("ext_counts", "allowed_files", "allowed_bytes", "not_config_files",
+                                                   "not_config_bytes", "limit_files", "limit_bytes")})
+            out.append(row)
         return out
     counts: dict[str, int] = {}
     for f in manifest.get("files", []):
@@ -103,6 +110,66 @@ def lines(manifest: dict, *, expand_none: bool = False, indent: str = "  ") -> l
         out.append(f"{indent}{folded_line(len(hidden))}")
         if expand_none:
             out += [f"{indent}{indent}· {r['program']} / {r['what']}" for r in hidden]
+    return out
+
+
+def _num(v) -> int:
+    return v if isinstance(v, int) and not isinstance(v, bool) and v >= 0 else 0
+
+
+def ext_counts_text(counts: object, limit: int = 8) -> str:
+    """{'.json': 3, '.ini': 1} -> '.json 3개, .ini 1개'(많은 순, limit 가짓수까지)."""
+    if not isinstance(counts, dict):
+        return ""
+    pairs = [(str(k), _num(v)) for k, v in counts.items() if _num(v)]
+    pairs.sort(key=lambda kv: (-kv[1], kv[0]))
+    text = ", ".join(f"{k} {n}개" for k, n in pairs[:limit])
+    return text + (f" 외 {len(pairs) - limit}가지" if len(pairs) > limit else "")
+
+
+def _config_note(c: dict) -> str:
+    if not c.get("config_mode"):
+        return ""
+    parts = []
+    if _num(c.get("allowed_files")):
+        parts.append(f"설정 형식 파일만 담음({ext_counts_text(c.get('ext_counts'))})")
+    if _num(c.get("not_config_files")):
+        parts.append(f"설정 형식이 아니라 제외 {_num(c['not_config_files'])}개({fmt_bytes(_num(c.get('not_config_bytes')))})")
+    if _num(c.get("limit_files")):
+        parts.append(f"상한 초과로 제외 {_num(c['limit_files'])}개({fmt_bytes(_num(c.get('limit_bytes')))})")
+    return "; ".join(parts)
+
+
+def config_totals(manifest: dict) -> dict:
+    """허용 방식(설정 파일만)으로 담은 항목들의 합계. items=0 이면 허용 방식 항목이 없다(규칙만, 또는 예전 방식/이전 버전 패키지).
+    {items, allowed_files, allowed_bytes, ext_counts, not_config_files, not_config_bytes, limit_files, limit_bytes}"""
+    out = {"items": 0, "allowed_files": 0, "allowed_bytes": 0, "ext_counts": {}, "not_config_files": 0, "not_config_bytes": 0,
+           "limit_files": 0, "limit_bytes": 0}
+    cov = manifest.get("coverage")
+    for c in cov if isinstance(cov, list) else []:
+        if not isinstance(c, dict) or not c.get("config_mode"):
+            continue
+        out["items"] += 1
+        for k in ("allowed_files", "allowed_bytes", "not_config_files", "not_config_bytes", "limit_files", "limit_bytes"):
+            out[k] += _num(c.get(k))
+        if isinstance(c.get("ext_counts"), dict):
+            for e, n in c["ext_counts"].items():
+                out["ext_counts"][str(e)] = out["ext_counts"].get(str(e), 0) + _num(n)
+    return out
+
+
+def config_lines(manifest: dict, indent: str = "") -> list[str]:
+    """CLI/GUI 용: 허용 방식 결과 두세 줄(담긴 파일 확장자별 개수, 설정 형식이 아니라 제외한 파일 수/용량, 상한 초과). 해당 없으면 빈 목록."""
+    t = config_totals(manifest)
+    if not t["items"]:
+        return []
+    out = [f"{indent}허용 방식(설정 파일만)으로 담은 파일 {t['allowed_files']}개({fmt_bytes(t['allowed_bytes'])})"
+           + (f": {ext_counts_text(t['ext_counts'])}" if t["ext_counts"] else "")]
+    if t["not_config_files"]:
+        out.append(f"{indent}제외된 파일(설정 형식이 아님) {t['not_config_files']}개, 용량 {fmt_bytes(t['not_config_bytes'])}"
+                   " — 전부 담으려면 --extra-mode all")
+    if t["limit_files"]:
+        out.append(f"{indent}상한(파일 크기/폴더 용량/파일 수)을 넘어 제외된 설정 형식 파일 {t['limit_files']}개, 용량 {fmt_bytes(t['limit_bytes'])}")
     return out
 
 
