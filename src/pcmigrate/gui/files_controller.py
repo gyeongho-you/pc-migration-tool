@@ -294,7 +294,7 @@ class FilesMixin:
         b = self.bundle_source()
         if b is None:
             return None
-        return SelectedItem(self._bundle_stage_dir(b[0]), True, b[1], 1, T.BUNDLE_LABEL)
+        return SelectedItem(self._bundle_stage_dir(b[0]), True, b[1], 1, T.BUNDLE_LABEL, T.BUNDLE_DEST_DIR)
 
     @staticmethod
     def is_bundle_item(item: Any) -> bool:

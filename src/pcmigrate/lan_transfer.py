@@ -876,7 +876,7 @@ def build_send_plan(sources: list[str] | None = None, selection: str | os.PathLi
         if cancel and cancel():
             raise Cancelled()
         cancel_mod.checkpoint()
-        prefix = "" if flat else it.rel.replace("\\", "/")
+        prefix = "" if flat and not it.custom else it.rel.replace("\\", "/")
         plan.roots.append(it.src)
         sc = scan_source_info(it.src, cancel=cancel, progress_info=progress_info)
         if spec is not None:

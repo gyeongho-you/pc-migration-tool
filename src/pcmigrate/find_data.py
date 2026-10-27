@@ -582,6 +582,24 @@ class SelectedItem:
     total_bytes: int | None = None
     total_files: int | None = None
     label: str = ""
+    dest_rel: str = ""  # 비어 있으면 <드라이브>\<경로> 구조, 값이 있으면 '대상 폴더 바로 아래의 이 이름 폴더'로 보낸다(단일 폴더 이름만)
+
+
+def selected_items_dict(items: list["SelectedItem"]) -> dict:
+    """SelectedItem 목록 -> 선택 파일 dict(parse_selection 의 역). dest_rel 은 있을 때만 키를 넣는다(이전 버전은 모르는 키를 무시)."""
+    rows = []
+    for it in items:
+        row: dict = {"path": it.path, "include": it.include}
+        if it.total_bytes is not None:
+            row["total_bytes"] = it.total_bytes
+        if it.total_files is not None:
+            row["total_files"] = it.total_files
+        if it.label:
+            row["label"] = it.label
+        if it.dest_rel:
+            row["dest_rel"] = it.dest_rel
+        rows.append(row)
+    return {"format": SELECTION_FORMAT, "version": SELECTION_VERSION, "items": rows}
 
 
 def load_selection(path: str | os.PathLike) -> list[SelectedItem]:
@@ -611,6 +629,17 @@ def parse_selection(data: object) -> list[SelectedItem]:
         if not isinstance(inc, bool):
             raise SelectionFileError(f"items[{i}].include 는 true/false 여야 합니다(입력: {inc!r})")
         tb, tf = it.get("total_bytes"), it.get("total_files")
+        dr = it.get("dest_rel", "")
+        if dr is None:
+            dr = ""
+        if not isinstance(dr, str):
+            raise SelectionFileError(f"items[{i}].dest_rel 은 폴더 이름 문자열이어야 합니다(입력: {dr!r})")
+        if dr:
+            from .multi_transfer import check_dest_rel
+            try:
+                check_dest_rel(dr)
+            except ValueError as e:
+                raise SelectionFileError(f"items[{i}].dest_rel 이 올바르지 않습니다: {e}") from e
         out.append(SelectedItem(it["path"], inc, tb if isinstance(tb, int) and tb >= 0 else None,
-                                tf if isinstance(tf, int) and tf >= 0 else None, str(it.get("label", ""))))
+                                tf if isinstance(tf, int) and tf >= 0 else None, str(it.get("label", "")), dr))
     return out

@@ -53,11 +53,26 @@ def dest_rel(src: str) -> str:
     return "\\".join(head + parts)
 
 
+def check_dest_rel(name: str) -> str:
+    """항목별 대상 폴더 이름(dest_rel) 검증: 단일 폴더 이름만(구분자/../절대경로/ADS/예약 이름/끝 점·공백/도구 기록 이름 거부). 위반이면 ValueError."""
+    from .lan_protocol import UnsafePath, validate_rel
+    if not isinstance(name, str) or not name.strip() or name != name.strip():
+        raise ValueError("대상 폴더 이름이 비었거나 앞뒤에 공백이 있습니다")
+    if "/" in name or "\\" in name or ":" in name or name in (".", ".."):
+        raise ValueError(f"대상 폴더 이름은 폴더 이름 하나여야 합니다(경로 구분자, .., 드라이브/ADS 표시 불가): {name!r}")
+    try:
+        validate_rel(name)
+    except UnsafePath as e:
+        raise ValueError(str(e)) from e
+    return name
+
+
 @dataclass
 class PlanItem:
     src: str
     rel: str  # 대상 아래 상대 경로(역슬래시)
     estimate: int | None = None  # 선택 파일에 적힌 용량(없으면 None)
+    custom: bool = False  # dest_rel 로 지정한 이름이면 True(LAN 전송에서 레이아웃과 무관하게 이 이름을 쓴다)
 
 
 @dataclass
@@ -103,12 +118,26 @@ def plan_items(selected: Iterable[SelectedItem | str], dst: str | os.PathLike, *
         if os.path.normcase(s_real) == os.path.normcase(d_real) or _is_within(Path(d_real), Path(s_real)):
             raise TransferError(f"대상은 원본과 같거나 원본 폴더 안에 있을 수 없습니다: 원본 {it.path} / 대상 {dst}")
     rels: dict[str, str] = {}
+    custom_keys: set[str] = set()
     for it in kept:
-        rel = dest_rel(it.path)
+        custom = bool(getattr(it, "dest_rel", ""))
+        if custom:
+            try:
+                rel = check_dest_rel(it.dest_rel)
+            except ValueError as e:
+                raise TransferError(f"항목의 대상 폴더 이름이 올바르지 않습니다({it.path}): {e}") from e
+            custom_keys.add(rel.lower())
+        else:
+            rel = dest_rel(it.path)
         if rel.lower() in rels:  # 이름 변환이 겹치는 경우(실제로는 거의 없음): 조용히 합치지 않고 거부
             raise TransferError(f"대상 폴더 이름이 겹칩니다: {it.path} 와 {rels[rel.lower()]}")
         rels[rel.lower()] = it.path
-        plan.items.append(PlanItem(it.path, rel, it.total_bytes))
+        plan.items.append(PlanItem(it.path, rel, it.total_bytes, custom))
+    if custom_keys:  # 지정한 이름이 다른 항목의 <드라이브>\... 구조 안쪽/바깥쪽과 겹치는 경우도 거부
+        for ck in custom_keys:
+            for other in rels:
+                if other != ck and (other.startswith(ck + "\\") or ck.startswith(other + "\\")):
+                    raise TransferError(f"대상 폴더 이름이 겹칩니다: {rels[ck]} 와 {rels[other]}")
     return plan
 
 

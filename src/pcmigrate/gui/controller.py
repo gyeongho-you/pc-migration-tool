@@ -487,7 +487,10 @@ class Controller(FilesMixin):
         (경로, 수정 시각, 크기, 위치 종류) 를 가장 최근 것부터. 같은 파일은 한 번만."""
         pat = re.compile(r"^" + re.escape(T.EXP_DEFAULT_NAME.rsplit(".", 1)[0]) + r".*\.zip$", re.IGNORECASE)
         # (폴더, 아래로 내려갈 깊이, 위치 종류). 받은 폴더는 보낼 때의 폴더 구조(<드라이브>\<경로>)가 그대로 들어 있어 더 깊이 본다
-        dirs: list[tuple[str, int, str]] = [(d, RECEIVED_DEPTH, T.PKG_WHERE_RECEIVED) for d in self.received_dirs()]
+        received = self.received_dirs()
+        # 새 방식(받는 폴더 바로 아래 '설정 묶음' 폴더)을 가장 먼저 얕게 보고, 이전 버전이 보낸 깊은 경로는 기존 깊이로 계속 찾는다
+        dirs: list[tuple[str, int, str]] = [(os.path.join(d, T.BUNDLE_DEST_DIR), 0, T.PKG_WHERE_RECEIVED) for d in received]
+        dirs += [(d, RECEIVED_DEPTH, T.PKG_WHERE_RECEIVED) for d in received]
         dirs += [(self.default_desktop(), 0, T.PKG_WHERE_DESKTOP), (self.default_downloads(), 0, T.PKG_WHERE_DOWNLOADS)]
         system = os.path.normcase(os.environ.get("SystemDrive") or "C:").rstrip("\\/")
         try:
