@@ -14,6 +14,7 @@ import inspect
 import logging
 import os
 import re
+import time
 import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -22,6 +23,7 @@ from typing import Any, Callable
 from .. import api as real_api
 from .. import errorlog
 from ..cancel import CancelToken
+from ..cancel import bind as bind_cancel
 from ..checklist import write_output
 from .. import coverage, fs
 from ..discover import fmt_size, items_from_selection
@@ -37,6 +39,10 @@ from . import state as S
 from . import texts as T
 from .runner import Runner
 from .status import StatusModel
+
+
+_WRITING_TASKS = (T.TASK_EXPORT, T.TASK_EXPORT_RETRY, T.TASK_TRANSFER, T.TASK_APPLY, T.TASK_RETRY)  # 파일을 쓰는 작업
+FORCE_STOP_AFTER = 15.0  # '중지' 요청 후 이 시간(초)이 지나도 못 멈추면 force_stop_ready() 가 True
 
 
 def _home_aliases() -> list[tuple[str, str]]:
@@ -334,6 +340,11 @@ class Controller:
         self.listener: Callable[[str, Any], None] | None = None
         self.cancel_token: CancelToken | None = None
         self.can_cancel = False
+        self.clock: Callable[[], float] = time.monotonic  # 시험에서 바꿔 끼운다
+        self.cancel_requested_at: float | None = None  # '중지'를 요청한 시각(없으면 None)
+        self.force_stop_after = FORCE_STOP_AFTER
+        self._abort: Callable[[], None] | None = None  # 지금 작업을 강제로 버리는 함수
+        self.cleanup_hooks: list[Callable[[], None]] = []  # 강제 중단 때 부르는 정리 함수(락/임시물)
         self.checklist_marks: set[tuple[str, str]] = set()  # 체크한 항목(탭, 문구): 화면을 오가도 유지
         self._dest_cache: dict[str, Any] = {}
         self.roadmap_marks: set[str] = set()  # 전체 이전 순서에서 체크한 항목(창을 닫았다 열어도 유지)
@@ -507,8 +518,11 @@ class Controller:
              cancellable: bool = False, on_fail: Callable[[], None] | None = None) -> None:
         if self.state.busy:
             raise GuardError(T.G_BUSY)
-        token = CancelToken() if cancellable else None
-        self.cancel_token, self.can_cancel = token, cancellable
+        if label in _WRITING_TASKS and self.runner.abandoned_alive():  # 강제로 버린 옛 작업이 아직 같은 파일을 쓰고 있을 수 있다
+            raise GuardError(T.G_BUSY)
+        token = CancelToken()  # 모든 작업은 중지할 수 있다(오래 걸리는 반복문은 checkpoint 로 이 토큰을 본다)
+        self.cancel_token, self.can_cancel = token, True
+        self.cancel_requested_at, self._abort = None, None
         self.state.busy, self.state.busy_label = True, label
         self.log.info("task start: %s", label)
         self.status.begin(label)
@@ -520,6 +534,7 @@ class Controller:
         def finish() -> None:
             self.state.busy, self.state.busy_label = False, ""
             self.cancel_token, self.can_cancel = None, False
+            self.cancel_requested_at, self._abort = None, None
 
         def on_done(res: Any) -> None:
             finish()
@@ -540,7 +555,7 @@ class Controller:
             self.emit("status", self.status)
             self.emit("error", fe)
 
-        def on_cancel() -> None:
+        def on_cancel(forced: bool = False) -> None:
             finish()
             self.log.info("task cancelled: %s", label)
             if on_fail:
@@ -549,6 +564,8 @@ class Controller:
             self.emit("busy", None)
             self.emit("status", self.status)
             self.emit("cancelled", label)
+            if forced:
+                self.emit("force_stopped", label)
 
         def on_progress(m: Any) -> None:
             if isinstance(m, ProgressInfo):  # 바이트/속도/남은 시간(진행 막대용)
@@ -561,8 +578,22 @@ class Controller:
                 self.status.message(T.friendly_detail(m))
                 self.emit("progress", T.friendly_detail(m))
 
-        self.runner.submit(lambda progress: fn(progress, token), on_done=on_done, on_error=on_error,
-                           on_cancel=on_cancel, on_progress=on_progress)
+        def work(progress):
+            with bind_cancel(token):  # 이 스레드의 모든 반복문(읽기/해시/압축/폴더 순회/하위 프로세스 대기)이 취소를 본다
+                return fn(progress, token)
+
+        tid = self.runner.submit(work, on_done=on_done, on_error=on_error, on_cancel=on_cancel, on_progress=on_progress)
+        if self.state.busy and self.state.busy_label == label:  # sync 실행기에서는 이미 끝났을 수 있다
+            def abort() -> None:
+                self.runner.abandon(tid)  # 늦게 도착하는 결과는 버린다
+                self.log.warning("task force-stopped: %s", label)
+                for hook in list(self.cleanup_hooks):
+                    try:
+                        hook()
+                    except Exception:  # noqa: BLE001 - 정리 실패가 강제 중단을 막지 않는다
+                        self.log.exception("cleanup hook failed")
+                on_cancel(forced=True)
+            self._abort = abort
 
     def toggle_roadmap(self, key: str) -> bool:
         """전체 이전 순서의 항목 체크를 뒤집고 새 상태를 돌려준다."""
@@ -576,12 +607,31 @@ class Controller:
         return True
 
     def cancel(self) -> bool:
-        """취소 가능한 작업(규칙에 없는 프로그램 찾기, 대용량 복사)에만 효과가 있다."""
+        """진행 중인 작업을 중지한다(모든 장기 작업). 이미 눌렀으면 아무 일도 하지 않고 True. 작업 없으면 False."""
         if self.cancel_token is not None:
-            self.cancel_token.cancel()
-            self.emit("progress", T.CANCELLING)
+            if self.cancel_requested_at is None:
+                self.cancel_requested_at = self.clock()
+                self.cancel_token.cancel()
+                self.emit("progress", T.CANCELLING)
+                self.emit("cancelling", None)
             return True
         return False
+
+    def force_stop_ready(self) -> bool:
+        """'중지'를 요청한 지 force_stop_after 초가 지나도 작업이 안 끝났으면 True(나중에 화면이 '강제 중단' 단추를 보일 때 쓴다)."""
+        return bool(self.state.busy and self.cancel_requested_at is not None
+                    and self.clock() - self.cancel_requested_at >= self.force_stop_after)
+
+    def force_stop(self) -> bool:
+        """작업 스레드의 결과를 버리고 busy 를 푼다(이벤트: cancelled, force_stopped). 스레드는 취소 토큰을 보고 스스로 끝나며
+        임시물/락은 그 스레드가 정리한다. 반환: 강제 중단을 했는가. 원본은 읽기만 하므로 건드리지 않는다."""
+        if self._abort is None or not self.state.busy:
+            return False
+        if self.cancel_token is not None:
+            self.cancel_token.cancel()
+        abort = self._abort
+        abort()
+        return True
 
     # ------------------------------------------------------------------ 구 PC 1) 조사
     def start_scan(self) -> None:
@@ -991,6 +1041,9 @@ class Controller:
             {"include": True, "root": k[0], "rel": k[1], **({"include_caches": True} if k in cache_keys else {})}
             for k in sorted(r.key for r in sel)]}) if sel else []
 
+        # 민감 항목을 하나도 고르지 않았다면 동의 표시와 상관없이 에러 없이 진행한다(검사를 끝내지 못했다는 이유만으로는 막지 않는다).
+        # 동의 표시가 켜져 있으면 api 의 다시 검사에서 새로 발견된 비밀 이름도 사용자가 이해한 것으로 본다.
+        allow_secrets = has_secret or self.state.secrets_ack
         stage_kw = {"stage_dir": stage_dir} if stage_dir else {}
         if include_caches is None:
             include_caches = self.state.include_caches
@@ -1001,8 +1054,9 @@ class Controller:
 
         def work(progress, token):
             return self.api.run_export(self.state.rules_dir, output, extra_items=items or None,
-                                       allow_secrets=has_secret, deps=self.deps,
-                                       **_supported(self.api.run_export, progress_info=progress, resume=resume), **stage_kw)
+                                       allow_secrets=allow_secrets, deps=self.deps,
+                                       **_supported(self.api.run_export, progress_info=progress, resume=resume,
+                                                    allow_unverified=True), **stage_kw)
 
         def done(res):
             self.state.export_result, self.state.export_output = res, output

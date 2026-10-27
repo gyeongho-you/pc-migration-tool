@@ -18,6 +18,8 @@ class Runner:
         self.sync = sync
         self._q: queue.Queue = queue.Queue()
         self._thread: threading.Thread | None = None
+        self._threads: dict[int, threading.Thread] = {}  # tid -> 작업 스레드
+        self._abandoned: set[int] = set()  # 강제로 버린 작업(스레드가 아직 돌 수 있다)
         self._callbacks: dict[int, dict[str, Callable]] = {}
         self._next = 0
         # 완료/오류/진행 콜백이 예외를 내면 호출된다(UI 스레드). 없으면 큐를 끝까지 비운 뒤 첫 예외를 다시 던진다.
@@ -33,6 +35,7 @@ class Runner:
         """fn(progress) 를 백그라운드에서 실행한다. 이미 실행 중이면 RuntimeError."""
         if self.busy:
             raise RuntimeError("이미 실행 중인 작업이 있습니다")
+        self._threads = {t: th for t, th in self._threads.items() if th.is_alive()}
         self._next += 1
         tid = self._next
         self._callbacks[tid] = {"done": on_done, "error": on_error, "cancel": on_cancel,
@@ -56,6 +59,7 @@ class Runner:
             self.pump()
         else:
             self._thread = threading.Thread(target=work, daemon=True, name=f"pcmigrate-task-{tid}")
+            self._threads[tid] = self._thread
             self._thread.start()
         return tid
 
@@ -115,6 +119,23 @@ class Runner:
             pass
         tid = max(self._callbacks)
         return (tid, "error", RuntimeError("작업이 결과를 남기지 않고 끝났습니다"), "")
+
+    def abandon(self, tid: int) -> bool:
+        """작업 tid 의 결과를 버린다(강제 중단): busy 를 풀고, 그 스레드가 나중에 남기는 이벤트는 무시한다.
+        파이썬 스레드는 밖에서 죽일 수 없으므로 스레드는 취소 토큰을 보고 스스로 끝난다(임시물은 그 스레드가 정리한다)."""
+        had = self._callbacks.pop(tid, None) is not None
+        if had:
+            self._abandoned.add(tid)
+        return had
+
+    def abandoned_alive(self) -> bool:
+        """강제로 버렸지만 아직 끝나지 않은 작업 스레드가 있는가(같은 파일을 쓰는 새 작업을 막는 데 쓴다)."""
+        for tid in list(self._abandoned):
+            th = self._threads.get(tid)
+            if th is None or not th.is_alive():
+                self._abandoned.discard(tid)
+                self._threads.pop(tid, None)
+        return bool(self._abandoned)
 
     def join(self, timeout: float = 5.0) -> None:
         if self._thread is not None:

@@ -10,10 +10,12 @@ import os
 import re
 import subprocess
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable
 
+from .cancel import checkpoint
 from .envpaths import expand_env
 from .rules import Rule
 
@@ -95,10 +97,34 @@ def read_registry_programs() -> list[Program]:
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
-def _subprocess_runner(args: list[str]) -> tuple[int, str]:
-    proc = subprocess.run(args, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300,
-                          stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
-    return proc.returncode, proc.stdout
+def _subprocess_runner(args: list[str], timeout: float = 300.0, poll: float = 0.2) -> tuple[int, str]:
+    """하위 프로세스를 실행하고 기다린다. 기다리는 동안 0.2초마다 취소를 확인해, 취소되면 프로세스를 종료하고 Cancelled 를 던진다."""
+    proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8",
+                            errors="replace", stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
+    deadline = time.monotonic() + timeout
+    try:
+        while True:
+            try:
+                out, _err = proc.communicate(timeout=poll)
+                return proc.returncode, out
+            except subprocess.TimeoutExpired:
+                checkpoint()
+                if time.monotonic() > deadline:
+                    raise
+    except BaseException:  # 취소/시간 초과/예상 밖 오류: 프로세스를 남기지 않는다
+        _kill(proc)
+        raise
+
+
+def _kill(proc: subprocess.Popen) -> None:
+    try:
+        proc.kill()
+    except OSError:
+        pass
+    try:
+        proc.communicate(timeout=5)
+    except (subprocess.SubprocessError, OSError, ValueError):
+        pass
 
 
 def parse_winget_export(text: str) -> list[Program]:

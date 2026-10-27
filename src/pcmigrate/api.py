@@ -498,8 +498,12 @@ class ExtraPrep:
 
 
 def prepare_extras(extra: str | Path | None, allow_secrets: bool,
-                   items: list[ExtraItem] | None = None) -> ExtraPrep:
-    """선택 파일(또는 이미 검증된 items)의 비밀 정보 가능성을 다시 검사한다. 위험한데 허용 안 했으면 ApiError."""
+                   items: list[ExtraItem] | None = None, *, allow_unverified: bool = False) -> ExtraPrep:
+    """선택 파일(또는 이미 검증된 items)의 비밀 정보 가능성을 다시 검사한다. 위험한데 허용 안 했으면 ApiError.
+
+    기본(CLI)은 검사를 끝내지 못한 항목(너무 커서 시간 초과, 읽기 거부)도 '위험'으로 본다. allow_unverified=True(GUI)면
+    비밀 이름이 하나도 발견되지 않은 항목은 검사를 못 끝냈어도 막지 않는다: 사용자가 민감 항목을 하나도 고르지 않았는데
+    '민감 정보가 있을 수 있다'는 오류로 묶음을 못 만드는 일을 막는다(비밀 이름이 실제로 발견되면 여전히 막는다)."""
     if items is None:
         if not extra:
             return ExtraPrep([])
@@ -510,7 +514,7 @@ def prepare_extras(extra: str | Path | None, allow_secrets: bool,
     risky = []
     for it in items:
         names, complete = secret_names(it)
-        if names or not complete:
+        if names or (not complete and not allow_unverified):
             risky.append((it, names))
     if risky and not allow_secrets:
         lines = [f"비밀 정보 가능성: {it.path} ({', '.join(names) if names else '비밀 정보 검사를 끝내지 못함'})"
@@ -572,7 +576,8 @@ def run_export(rules_dir: str | Path, output: str | Path, *, extra: str | Path |
                progress_info: Callable[[ProgressInfo], None] | None = None,
                resume: bool = True, compress: str = "auto",
                notice: Callable[[str], None] | None = None,
-               stage_dir: str | Path | None = None, include_caches: bool = False) -> ExportResult:
+               stage_dir: str | Path | None = None, include_caches: bool = False,
+               allow_unverified: bool = False) -> ExportResult:
     """설정 패키지 내보내기. OSError(출력 경로 문제)는 전파, 나머지 실패는 ApiError.
 
     resume=True 면 같은 출력 경로의 이전 저장점(.part)을 이어받고, False 면 이전 임시물을 지우고 처음부터 만든다.
@@ -583,7 +588,7 @@ def run_export(rules_dir: str | Path, output: str | Path, *, extra: str | Path |
     deps = deps or Deps()
     if compress not in COMPRESS_MODES:
         raise ApiError(f"--compress 는 {', '.join(COMPRESS_MODES)} 중 하나여야 합니다: {compress}")
-    extras = prepare_extras(extra, allow_secrets, items=extra_items)
+    extras = prepare_extras(extra, allow_secrets, items=extra_items, allow_unverified=allow_unverified)
     rules = load_rules_checked(rules_dir)
     winget_text = deps.winget_export()
     registry = deps.registry()

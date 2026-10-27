@@ -17,6 +17,7 @@ import re
 from dataclasses import asdict, dataclass, field
 from typing import Callable
 
+from .cancel import checkpoint
 from .checklist import (CERTAIN, PROBABLE, _norm_display, bundle_reason, classify_programs,
                         install_hint_for, known_app, match_program, parse_winget_list)
 from .detect import Program, parse_winget_export
@@ -242,6 +243,7 @@ def check_install(old_registry: list[Program], old_winget: list[Program], old_li
     in_file = {i.lower() for i in old_ids}
 
     def evaluate(p: Program, wid: str, route: str, route_reason: str, probable_wid: str = "") -> Item:
+        checkpoint()  # 프로그램 하나 판정마다 취소 확인
         hint = install_hint_for(p.name)
         found = newpc.find(p, wid, probable_wid)
         ov = p.version or old_ver.get(wid.lower(), "") if wid else p.version
@@ -294,6 +296,7 @@ def read_new_state(registry: Callable[[], list[Program]], winget_export: Callabl
                    winget_list: Callable[[], str | None]) -> NewState:
     """새 PC 의 설치 목록을 읽는다(레지스트리 + winget export + winget list). 모두 주입 가능, 읽기 전용."""
     reg = [p for p in registry() if p.source == "registry"]
+    checkpoint()
     text = winget_export()
     winget: list[Program] = []
     if text:
@@ -301,5 +304,6 @@ def read_new_state(registry: Callable[[], list[Program]], winget_export: Callabl
             winget = parse_winget_export(text)
         except (ValueError, AttributeError, TypeError):
             winget = []
+    checkpoint()
     list_text = winget_list()
     return NewState(reg, winget, list_text, winget_ok=bool(text or list_text))

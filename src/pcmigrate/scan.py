@@ -99,7 +99,9 @@ def scan_source_info(src: Path | str, attr_getter: Callable[[Path], int] | None 
             info.errors.append((relp or ".", f.code, f.text))
             continue
         subdirs: list[tuple[str, str]] = []
-        for e in items:
+        for k, e in enumerate(items):
+            if k % 1000 == 999 and cancel is not None and cancel():
+                raise Cancelled()  # 파일이 아주 많은 폴더 안에서도 멈춘다
             rel = f"{relp}/{e.name}" if relp else e.name
             if e.name.startswith(".pcmigrate-"):  # 이 도구의 기록 파일은 이전 대상이 아니다
                 continue

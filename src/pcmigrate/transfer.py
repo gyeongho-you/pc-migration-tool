@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Callable
 
 from . import failure, fs, split
-from .cancel import Cancelled
+from .cancel import Cancelled, checkpoint
 from .copier import (CLOUD_ONLY, FAILED, MISMATCH, MISSING, PENDING_VERIFY, SKIPPED_SAME, VERIFIED, WOULD_COPY,
                      WOULD_OVERWRITE, FileResult, IoStats, Report, copy_verified, repair_file, sha256_file, verify_file)
 from .engine import clamp_workers, run_ordered
@@ -127,6 +127,11 @@ def make_runner(cancel: Callable[[], bool] | None = None, alive: Callable[[], bo
         reader.start()
         last_alive = time.monotonic()
         while proc.poll() is None:
+            try:
+                checkpoint()
+            except Cancelled:
+                _stop(proc, reader)
+                raise
             if cancel is not None and cancel():
                 _stop(proc, reader)
                 raise Cancelled()
@@ -144,11 +149,18 @@ def make_runner(cancel: Callable[[], bool] | None = None, alive: Callable[[], bo
 
 
 def _stop(proc: subprocess.Popen, reader: threading.Thread) -> None:
-    proc.terminate()
+    """robocopy 를 멈춘다: terminate 후 3초 안에 안 끝나면 kill 하고 끝까지 기다린다(좀비/잠긴 파일을 남기지 않는다)."""
     try:
-        proc.wait(timeout=10)
+        proc.terminate()
+        proc.wait(timeout=3)
     except subprocess.TimeoutExpired:
-        proc.kill()
+        try:
+            proc.kill()
+            proc.wait(timeout=5)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    except OSError:
+        pass
     reader.join(1)
 
 

@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from .cancel import Cancelled
+from .cancel import Cancelled, checkpoint
 from .detect import Program
 from .discover import (CERTAIN, PROBABLE, Candidate, Discovery, Expand, Link, ProgramEntry, _covered, _folder_key, _list_root,
                        _skip_name, link_candidate, rule_concrete_paths, scan_candidate)
@@ -131,6 +131,7 @@ def _install_files(p: Program, deadline: float, clock: Callable[[], float]) -> t
     more = 0
     stack = [(root, 0)]
     while stack:
+        checkpoint()
         cur, depth = stack.pop(0)
         if clock() > deadline:
             break
@@ -236,6 +237,7 @@ def _nested_cache_settings(dirs: list[Candidate], deadline: float, clock: Callab
         stack = [(c.path, (), False)]
         seen = 0
         while stack and clock() <= deadline and seen < 5000:
+            checkpoint()
             cur, parts, in_c = stack.pop()
             try:
                 with os.scandir(cur) as it:

@@ -31,6 +31,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Callable
 
+from .cancel import checkpoint
 from .envpaths import expand_env
 from . import __version__, failure, fs
 from .copier import (COPIED, DENIED, FAILED, REJECTED, SKIPPED_SAME, WOULD_COPY, WOULD_OVERWRITE,
@@ -199,6 +200,7 @@ def _walk_files_no_links(top: Path, files: list[Path], skipped: list[dict], rule
             failed.append({"src": where, "error": f"폴더를 읽지 못함: {f.label}", "reason": f.code})
 
     for root, dirs, names in os.walk(lp, followlinks=False, onerror=on_error):
+        checkpoint()  # 폴더마다 취소 확인(파일이 많은 폴더 탐색 중 중지)
         dirs.sort()
         plain = top_s + root[len(lp):]
         keep = []
@@ -467,6 +469,7 @@ def _write_entry(zf: zipfile.ZipFile, arc: str, src: Path, stage_dir: str | None
         raise SourceUnreadable(src, e) from e
     with fin, tempfile.SpooledTemporaryFile(max_size=SPOOL_MAX, dir=stage_dir) as spool:
         while True:
+            checkpoint()  # 큰 파일을 읽는 중에도 청크마다 취소 확인(zip 에는 아직 아무것도 쓰지 않았다)
             try:
                 chunk = fin.read(CHUNK)
             except OSError as e:
@@ -480,7 +483,9 @@ def _write_entry(zf: zipfile.ZipFile, arc: str, src: Path, stage_dir: str | None
         info = zipfile.ZipInfo(arc, date_time=mtime)
         info.compress_type = choose_method(arc, n, compress, spool)
         with zf.open(info, "w", force_zip64=max(size, n) > ZIP64_THRESHOLD) as fout:
-            shutil.copyfileobj(spool, fout, CHUNK)
+            while buf := spool.read(CHUNK):
+                checkpoint()  # 압축해서 쓰는 중에도 청크마다 취소 확인(끊겨도 저장점은 직전 엔트리까지)
+                fout.write(buf)
     if isinstance(zf, _PartZip):
         zf.last_meta = {"ssize": size, "mtime_ns": st.st_mtime_ns, "method": METHOD_NAMES[info.compress_type],
                         "off": info.header_offset, "end": zf.fp.tell(), "zi": _zi_dump(info)}
@@ -730,6 +735,7 @@ class _OutputLock:
     def __init__(self, out: Path) -> None:
         self.path = out.with_name(out.name + LOCK_SUFFIX)
         self.held = False
+        self.token = f"{os.getpid()}-{id(self)}-{time.time_ns()}"  # 이 락의 주인 표식(강제 중단된 옛 스레드가 새 락을 지우지 않게)
 
     def acquire(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -747,7 +753,8 @@ class _OutputLock:
                     raise PackageError(f"이전 실행이 남긴 잠금 파일을 지우지 못했습니다: {self.path}. 다른 출력 이름을 쓰세요.") from None
                 continue
             with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(json.dumps({"pid": os.getpid(), "started": datetime.now(timezone.utc).isoformat(timespec="seconds")}))
+                f.write(json.dumps({"pid": os.getpid(), "token": self.token,
+                                    "started": datetime.now(timezone.utc).isoformat(timespec="seconds")}))
             self.held = True
             return
         raise PackageError(f"잠금 파일을 만들지 못했습니다: {self.path}. 다른 출력 이름을 쓰세요.")
@@ -760,10 +767,15 @@ class _OutputLock:
 
     def release(self) -> None:
         if self.held:
-            try:
-                os.unlink(self.path)
-            except OSError:
-                pass
+            try:  # 같은 PID 의 다른(새) 실행이 잡은 락이면 지우지 않는다
+                cur = json.loads(self.path.read_text(encoding="utf-8")).get("token")
+            except (OSError, ValueError, AttributeError):
+                cur = self.token
+            if cur in (None, self.token):
+                try:
+                    os.unlink(self.path)
+                except OSError:
+                    pass
             self.held = False
 
 
@@ -1293,6 +1305,7 @@ def _hash_entry(zf: zipfile.ZipFile, name: str, limit: int | None = None) -> tup
     n = 0
     with zf.open(name) as f:
         while chunk := f.read(CHUNK):
+            checkpoint()
             h.update(chunk)
             n += len(chunk)
             if limit is not None and n > limit:
@@ -1608,6 +1621,7 @@ def apply_import(path: Path, plan: ImportPlan,
 
     with zipfile.ZipFile(path) as zf, tempfile.TemporaryDirectory() as tmp:
         for it in plan.items:
+            checkpoint()  # 파일 사이에서만 멈춘다: 이미 바꾼 파일은 .bak 으로 되돌릴 수 있고, 지금 파일은 건드리지 않는다
             tracker.set_current(it["target"])
             if it["status"] == SKIPPED_SAME:
                 done(FileResult(it["entry"], it["target"], SKIPPED_SAME, it["size"], it["sha256"]))
@@ -1660,6 +1674,7 @@ def _stage_entry(zf: zipfile.ZipFile, it: dict, staged: Path, tmp: str) -> FileR
     n = 0
     with zf.open(it["entry"]) as fin, open(staged, "wb") as fout:
         while chunk := fin.read(CHUNK):
+            checkpoint()
             n += len(chunk)
             if n > size:
                 break
@@ -1782,6 +1797,7 @@ def _copy_raw_entry(old: zipfile.ZipFile, zi: zipfile.ZipInfo, fobj, zf: zipfile
         info.compress_type = zi.compress_type
         with old.open(zi) as src, zf.open(info, "w", force_zip64=zi.file_size > ZIP64_THRESHOLD) as dst:
             while chunk := src.read(CHUNK):
+                checkpoint()
                 dst.write(chunk)
                 on_bytes(len(chunk))
         return
@@ -1795,6 +1811,7 @@ def _copy_raw_entry(old: zipfile.ZipFile, zi: zipfile.ZipInfo, fobj, zf: zipfile
     new.header_offset = fobj.tell()
     fobj.write(hdr)
     while left > 0:
+        checkpoint()
         chunk = fp.read(min(CHUNK, left))
         if not chunk:
             raise PackageError(f"기존 묶음을 끝까지 읽지 못했습니다(손상): {zi.filename}")

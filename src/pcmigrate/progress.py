@@ -1,6 +1,7 @@
 """전송 진행률/속도/남은 시간 계산. 시계는 주입할 수 있다(테스트)."""
 from __future__ import annotations
 
+import math
 import threading
 import time
 from collections import deque
@@ -9,7 +10,11 @@ from typing import Callable
 
 SLOW_BYTES_PER_SEC = 40 * 1024 * 1024  # 이보다 느린 상태가 오래 이어지면 USB 2.0 포트(또는 느린 링크) 가능성을 안내
 SLOW_AFTER_SECONDS = 60.0
-SPEED_WINDOW = 30.0
+SPEED_WINDOW = 10.0  # 속도: 최근 이 시간(초)의 이동 평균(파일 하나가 끝날 때마다 바이트가 늘어나는 복사는 아래 최소 구간으로 보정)
+SPEED_MAX_LOOKBACK = 180.0  # 큰 파일 하나가 오래 걸려도 이 시간(초)보다 더 거슬러 올라가 재지는 않는다(복사는 파일을 시작할 때 그 크기를 한꺼번에 더하므로 여러 파일을 포함해야 안정적이다)
+SPEED_MIN_EVENTS = 3  # 최근 바이트가 늘어난 시점 이 개수만큼은 구간에 포함한다(작은 파일/큰 파일이 섞여도 0 과 폭주 사이를 오가지 않게)
+SPEED_EMA_TAU = 5.0  # 표시 속도를 지수 이동 평균으로 한 번 더 부드럽게(시정수, 초)
+ETA_EMA_TAU = 8.0  # 남은 시간도 같은 방식으로 부드럽게(시간이 흐르는 만큼 줄어들면서 새 추정으로 천천히 이동)
 
 PHASE_LABELS = {"scan": "원본 조사", "copy": "복사", "verify": "검사", "manifest": "목록 만들기", "done": "완료",
                 "list": "목록 읽기", "match": "규칙 맞추기", "find": "파일 찾기", "pack": "담기", "check": "검사",
@@ -104,7 +109,12 @@ def format_info(info: ProgressInfo) -> str:
 
 
 class ProgressTracker:
-    """처리한 바이트/파일을 누적하고 최근 SPEED_WINDOW 초의 속도로 남은 시간을 추정한다(스레드 안전)."""
+    """처리한 바이트/파일을 누적하고 최근 SPEED_WINDOW 초의 이동 평균(+지수 이동 평균)으로 속도와 남은 시간을 추정한다(스레드 안전).
+
+    순간 속도를 그대로 보이면 같은 드라이브에서도 15 → 1.5 → 25 → 1 MB/s 처럼 크게 흔들린다. 그래서 (1) 최근 구간 평균을 내되
+    최근 바이트가 늘어난 시점 SPEED_MIN_EVENTS 개는 반드시 포함하고, (2) 그 값을 지수 이동 평균으로 한 번 더 평활화하며,
+    (3) 남은 시간은 직전 값에서 흐른 시간을 뺀 값을 새 추정 쪽으로 천천히 옮겨서 보여 준다.
+    """
 
     def __init__(self, phase: str, total_bytes: int, total_files: int,
                  clock: Callable[[], float] = time.monotonic, slow_bps: float = SLOW_BYTES_PER_SEC,
@@ -117,6 +127,11 @@ class ProgressTracker:
         self._lock = threading.Lock()
         self._start = clock()
         self._samples: deque[tuple[float, int]] = deque([(self._start, 0)])
+        self._changes: deque[tuple[float, int]] = deque([(self._start, 0)], maxlen=SPEED_MIN_EVENTS + 1)  # 바이트가 늘어난 시점
+        self._ema: float | None = None
+        self._ema_t = self._start
+        self._eta: float | None = None
+        self._eta_t = self._start
         self._slow_since: float | None = None
         self.current = ""
         self.resumed = 0
@@ -138,18 +153,52 @@ class ProgressTracker:
             self.done_bytes += nbytes
             self.done_files += nfiles
 
+    def _raw_speed(self, now: float, done: int) -> float:
+        """최근 구간의 평균 바이트/초(호출한 락 안에서 쓴다)."""
+        self._samples.append((now, done))
+        while len(self._samples) > 2 and now - self._samples[0][0] > SPEED_MAX_LOOKBACK:
+            self._samples.popleft()
+        if done != self._changes[-1][1]:
+            self._changes.append((now, done))
+        t_start = now - self.window
+        if len(self._changes) > SPEED_MIN_EVENTS:  # 최근 SPEED_MIN_EVENTS 번의 증가를 모두 담는 시점까지 거슬러 올라간다
+            t_start = min(t_start, self._changes[0][0])
+        t_start = max(t_start, now - SPEED_MAX_LOOKBACK)
+        t0, b0 = self._samples[0]
+        for t, b in self._samples:  # t_start 이하인 마지막 표본
+            if t > t_start:
+                break
+            t0, b0 = t, b
+        span = now - t0
+        if span < 1.0:  # 구간이 너무 짧으면 시작 이후 평균
+            span, b0 = now - self._start, 0
+        return (done - b0) / span if span > 0 else 0.0
+
     def speed(self) -> float:
-        """최근 구간의 바이트/초. 구간이 너무 짧으면 시작 이후 평균."""
+        """부드럽게 만든 바이트/초: 최근 구간 평균을 지수 이동 평균으로 평활화한 값."""
         with self._lock:
             now, done = self.clock(), self.done_bytes
-            self._samples.append((now, done))
-            while len(self._samples) > 2 and now - self._samples[0][0] > self.window:
-                self._samples.popleft()
-            t0, b0 = self._samples[0]
-            span = now - t0
-            if span < 1.0:
-                span, b0 = now - self._start, 0
-            return (done - b0) / span if span > 0 else 0.0
+            raw = self._raw_speed(now, done)
+            if self._ema is None:
+                self._ema = raw
+            elif now > self._ema_t:
+                a = 1.0 - math.exp(-(now - self._ema_t) / SPEED_EMA_TAU)
+                self._ema += a * (raw - self._ema)
+            self._ema_t = now
+            return self._ema
+
+    def _smooth_eta(self, now: float, raw: float | None) -> float | None:
+        """남은 시간 평활화: 직전 값에서 흐른 시간을 뺀 값을 새 추정(raw) 쪽으로 천천히 옮긴다."""
+        if raw is None:
+            return None
+        if self._eta is None:
+            self._eta = raw
+        else:
+            predicted = max(0.0, self._eta - (now - self._eta_t))
+            a = 1.0 - math.exp(-max(0.0, now - self._eta_t) / ETA_EMA_TAU)
+            self._eta = predicted + a * (raw - predicted)
+        self._eta_t = now
+        return 0.0 if raw == 0 else self._eta
 
     def snapshot(self, message: str = "") -> ProgressInfo:
         speed = self.speed()
@@ -158,8 +207,9 @@ class ProgressTracker:
             counts, problems = dict(self.counts), tuple(self._new_problems)
             self._new_problems.clear()
         remaining = max(0, self.total_bytes - done)
-        eta = (remaining / speed) if speed > 0 else (0.0 if remaining == 0 else None)
         now = self.clock()
+        with self._lock:
+            eta = self._smooth_eta(now, (remaining / speed) if speed > 0 else (0.0 if remaining == 0 else None))
         hint = ""
         if self.phase in ("copy", "verify", "manifest") and self.total_bytes and remaining > 0 and done > 0:
             if speed < self.slow_bps:

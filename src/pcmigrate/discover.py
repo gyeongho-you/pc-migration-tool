@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
-from .cancel import Cancelled
+from .cancel import Cancelled, checkpoint
 from .checklist import _norm, _norm_company, _norm_display, bundle_reason
 from . import fs
 from .envpaths import expand_env
@@ -267,11 +267,14 @@ def scan_tree(path: Path, deadline: float, clock: Callable[[], float],
         cache.setdefault("size", 0)
         cache.setdefault("files", 0)
     while stack:
+        checkpoint()  # 폴더마다 취소 확인
         cur, parts, in_cache = stack.pop()
         try:
             with os.scandir(cur) as it:
                 for e in it:
                     tick += 1
+                    if tick % 64 == 0:
+                        checkpoint()  # 항목이 아주 많은 폴더에서도 바로 멈춘다
                     if tick % 200 == 0 and clock() > deadline:
                         return size, files, newest, secrets, False
                     low = e.name.lower()

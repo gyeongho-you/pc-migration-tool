@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Callable
 
 from . import failure
-from .cancel import Cancelled
+from .cancel import Cancelled, checkpoint
 from . import fs
 from .fs import long_path
 
@@ -102,6 +102,7 @@ def sha256_file(path: Path, chunk: int | None = None, cancel: Callable[[], bool]
         else:
             view = _thread_buffer(size)
         while True:
+            checkpoint()
             if cancel is not None and cancel():
                 raise Cancelled()
             n = failure.read_chunk(f.readinto, view)
@@ -222,6 +223,9 @@ def copy_file(src: Path, dst: Path, dry_run: bool = False) -> FileResult:
             raise OSError("복사 후 크기/해시 검증 실패")
         _install(tmp, dst, res)
         res.status = COPIED
+    except Cancelled:  # 취소는 실패로 기록하지 않는다(임시 파일만 지우고 전파)
+        _rm(tmp)
+        raise
     except Exception as e:  # 파일 단위로 격리: 하나 실패해도 계속 진행
         res.status = FAILED
         res.error = f"{type(e).__name__}: {e}"
@@ -430,6 +434,9 @@ def repair_file(src: Path, dst: Path) -> FileResult:
             raise OSError("재복사 후 크기/해시 검증 실패")
         _install(tmp, dst, res, long_path)
         res.status = COPIED
+    except Cancelled:
+        _rm(tmp)
+        raise
     except Exception as e:
         res.status = FAILED
         res.error = f"{type(e).__name__}: {e}"
