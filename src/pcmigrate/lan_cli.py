@@ -7,7 +7,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import failure
+from . import failure, net_setup_cli
 from .cancel import Cancelled
 from .lan_api import SendOptions, default_receive_dir, resolve_target, run_diagnose, run_send, start_receiver
 from .lan_link import KIND_TEXT
@@ -61,10 +61,17 @@ def add_parsers(sub, path_arg) -> None:
     s.add_argument("--json", action="store_true", help="요약 대신 JSON 출력")
     s.add_argument("--discover-seconds", type=float, default=2.0, help="'자동' 검색 대기 시간(초)")
     s.set_defaults(func=cmd_send)
+    from . import net_setup_cli  # stage39: lan-setup 명령과 receive/send 의 --auto-ip
+    net_setup_cli.add_parsers(sub)
 
 
 # --------------------------------------------------------------------------- receive
 def cmd_receive(args: argparse.Namespace) -> int:
+    with net_setup_cli.auto_ip_scope(args, "receiver") as rc:  # --auto-ip: 주소를 임시로 맞추고 끝나면 되돌린다
+        return rc if rc is not None else _cmd_receive(args)
+
+
+def _cmd_receive(args: argparse.Namespace) -> int:
     dest = args.dest or default_receive_dir()
     state = {"last": 0.0}
 
@@ -131,6 +138,12 @@ def _choose(found):
 
 
 def cmd_send(args: argparse.Namespace) -> int:
+    peer = args.target if net_setup_cli.ns.band_of_address(args.target) else None  # 받는 쪽 주소가 후보 대역이면 그 대역에 맞춘다
+    with net_setup_cli.auto_ip_scope(args, "sender", peer) as rc:
+        return rc if rc is not None else _cmd_send(args)
+
+
+def _cmd_send(args: argparse.Namespace) -> int:
     if args.diagnose:
         target = args.target
         if target.lower() in ("자동", "auto"):

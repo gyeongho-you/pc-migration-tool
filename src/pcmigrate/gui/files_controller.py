@@ -833,6 +833,7 @@ class FilesMixin:
 
         def done(diag):
             f.diag = T.TX_DIAG_RESULT.format(summary=getattr(diag, "summary", str(diag)))
+            f.diag_code = str(getattr(diag, "code", "") or "")
             self.emit("lan_diag", diag)
         self._run(T.TASK_LAN_DIAG, work, done, cancellable=True)
 

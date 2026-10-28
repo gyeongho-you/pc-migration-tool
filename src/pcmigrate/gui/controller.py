@@ -39,6 +39,7 @@ from ..transfer import DriveDisconnected, TransferError
 from . import state as S
 from . import texts as T
 from .files_controller import FilesMixin  # stage30a: 내 파일 옮기기(찾기/방법/직접 연결) 부분은 별도 파일
+from .net_controller import NetMixin  # stage39: 이더넷 주소 자동 맞추기
 from .runner import Runner
 from .status import StatusModel
 
@@ -336,7 +337,7 @@ AUTO_FLOWS = ("old", "new", "transfer")
 _AUTO_KINDS = {"scan_done", "checklist_done", "export_done", "preview_done", "install_done", "import_done", "transfer_done", "error", "cancelled"}
 
 
-class Controller(FilesMixin):
+class Controller(FilesMixin, NetMixin):
     """화면과 api 사이의 중간층. 이벤트는 listener(kind, payload) 로 전달된다."""
 
     def __init__(self, api_mod: Any = None, deps: Any = None, runner: Runner | None = None,

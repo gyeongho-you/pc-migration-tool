@@ -876,6 +876,8 @@ HELP = {
 # stage30a: '내 파일 옮기기' 화면들의 문구는 texts_files.py (병합 충돌을 줄이려고 별도 파일). 여기서 이름공간에 넣는다.
 from .texts_files import install as _install_files_texts  # noqa: E402
 _install_files_texts(globals())
+from .texts_net import install as _install_net_texts  # noqa: E402  (stage39: 이더넷 주소 자동 맞추기 문구)
+_install_net_texts(globals())
 START_CHOICES = (START_CHOICES[0], START_CARD3, START_CHOICES[2])  # noqa: F821  (② 카드만 새 문구로)
 
 # --------------------------------------------------------------------------- 전체 이전 순서(? 도움말에서 열림, README 와 같은 원본)
