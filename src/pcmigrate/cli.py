@@ -14,7 +14,7 @@ from .api import (NEEDS_CONFIRM, ApiError, Deps, check_outputs_outside, check_pa
                   clean_state_files, format_write_error, load_rules_checked, load_self_transfer_checked, report_inside, run_checklist, run_copy,
                   run_discover, run_export, run_export_retry, run_find_program, run_import, run_install_check, run_join, run_manifest,
                   run_scan, run_transfer,
-                  run_undo_import, run_verify, run_winget_extract, same_file, selection_json)
+                  run_undo_import, run_verify, run_winget_extract, run_winget_list, same_file, selection_json)
 from .checklist import write_output
 from .detect import read_registry_programs, winget_export_raw, winget_list_raw
 from . import install_check as ic
@@ -811,19 +811,51 @@ def _cmd_undo_import(args: argparse.Namespace) -> int:
 
 
 def _cmd_winget_extract(args: argparse.Namespace) -> int:
-    if _unexpanded(package=args.package, output=args.output):
+    if _unexpanded(package=args.package, **({"output": args.output} if args.output else {})):
         return 1
+    if args.list:
+        try:
+            pkgs = run_winget_list(args.package)
+        except ApiError as e:
+            return _fail(e)
+        if not pkgs:
+            print("이 묶음의 winget 목록에는 프로그램이 없습니다.")
+            return 0
+        print(f"묶음의 winget 프로그램 {len(pkgs)}개(winget id / 버전 / 출처). 고른 것만 꺼내려면 --only id1,id2 를 쓰세요.")
+        for p in pkgs:
+            print(f"  {p['id']}\t{p['version'] or '-'}\t{p['source'] or '-'}")
+        return 0
+    if not args.output:
+        _err("--output 폴더 경로가 필요합니다(목록만 보려면 --list).")
+        return 1
+    only = None
+    if args.only is not None:
+        only = [x.strip() for x in args.only.split(",") if x.strip()]
+        if not only:
+            _err("--only 에 winget id 를 하나 이상 적어 주세요(쉼표로 구분). 예: --only Google.Chrome,7zip.7zip")
+            return 1
+        try:
+            only = ic.safe_winget_ids(only)
+        except ValueError:
+            _err("winget id 는 영문자·숫자와 . - _ 만 쓸 수 있습니다. 확인한 id: " + ", ".join(only))
+            return 1
     try:
-        target, bak = run_winget_extract(args.package, args.output)
+        target, bak = run_winget_extract(args.package, args.output, only_ids=only)
     except ApiError as e:
         return _fail(e)
     except OSError as e:
         return _write_failed(args.output, e)
-    print(f"winget 목록을 꺼냈습니다: {fs.plain_path_text(str(target))}")
+    print(f"winget 목록을 꺼냈습니다{f'(선택한 {len(only)}개만)' if only else ''}: {fs.plain_path_text(str(target))}")
     if bak:
         print(f"- 같은 이름의 기존 파일은 덮어쓰지 않고 {fs.plain_path_text(str(bak))} 로 옮겼습니다.")
-    print(f"다음 할 일: 아래 명령을 직접 실행하세요(이 도구는 대신 실행하지 않습니다).")
+    print("다음 할 일: 아래 명령을 직접 실행하세요(이 도구는 대신 실행하지 않습니다).")
     print(ic.import_command(fs.plain_path_text(str(target))))
+    if only:
+        print("또는 프로그램별로 하나씩:")
+        written = json.loads(Path(target).read_text(encoding="utf-8-sig"))  # 묶음에 적힌 대소문자 그대로의 id 로 안내한다
+        canon = [p["PackageIdentifier"] for sr in written.get("Sources", []) for p in sr.get("Packages", [])]
+        for line in ic.selected_commands(None, canon)["each"]:
+            print(line)
     print("실행한 뒤 설치 결과 확인: pcmigrate install-check 패키지.zip")
     return 0
 
@@ -963,7 +995,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     w = sub.add_parser("winget-extract", help="패키지(.zip) 안의 winget 목록(winget.json)을 폴더로 꺼낸다(신 PC 에서 winget import 용)")
     w.add_argument("package", type=_path_arg, help="export 로 만든 .zip")
-    w.add_argument("--output", type=_path_arg, required=True, help="winget.json 을 꺼낼 폴더(없으면 만듦, 같은 이름 파일은 .bak 보존)")
+    w.add_argument("--output", type=_path_arg, default=None, help="winget.json 을 꺼낼 폴더(없으면 만듦, 같은 이름 파일은 .bak 보존). --list 만 쓸 때는 생략 가능")
+    w.add_argument("--only", default=None, metavar="ID1,ID2", help="쉼표로 구분한 winget id(대소문자 무시)의 프로그램만 담은 winget.json 을 만든다(없는 id 는 거부)")
+    w.add_argument("--list", action="store_true", help="꺼내지 않고 묶음 안 winget 프로그램 id/버전 표만 출력")
     w.set_defaults(func=_cmd_winget_extract)
 
     t = sub.add_parser("transfer", help="모드 B: 대용량 폴더를 robocopy 로 전송 + SHA-256 검증")

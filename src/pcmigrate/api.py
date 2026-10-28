@@ -35,7 +35,7 @@ import inspect
 from .find_program import ProgramFind, find_program
 from .install_check import InstallCheck, NewState, check_install, read_new_state
 from . import import_record
-from .package import (COMPRESS_MODES, NOT_SELECTED, ImportPlan, PackageError, apply_import, export_package, extract_winget,
+from .package import (COMPRESS_MODES, NOT_SELECTED, ImportPlan, PackageError, apply_import, export_package, extract_winget, list_winget_packages,
                       is_unfinished_part, plan_import, retry_failed_export, verify_package)
 from .rules import Rule, RuleError, load_rules
 from . import selftransfer
@@ -993,10 +993,20 @@ def run_undo_import(only_programs: list[str] | str | None, *, record: str | Path
 
 # --------------------------------------------------------------------------- winget-extract
 
-def run_winget_extract(package: str | Path, output: str | Path) -> tuple[Path, Path | None]:
-    """패키지의 programs/winget.json 을 <output>/winget.json 으로 꺼낸다. (새 파일, .bak 으로 옮긴 이전 파일 또는 None)."""
+def run_winget_extract(package: str | Path, output: str | Path, only_ids: list[str] | None = None) -> tuple[Path, Path | None]:
+    """패키지의 programs/winget.json 을 <output>/winget.json 으로 꺼낸다. (새 파일, .bak 으로 옮긴 이전 파일 또는 None).
+
+    only_ids 를 주면 그 winget id(대소문자 무시)의 프로그램만 담은 winget.json 을 쓴다."""
     try:
-        return extract_winget(Path(package), Path(output))
+        return extract_winget(Path(package), Path(output), only_ids=only_ids)
+    except PackageError as e:
+        raise ApiError(str(e)) from e
+
+
+def run_winget_list(package: str | Path) -> list[dict]:
+    """패키지 안 winget 목록의 [{id, version, source}] (읽기 전용)."""
+    try:
+        return list_winget_packages(Path(package))
     except PackageError as e:
         raise ApiError(str(e)) from e
 

@@ -127,6 +127,14 @@ def _kill(proc: subprocess.Popen) -> None:
         pass
 
 
+WINGET_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+
+def valid_winget_id(value: object) -> bool:
+    """winget 패키지 id 형식(영문자·숫자와 . - _ 만, 128자 이내). 명령 문자열에 넣기 전의 주입 방지 검사."""
+    return isinstance(value, str) and WINGET_ID_RE.fullmatch(value) is not None
+
+
 def parse_winget_export(text: str) -> list[Program]:
     data = json.loads(text)
     programs: list[Program] = []

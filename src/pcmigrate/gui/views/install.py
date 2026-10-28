@@ -40,12 +40,18 @@ class InstallPanel(ttk.Frame):
         row.pack(fill="x", pady=(0, 4))
         self.copy_btn = ActionButton(row, text=T.INST_BTN_COPY, command=self.copy_command, kind="primary")
         self.copy_btn.pack(side="left")
+        self.pick_btn = ActionButton(row, text=T.INST_BTN_PICK, command=self.copy_selected, kind="primary")
+        self.pick_btn.pack(side="left", padx=(8, 0))
+        self.pick_count = ttk.Label(row, text=T.INST_PICK_COUNT.format(n=0), foreground=MUTED_FG)
+        self.pick_count.pack(side="left", padx=(6, 0))
         self.recheck_btn = ActionButton(row, text=T.INST_BTN_RECHECK, command=self.recheck, kind="plain")
         self.recheck_btn.pack(side="left", padx=8)
-        self.folder_btn = ActionButton(row, text=T.INST_BTN_FOLDER, command=self.pick_folder, kind="link")
-        self.folder_btn.pack(side="right")
-        self.folder_label = ttk.Label(row, text="", foreground=MUTED_FG)
-        self.folder_label.pack(side="right", padx=8)
+        row2 = ttk.Frame(self)  # 버튼이 늘어 한 줄에 다 안 들어가므로 폴더 안내는 다음 줄로
+        row2.pack(fill="x", pady=(0, 4))
+        self.folder_label = ttk.Label(row2, text="", foreground=MUTED_FG)
+        self.folder_label.pack(side="left")
+        self.folder_btn = ActionButton(row2, text=T.INST_BTN_FOLDER, command=self.pick_folder, kind="link")
+        self.folder_btn.pack(side="left", padx=8)
         self.copy_note = ttk.Label(self, text="", justify="left", foreground=INFO_FG)  # 명령을 복사한 뒤에만 보인다
         autowrap(self.copy_note)
         # 아래쪽 묶음을 먼저 쌓아 두어야 창이 낮아도 설명 줄이 잘리지 않는다(표가 남는 높이를 쓴다)
@@ -53,13 +59,14 @@ class InstallPanel(ttk.Frame):
         self.detail.pack(side="bottom", anchor="w", fill="x", pady=(4, 0))
         autowrap(self.detail)
         self.hint = table_hint(self)
-        self.hint.configure(text=T.INST_SPACE_HINT, justify="left")
+        self.hint.configure(text=T.INST_PICK_HINT + " " + T.INST_SPACE_HINT, justify="left")
         self.hint.pack(side="bottom", anchor="w", fill="x")
         autowrap(self.hint)
-        cols = [("mark", T.INST_COLS[0], 48), ("status", T.INST_COLS[1], 160), ("name", T.INST_COLS[2], 230),
+        cols = [("pick", T.INST_PICK_COL, 56), ("mark", T.INST_COLS[0], 48), ("status", T.INST_COLS[1], 160), ("name", T.INST_COLS[2], 230),
                 ("version", T.INST_COLS[3], 130), ("reason", T.INST_COLS[4], 420)]
         frame, self.tree = make_tree(self, cols, height=height)
         frame.pack(side="top", fill="both", expand=True, pady=2)
+        self.tree.column("pick", anchor="center", stretch=False)
         self.tree.column("mark", anchor="center", stretch=False)
         self.tree.tag_configure("installed", foreground=OK_FG)
         self.tree.tag_configure("diff", foreground=WARN_FG)
@@ -94,7 +101,8 @@ class InstallPanel(ttk.Frame):
         for row in c.install_rows():
             tag = "diff" if row["diff"] else row["status"]
             mark = (T.CHECKED if row["mark"] else T.UNCHECKED) if row["markable"] else T.LOCKED
-            iid = self.tree.insert("", "end", tags=(tag,), values=(mark, row["label"], row["name"], row["version"], row["reason"]))
+            pick = (T.CHECKED if row["pick"] else T.UNCHECKED) if row["pickable"] else T.LOCKED
+            iid = self.tree.insert("", "end", tags=(tag,), values=(pick, mark, row["label"], row["name"], row["version"], row["reason"]))
             self.rows[iid] = row
             if keep is not None and row["name"] == keep:
                 self.tree.selection_set(iid)
@@ -105,10 +113,13 @@ class InstallPanel(ttk.Frame):
         busy = bool(self.c.state.busy)
         r = self.c.state.install_check
         self.copy_btn.state(["!disabled"] if r is not None and r.import_needed and not busy else ["disabled"])
+        n = self.c.install_pick_count()
+        self.pick_count.configure(text=T.INST_PICK_COUNT.format(n=n), foreground=INFO_FG if n else MUTED_FG)
+        self.pick_btn.state(["!disabled"] if r is not None and r.has_winget_file and not busy else ["disabled"])
         self.recheck_btn.state(["!disabled"] if self.c.state.package and not busy else ["disabled"])
 
     def on_event(self, kind: str, payload) -> None:
-        if kind in ("install_done", "install_marks", "install_folder"):
+        if kind in ("install_done", "install_marks", "install_picks", "install_folder"):
             self.refresh()
         elif kind == "busy":
             self._update_buttons()
@@ -140,6 +151,37 @@ class InstallPanel(ttk.Frame):
         self.copy_note.pack(anchor="w", fill="x", after=self.copy_btn.master, pady=(0, 4))
         self.last_dialog = TextDialog(self, T.INST_BTN_COPY, "\n".join(lines), 90, 12)
 
+    def copy_selected(self) -> None:
+        """선택한 프로그램만 담은 목록(winget.json)을 꺼내고 그 목록으로 설치하는 명령을 복사한다(실행은 하지 않는다)."""
+        c = self.c
+        try:
+            info = c.prepare_selected_install()
+        except GuardError as e:
+            messagebox.showwarning(T.GUARD_TITLE, str(e), parent=self)
+            return
+        except Exception as e:  # noqa: BLE001 - 쉬운 문구로 바꿔 보여 준다(쓰기 실패, 목록에 없는 id 등)
+            self.view.app.show_error(c.report_error(e, T.TASK_UI))
+            return
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(info["command"])
+            self.update()
+        except tk.TclError:
+            pass
+        lines = [T.INST_PICKED.format(n=info["count"])]
+        if not info["file"]:
+            lines = [T.INST_PICKED_ONLY_EACH]
+        if info["backup"]:
+            lines.append(T.INST_COPIED_BAK.format(bak=info["backup"]))
+        lines += ["", T.INST_COPIED_CMD, info["command"]]
+        if info["file"] and info["each"]:
+            lines += ["", T.INST_PICK_EACH, *info["each"]]
+        if info["file"] and info["individual"]:
+            lines += ["", T.INST_PICK_REST, *info["individual"]]
+        self.copy_note.configure(text=lines[0].split("\n", 1)[0])
+        self.copy_note.pack(anchor="w", fill="x", after=self.copy_btn.master, pady=(0, 4))
+        self.last_dialog = TextDialog(self, T.INST_BTN_PICK, "\n".join(lines), 90, 14)
+
     def recheck(self) -> None:
         self.view.guarded(self.c.start_install_check)
 
@@ -153,12 +195,23 @@ class InstallPanel(ttk.Frame):
         if row is not None and row["markable"]:
             self.c.toggle_install_mark(row["name"])
 
+    def _toggle_pick(self, iid: str) -> None:
+        row = self.rows.get(iid)
+        if row is not None and row["pickable"]:
+            self.c.toggle_install_pick(row["name"])
+
     def _click(self, event) -> None:
-        if self.tree.identify_column(event.x) != "#1":  # 표시 칸을 눌렀을 때만 바꾼다(줄을 고르기만 할 때는 바꾸지 않는다)
+        if self.tree.identify_region(event.x, event.y) != "cell":  # 머리글/빈 곳 클릭은 무시한다
             return
+        col = self.tree.identify_column(event.x)
         iid = self.tree.identify_row(event.y)
-        if iid:
+        if not iid:
+            return
+        cid = self.tree.column(col, "id")
+        if cid == "mark":  # 표시 칸을 눌렀을 때만 바꾼다(줄을 고르기만 할 때는 바꾸지 않는다)
             self._toggle(iid)
+        elif cid == "pick":  # 선택 칸: 설치할 프로그램 고르기
+            self._toggle_pick(iid)
 
     def _key_toggle(self, _e=None):
         sel = self.tree.selection()

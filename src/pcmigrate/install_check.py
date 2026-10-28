@@ -20,7 +20,7 @@ from typing import Callable
 from .cancel import checkpoint
 from .checklist import (CERTAIN, PROBABLE, _norm_display, bundle_reason, classify_programs,
                         install_hint_for, known_app, match_program, parse_winget_list)
-from .detect import Program, parse_winget_export
+from .detect import Program, parse_winget_export, valid_winget_id
 
 INSTALLED, WINGET, MANUAL, AMBIGUOUS, NOT_NEEDED = "installed", "winget", "manual", "ambiguous", "not_needed"
 STATUSES = (INSTALLED, WINGET, MANUAL, AMBIGUOUS, NOT_NEEDED)
@@ -40,8 +40,37 @@ def import_command(json_path: str) -> str:
     return f'winget import -i "{json_path}" {IMPORT_FLAGS}'
 
 
+INSTALL_FLAGS = "--accept-package-agreements --accept-source-agreements"
+
+
 def install_command(winget_id: str) -> str:
     return f"winget install --id {winget_id} --exact"
+
+
+def safe_winget_ids(ids) -> list[str]:
+    """winget id 형식(영숫자 . - _)을 통과한 것만, 대소문자 무시로 중복을 빼고 순서대로 돌려준다. 하나라도 어긋나면 ValueError."""
+    out: list[str] = []
+    for x in ids:
+        if not valid_winget_id(x):
+            raise ValueError(f"올바르지 않은 winget id: {x!r}")
+        if x.lower() not in {o.lower() for o in out}:
+            out.append(x)
+    return out
+
+
+def selected_commands(json_path: str | None, ids) -> dict:
+    """선택한 프로그램을 설치하는 명령(이 도구는 실행하지 않는다).
+
+    import: 선택한 것만 담은 json 으로 한 번에 설치하는 한 줄(json_path 가 None 이면 None).
+    each:   id 마다 'winget install --id X --exact ...' 한 줄(json 을 쓰지 않는 대안).
+    id 는 형식 검증을 통과한 것만 넣는다(잘못된 id 는 ValueError). 경로의 따옴표/줄바꿈은 거부한다."""
+    safe = safe_winget_ids(ids)
+    cmd = None
+    if json_path is not None:
+        if any(ch in json_path for ch in ('"', '\r', '\n', '\0')):
+            raise ValueError("경로에 쓸 수 없는 문자가 있습니다.")
+        cmd = import_command(json_path)
+    return {"ids": safe, "import": cmd, "each": [f"{install_command(i)} {INSTALL_FLAGS}" for i in safe]}
 
 
 @dataclass(frozen=True)

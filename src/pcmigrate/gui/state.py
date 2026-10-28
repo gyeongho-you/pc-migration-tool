@@ -87,6 +87,7 @@ class WizardState:
     install_package: str = ""  # 확인에 쓴 묶음 파일 경로(바뀌면 무효)
     install_skipped: bool = False
     install_marks: set = field(default_factory=set)  # 사용자가 '설치 끝냄' 표시한 프로그램 이름(기억용, 판정에는 쓰지 않음)
+    install_picks: set = field(default_factory=set)  # '선택한 것만 목록 만들기'용으로 사용자가 고른 프로그램 이름(winget 으로 설치 가능한 줄만)
     install_folder: str = ""  # 설치 목록(winget.json)을 꺼낼 폴더(빈 값이면 바탕화면의 새 폴더)
     install_command: str = ""  # 마지막으로 복사용으로 만든 명령
     install_new: list = field(default_factory=list)  # 다시 확인으로 새로 설치된 것으로 확인된 프로그램 이름
