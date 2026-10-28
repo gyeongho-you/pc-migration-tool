@@ -14,8 +14,8 @@ from .. import texts as T
 from .install import InstallPanel
 from .retry_panel import RetryPanel
 from .status_card import StatusCard
-from .common import (DANGER_BG, DANGER_FG, INFO_BG, INFO_FG, MUTED_FG, OK_BG, OK_FG, SUB_FONT, WARN_BG, WARN_FG, ActionButton, BaseView,
-                     Collapsible, CoverageBox, PathField, ScrollBody, TextDialog, autowrap, clean_path, open_location)
+from .common import (FoldLabel, FoldTLabel, DANGER_BG, DANGER_FG, INFO_BG, INFO_FG, MUTED_FG, OK_BG, OK_FG, SUB_FONT, WARN_BG, WARN_FG, ActionButton, BaseView,
+                     Collapsible, CoverageBox, PathField, ScrollBody, TextDialog, autowrap, clean_path, open_location, set_shown)
 
 _STATE_COLORS = {"todo": MUTED_FG, "doing": INFO_FG, "waiting": WARN_FG, "done": OK_FG, "skipped": MUTED_FG, "warn": WARN_FG,
                  "stopped": DANGER_FG}
@@ -46,15 +46,15 @@ class AutoView(BaseView):
         body = ttk.Frame(scroll.inner, padding=(0, 0, 8, 0))
         body.pack(fill="both", expand=True)
         self.body = body
-        self.head = ttk.Label(body, text="", font=SUB_FONT, justify="left")
+        self.head = FoldTLabel(body, text="", font=SUB_FONT, justify="left")
         self.head.pack(anchor="w", fill="x", pady=(2, 2))
         autowrap(self.head)
         self.steps_frame = tk.Frame(body, highlightbackground="#9db7e0", highlightthickness=1, padx=10, pady=3)  # 맨 아래에 pack(위쪽이 지금 할 일)
         self.step_rows: list[tuple[tk.Label, tk.Label, tk.Label]] = []
         self._steps_sig: tuple = ()
-        self.stop_note = ttk.Label(body, text="", foreground=WARN_FG, justify="left")
+        self.stop_note = FoldTLabel(body, text="", foreground=WARN_FG, justify="left")
         autowrap(self.stop_note)
-        self.msg = tk.Label(body, text="", anchor="w", justify="left", padx=8, pady=3)  # 멈춘 이유 / 끝난 결과(이 화면의 안내 상자)
+        self.msg = FoldLabel(body, text="", anchor="w", justify="left", padx=8, pady=3)  # 멈춘 이유 / 끝난 결과(이 화면의 안내 상자)
         autowrap(self.msg, 40)
         self.gate = ttk.Frame(body)  # 사람의 확인/입력이 필요할 때만 내용이 있다
         self.gate.pack(fill="x", pady=2)
@@ -78,7 +78,13 @@ class AutoView(BaseView):
         self.steps_frame.pack(fill="x", pady=(5, 3))
         self.restore = None
         self.install_panel = None  # 설치 확인 지점에서만 있다
+        self._fit_slots()
         self.finish()
+
+    def _fit_slots(self) -> None:
+        """확인/입력 자리(gate)와 끝난 뒤 단추 자리(out)는 내용이 없으면 여백까지 접는다."""
+        for slot in (self.gate, self.out):
+            set_shown(slot, bool(slot.winfo_children()))
 
     # ------------------------------------------------------------------ 표시
     @property
@@ -132,6 +138,7 @@ class AutoView(BaseView):
             self._gate_sig = sig
             self._draw_gate(a)
             self._draw_outcome(a)
+            self._fit_slots()
 
     def _draw_steps(self, a) -> None:
         sig = tuple(st.key for st in a.steps)
@@ -269,7 +276,7 @@ class AutoView(BaseView):
         label = T.BTN_APPLY_N.format(n=over) if over else T.BTN_APPLY_NEW.format(n=new) if new else T.BTN_APPLY
         self.apply_btn = ActionButton(self.gate, text=label, command=self._apply, kind="warn")
         self.apply_btn.pack(anchor="w", pady=(6, 2))
-        self.apply_why = ttk.Label(self.gate, text="", foreground=WARN_FG, justify="left")
+        self.apply_why = FoldTLabel(self.gate, text="", foreground=WARN_FG, justify="left")
         self.apply_why.pack(anchor="w", fill="x")
         autowrap(self.apply_why, 30)
         self.restore = True

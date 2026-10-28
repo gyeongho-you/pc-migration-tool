@@ -95,6 +95,144 @@ def autowrap(label: tk.Misc, pad: int = 24) -> None:
     parent.bind("<Configure>", on_configure, add="+")
 
 
+# --------------------------------------------------------------------------- 빈 영역 접기
+def set_shown(widget: tk.Misc, on: bool) -> None:
+    """위젯을 보이거나(원래 자리·원래 옵션으로) 접는다(높이 0). pack/grid 모두 지원.
+
+    pack 은 접는 순간 같은 자리에 크기 0 자리표시 틀을 하나 남겨 두고, 다시 보일 때 그 바로 뒤에 원래 옵션으로 pack 한다
+    (그래서 앞뒤 위젯이 그사이 접혔다 펴져도 순서가 바뀌지 않는다). 이 함수가 접지 않은 위젯은 건드리지 않는다.
+    """
+    hidden = getattr(widget, "_pcm_hidden", False)
+    manager = widget.winfo_manager()
+    if on:
+        if not hidden:
+            return
+        widget._pcm_hidden = False  # type: ignore[attr-defined]
+        if manager:
+            return  # 그 사이 호출한 쪽이 직접 다시 배치했다
+        if getattr(widget, "_pcm_mode", "") == "grid":
+            widget.grid()
+        else:
+            ph = getattr(widget, "_pcm_ph", None)
+            info = dict(getattr(widget, "_pcm_info", {}))
+            if ph is not None and ph.winfo_exists() and ph.winfo_manager() == "pack":
+                widget.pack(after=ph, **info)
+            else:
+                widget.pack(**info)
+        return
+    if manager == "pack":
+        info = widget.pack_info()
+        info.pop("in", None)
+        old_ph = getattr(widget, "_pcm_ph", None)
+        if old_ph is not None:
+            try:
+                old_ph.destroy()  # 다시 배치된 적이 있을 수 있으니 자리표시 틀은 지금 위치에 새로 만든다
+            except tk.TclError:
+                pass
+        ph = tk.Frame(widget.master, width=0, height=0, bd=0, highlightthickness=0)
+        ph.pack(before=widget, side=info.get("side", "top"))
+        ph.lower(widget)  # 위젯 목록(Tab 순서)에서도 바로 앞에 둔다: 맨 뒤여야 하는 이동 막대 뒤로 밀려나지 않게
+        widget._pcm_ph = ph  # type: ignore[attr-defined]
+        widget._pcm_info, widget._pcm_mode = info, "pack"  # type: ignore[attr-defined]
+        widget.pack_forget()
+        widget._pcm_hidden = True  # type: ignore[attr-defined]
+    elif manager == "grid":
+        widget._pcm_mode = "grid"  # type: ignore[attr-defined]
+        widget.grid_remove()
+        widget._pcm_hidden = True  # type: ignore[attr-defined]
+    # 배치되지 않은 위젯: 이미 접혀 있거나(내가 접은 것) 호출한 쪽이 숨긴 것이니 그대로 둔다
+
+
+def _anchor_for(ref):
+    """before=/after= 로 가리킨 위젯이 접혀 있으면(배치 안 됨) 그 자리의 자리표시 틀로 바꿔 준다."""
+    if ref is not None and not isinstance(ref, (str, int)) and getattr(ref, "_pcm_hidden", False):
+        try:
+            ph = getattr(ref, "_pcm_ph", None)
+            if not ref.winfo_manager() and ph is not None and ph.winfo_manager() == "pack":
+                return ph
+        except tk.TclError:
+            pass
+    return ref
+
+
+_orig_pack_configure = tk.Pack.pack_configure
+
+
+def _pack_configure(self, cnf=None, **kw):
+    """pack(before=접힌 위젯 / after=접힌 위젯) 도 TclError 없이 접힌 위젯의 원래 자리를 기준으로 배치되게 한다."""
+    cnf = dict(cnf) if isinstance(cnf, dict) else {}
+    for key in ("before", "after"):
+        if key in kw:
+            kw[key] = _anchor_for(kw[key])
+        if key in cnf:
+            cnf[key] = _anchor_for(cnf[key])
+    return _orig_pack_configure(self, cnf, **kw)
+
+
+if not getattr(tk.Pack.pack_configure, "_pcm_patched", False):
+    _pack_configure._pcm_patched = True  # type: ignore[attr-defined]
+    tk.Pack.pack_configure = _pack_configure  # type: ignore[method-assign]
+    tk.Pack.pack = _pack_configure  # type: ignore[method-assign]
+
+
+def set_text_or_hide(widget: tk.Misc, text: str, **cfg) -> None:
+    """글을 넣고, 글이 비었으면 위젯을 접고(높이 0) 글이 있으면 원래 자리에 다시 보인다."""
+    widget.configure(text=text, **cfg)
+    set_shown(widget, bool(text))
+
+
+class _ForgetMixin:
+    """호출한 쪽이 직접 pack_forget() 하면 '내가 접어 둔 위젯' 표시를 지운다(나중에 글이 생겨도 멋대로 다시 나타나지 않게)."""
+
+    def pack_forget(self) -> None:
+        self._pcm_hidden = False  # type: ignore[attr-defined]
+        super().pack_forget()  # type: ignore[misc]
+
+
+class _FoldMixin(_ForgetMixin):
+    """configure(text=...) 로 글이 바뀔 때 비면 접고 차면 펴는 라벨. 글이 빈 채로 pack 해도 곧바로 접는다."""
+
+    def pack_configure(self, cnf=None, **kw):  # type: ignore[override]
+        if getattr(self, "_pcm_hidden", False) and not self.winfo_manager():  # 접어 둔 위젯의 옵션만 바꾸는 호출: 기억해 둔 옵션에 합친다
+            kw = {**getattr(self, "_pcm_info", {}), **(cnf if isinstance(cnf, dict) else {}), **kw}
+            cnf = None
+        self._pcm_hidden = False  # type: ignore[attr-defined]  # 호출한 쪽이 직접 배치하면 그쪽이 우선
+        res = super().pack_configure(cnf, **kw)  # type: ignore[misc]
+        if self.pcm_empty():
+            set_shown(self, False)
+        return res
+
+    pack = pack_configure
+
+    def configure(self, cnf=None, **kw):  # type: ignore[override]
+        res = super().configure(cnf, **kw)  # type: ignore[misc]
+        has_text = "text" in kw or (isinstance(cnf, dict) and "text" in cnf)
+        if has_text:
+            set_shown(self, bool(str(self.cget("text"))))  # type: ignore[attr-defined]
+        return res
+
+    config = configure
+
+    def pcm_empty(self) -> bool:
+        return not str(self.cget("text"))  # type: ignore[attr-defined]
+
+
+class FoldLabel(_FoldMixin, tk.Label):
+    """글이 없으면 자리를 차지하지 않는 tk 라벨."""
+
+
+class FoldTLabel(_FoldMixin, ttk.Label):
+    """글이 없으면 자리를 차지하지 않는 ttk 라벨."""
+
+
+def collapse_empty(root: tk.Misc) -> None:
+    """root 아래에서 내용이 비어 있는데 배치돼 있는 접이식 위젯(pcm_empty() 가 참)을 접는다."""
+    for w in root.winfo_children():
+        if getattr(w, "pcm_empty", None) is not None and w.pcm_empty() and w.winfo_manager() in ("pack", "grid"):
+            set_shown(w, False)
+        collapse_empty(w)
+
+
 # --------------------------------------------------------------------------- 단추
 class ActionButton(tk.Button):
     """눈에 띄는 단추(ttk 는 Windows 에서 배경색을 못 바꿔 tk 단추를 쓴다). ttk 단추처럼 state()/instate() 를 쓸 수 있다.
@@ -202,7 +340,7 @@ def bind_alt(root: tk.Misc, button: tk.Misc, active: Callable[[], bool] | None =
 
 
 # --------------------------------------------------------------------------- 안내 상자 / 접이식
-class Notice(tk.Label):
+class Notice(FoldLabel):
     """색 상자 하나(안내/성공/주의/위험). 색에만 의존하지 않도록 문구 앞에 아이콘을 직접 넣어 쓴다."""
     KINDS = {"info": (INFO_BG, INFO_FG), "ok": (OK_BG, OK_FG), "warn": (WARN_BG, WARN_FG), "danger": (DANGER_BG, DANGER_FG)}
 
@@ -217,7 +355,7 @@ class Notice(tk.Label):
         self.configure(text=text, bg=bg, fg=fg)
 
     def clear(self) -> None:
-        self.configure(text="", bg=self.winfo_toplevel().cget("background"))
+        self.configure(text="", bg=self.winfo_toplevel().cget("background"))  # 글이 비면 접힌다(FoldLabel)
 
 
 def _bg_of(widget: tk.Misc) -> str:
@@ -265,14 +403,14 @@ class Collapsible(tk.Frame):
             self.body.pack_forget()
         self.toggle_btn.configure(text=self.title_open if self.open else self.title)
 
-    def add_text(self, text: str, fg: str = MUTED_FG, pad: int = 24) -> tk.Label:
-        lbl = tk.Label(self.body, text=text, justify="left", anchor="w", fg=fg, bg=self.bg)
+    def add_text(self, text: str, fg: str = MUTED_FG, pad: int = 24) -> FoldLabel:
+        lbl = FoldLabel(self.body, text=text, justify="left", anchor="w", fg=fg, bg=self.bg)
         lbl.pack(anchor="w", fill="x", pady=2)
         autowrap(lbl, pad)
         return lbl
 
 
-class CoverageBox(ttk.Frame):
+class CoverageBox(_ForgetMixin, ttk.Frame):
     """프로그램별 설정 확인표: 프로그램 / 옮기는 설정 / 상태 / 담긴 파일 수. '이 PC에 없음' 행은 '해당 없음 N곳' 한 줄로 접고 펼치면 보인다."""
 
     STATUS_TAGS = {coverage.ST_OK: OK_FG, coverage.ST_PART: WARN_FG, coverage.ST_UNREAD: DANGER_FG,
@@ -300,7 +438,7 @@ class CoverageBox(ttk.Frame):
             self.open_btn.pack(side="left")
             self.open_btn.state(["disabled"])
             add_tooltip(self.open_btn, T.TIP_OPEN_EXPLORER)
-            self.open_note = tk.Label(self.open_row, text="", anchor="w", justify="left", fg=WARN_FG)
+            self.open_note = FoldLabel(self.open_row, text="", anchor="w", justify="left", fg=WARN_FG)
             self.open_note.pack(side="left", padx=(8, 0))
         for st, color in self.STATUS_TAGS.items():
             self.tree.tag_configure(st, foreground=color)
@@ -308,6 +446,7 @@ class CoverageBox(ttk.Frame):
         self.tips = TreeTooltip(self.tree, lambda iid, col: self.full.get(iid, "") if col in (1, 2) else "")
         self.tree.tag_configure("exc", foreground=MUTED_FG)
         self.lines: set[str] = set()   # '제외 N개…' 줄(행 아래에 붙는 자식 행). 선택/눌러서 큰 파일 예시를 펼친다
+        self.tree.bind("<Button-1>", self._press_line, add="+")
         self.tree.bind("<ButtonRelease-1>", self._click_line, add="+")
         self.tree.bind("<Return>", self._key_line, add="+")
         if explorer is not None:
@@ -323,6 +462,10 @@ class CoverageBox(ttk.Frame):
         self.rows_shown: list[dict] = []
         self.rows_hidden: list[dict] = []
 
+    def pcm_empty(self) -> bool:
+        """표에 행이 없으면(결과 전) True — 확인표 상자 전체가 자리를 차지하지 않는다."""
+        return not self.tree.get_children()
+
     def clear(self) -> None:
         clear(self.tree)
         self.full = {}
@@ -331,6 +474,7 @@ class CoverageBox(ttk.Frame):
         self.rows_shown, self.rows_hidden = [], []
         self._set_noext(0)
         self._set_fold(0)
+        set_shown(self, False)
 
     def _set_noext(self, n: int) -> None:
         if n:
@@ -350,9 +494,14 @@ class CoverageBox(ttk.Frame):
         self.tree.set(iid, "status", T.BTN_LESS if on else T.BTN_MORE)
         self._fit_height()
 
+    def _press_line(self, e) -> None:
+        self._press_iid = cell_row(self.tree, e)
+
     def _click_line(self, e) -> None:
-        iid = self.tree.identify_row(e.y)
-        if iid in self.lines:
+        """누른 곳과 뗀 곳이 같은 행의 칸일 때만(머리글/경계선 드래그 뒤 놓은 자리의 행은 건드리지 않는다)."""
+        iid = cell_row(self.tree, e)
+        pressed, self._press_iid = getattr(self, "_press_iid", ""), ""
+        if iid and iid == pressed and iid in self.lines:
             self._toggle_line(iid)
 
     def _key_line(self, _e=None) -> None:
@@ -394,7 +543,7 @@ class CoverageBox(ttk.Frame):
         return ok
 
     def _double_example(self, e) -> str | None:
-        iid = self.tree.identify_row(e.y)
+        iid = cell_row(self.tree, e)
         if iid and iid in self.ex_paths:
             self.tree.selection_set(iid)
             self.open_example(iid)
@@ -433,6 +582,7 @@ class CoverageBox(ttk.Frame):
 
     def show(self, table: list[dict]) -> None:
         """table: coverage.rows() 의 행들. 비어 있으면 안내 한 줄만."""
+        set_shown(self, True)  # 결과가 생기면 원래 자리에 다시 나타난다
         clear(self.tree)
         self.full = {}
         self.lines = set()
@@ -841,6 +991,16 @@ def make_tree(parent: tk.Misc, columns: list[tuple[str, str, int]], height: int 
     return frame, tree
 
 
+def cell_row(tree: ttk.Treeview, event) -> str:
+    """표 클릭 위치가 '행의 칸'일 때만 그 행의 iid 를 돌려준다. 머리글, 열 경계선(너비 조절 드래그), 빈 영역이면 빈 문자열."""
+    try:
+        if tree.identify_region(event.x, event.y) not in ("cell", "tree"):
+            return ""
+        return tree.identify_row(event.y)
+    except tk.TclError:
+        return ""
+
+
 def sort_tree(tree: ttk.Treeview, col: str, descending: bool | None = None) -> None:
     state = tree._sort_state  # type: ignore[attr-defined]
     if descending is None:
@@ -973,7 +1133,7 @@ class PathField(ttk.Frame):
 
 
 # --------------------------------------------------------------------------- 결과 요약 / 안내 상자
-class ResultSummary(ttk.Frame):
+class ResultSummary(_ForgetMixin, ttk.Frame):
     """'성공 N / 건너뜀 N / 실패 N' 큰 요약 + 안내 상자(실패면 빨간 상자와 해야 할 일 한 줄)."""
 
     def __init__(self, parent: tk.Misc) -> None:
@@ -985,18 +1145,24 @@ class ResultSummary(ttk.Frame):
         self.fail_label = ttk.Label(row, text="", font=TITLE_FONT)
         for i, w in enumerate((self.ok_label, self.skip_label, self.fail_label)):
             w.pack(side="left", padx=(0, 28))
-        self.box = tk.Label(self, text="", anchor="w", justify="left", padx=8, pady=6)
+        self.box = FoldLabel(self, text="", anchor="w", justify="left", padx=8, pady=6)
         self.box.pack(fill="x", pady=(6, 0))
         autowrap(self.box, 40)
         self.clear()
+
+    def pcm_empty(self) -> bool:
+        """결과가 아직 없으면(요약 글이 모두 비어 있으면) True — 이 상자는 자리를 차지하지 않는다."""
+        return not any(str(w.cget("text")) for w in (self.ok_label, self.skip_label, self.fail_label, self.box))
 
     def clear(self) -> None:
         for w in (self.ok_label, self.skip_label, self.fail_label):
             w.configure(text="")
         self.box.configure(text="", bg=self.winfo_toplevel().cget("background"))
+        set_shown(self, False)
 
     def show(self, ok: int, skipped: int, failed: int, ok_message: str, fail_message: str, pending: bool = False) -> None:
         """pending: 복사는 끝났지만 검사를 미룬 상태 — '성공'이라고 하지 않고 '복사 완료(내용 확인 전)'로 표시한다."""
+        set_shown(self, True)  # 결과가 생기면 원래 자리에 다시 나타난다
         if pending:
             self.ok_label.configure(text=f"{T.ICON_WARN} {T.TR_PENDING_LABEL} {ok}", foreground=WARN_FG)
         else:
@@ -1023,7 +1189,9 @@ class TextDialog(tk.Toplevel):
         frame, self.text = make_text(self, height=height)
         self.text.configure(width=width)
         set_text(self.text, body)
-        frame.pack(fill="both", expand=True, padx=12, pady=(12, 6))
+        self.text_frame = frame
+        if body.strip():  # 보여 줄 글이 없으면 빈 글 상자를 두지 않는다(닫기 단추만)
+            frame.pack(fill="both", expand=True, padx=12, pady=(12, 6))
         self.close_btn = ttk.Button(self, text=T.BTN_CLOSE, command=self.destroy)
         self.close_btn.pack(side="right", padx=12, pady=(0, 12))
         self.bind("<Return>", self.close_event)
@@ -1139,6 +1307,7 @@ class BaseView(ttk.Frame):
         """화면 구성이 끝난 뒤 호출: 이동 막대를 Tab 순서 맨 뒤로(본문 → 이동 단추 순서로 이동)."""
         if self._nav is not None:
             self._nav.lift()
+        collapse_empty(self)  # 처음부터 내용이 없는 결과/안내 영역은 자리를 차지하지 않게 접어 둔다
 
     def license_link(self, parent: tk.Misc) -> ActionButton:
         """라이선스 안내는 한 줄 링크로만 둔다(크게 보이는 곳은 시작 화면과 마지막 결과 화면뿐)."""

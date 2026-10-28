@@ -12,7 +12,7 @@ from tkinter import font as tkfont
 from .. import state as S
 from .. import texts as T
 from ...progress import fmt_bytes, fmt_duration
-from .common import (DANGER_FG, INFO_BG, INFO_BORDER, INFO_FG, MUTED_FG, OK_BG, OK_FG, SUB_FONT, TITLE_FONT, WARN_BG, WARN_FG, ActionButton,
+from .common import (FoldLabel, FoldTLabel, DANGER_FG, INFO_BG, INFO_BORDER, INFO_FG, MUTED_FG, OK_BG, OK_FG, SUB_FONT, TITLE_FONT, WARN_BG, WARN_FG, ActionButton,
                      BaseView, ScrollBody, autowrap, bind_alt, clean_path, open_location)
 
 POLL_MS = 250
@@ -69,22 +69,22 @@ class ReceiveView(BaseView):
         self.state_label = ttk.Label(body, text=T.RX_STATE["idle"], font=SUB_FONT)
         self.state_label.pack(anchor="w", pady=(8, 2))
         self.bar = ttk.Progressbar(body, mode="determinate", maximum=100)
-        self.progress_label = ttk.Label(body, text="", justify="left")
+        self.progress_label = FoldTLabel(body, text="", justify="left")
         autowrap(self.progress_label)
-        self.log = ttk.Label(body, text="", justify="left", foreground=MUTED_FG)
+        self.log = FoldTLabel(body, text="", justify="left", foreground=MUTED_FG)
         self.log.pack(anchor="w", fill="x", pady=(2, 0))
         autowrap(self.log)
-        self.error = tk.Label(body, text="", anchor="w", justify="left", fg=DANGER_FG, padx=2)
+        self.error = FoldLabel(body, text="", anchor="w", justify="left", fg=DANGER_FG, padx=2)
         autowrap(self.error, 40)
 
         # ---- 경고(노란 상자: 진행 표시 아래. 낮은 창에서도 진행이 먼저 보이게)
-        self.warn = tk.Label(body, text="", anchor="w", justify="left", bg=WARN_BG, fg=WARN_FG, padx=10, pady=6)
+        self.warn = FoldLabel(body, text="", anchor="w", justify="left", bg=WARN_BG, fg=WARN_FG, padx=10, pady=6)
         self.warn.pack(fill="x", pady=(4, 2))
         autowrap(self.warn, 40)
 
 
         # ---- 결과
-        self.result = tk.Label(self.top, text="", anchor="w", justify="left", padx=10, pady=6)
+        self.result = FoldLabel(self.top, text="", anchor="w", justify="left", padx=10, pady=6)
         autowrap(self.result, 40)
         self.result_note = ttk.Label(self.top, text=T.RX_DONE_NOTE, justify="left")
         autowrap(self.result_note)

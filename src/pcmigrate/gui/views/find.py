@@ -10,8 +10,8 @@ from tkinter import filedialog, ttk
 
 from .. import state as S
 from .. import texts as T
-from .common import (MUTED_FG, SUB_FONT, WARN_BG, WARN_FG, ActionButton, BaseView, Collapsible, ExplorerLink, ScrollBody, TreeTooltip, add_tooltip,
-                     autowrap, bind_alt, clean_path, clear, make_tree)
+from .common import (FoldLabel, FoldTLabel, MUTED_FG, SUB_FONT, WARN_BG, WARN_FG, ActionButton, BaseView, Collapsible, ExplorerLink, ScrollBody, TreeTooltip, add_tooltip,
+                     autowrap, bind_alt, cell_row, clean_path, clear, make_tree)
 
 
 class FindView(BaseView):
@@ -51,10 +51,10 @@ class FindView(BaseView):
         self.add_btn = ActionButton(top, text=T.BTN_FD_ADD, kind="plain", command=self._add_folder)
         self.add_btn.pack(side="left", padx=(8, 0))
         self.primary = self.find_btn
-        self.summary = ttk.Label(body, text="", justify="left", foreground=MUTED_FG)
+        self.summary = FoldTLabel(body, text="", justify="left", foreground=MUTED_FG)
         self.summary.pack(anchor="w", fill="x")
         autowrap(self.summary)
-        self.notice = tk.Label(body, text="", anchor="w", justify="left", bg=WARN_BG, fg=WARN_FG, padx=10, pady=4)  # 시간 초과/읽기 오류/오류 안내
+        self.notice = FoldLabel(body, text="", anchor="w", justify="left", bg=WARN_BG, fg=WARN_FG, padx=10, pady=4)  # 시간 초과/읽기 오류/오류 안내
         autowrap(self.notice, 40)
 
         # ---- 종류별 보기
@@ -104,7 +104,7 @@ class FindView(BaseView):
         self.explorer.attach(self.tree, lambda iid: (self.rows[iid].path, None) if iid in self.rows else None,
                              click=self._click, undo=self._undo_toggle)
         self._last_toggle: str | None = None
-        self.bulk_msg = ttk.Label(bulk, text="", justify="left")
+        self.bulk_msg = FoldTLabel(bulk, text="", justify="left")
         self.bulk_msg.pack(side="left", padx=6)
 
         # ---- 정크 파일 제외
@@ -311,7 +311,7 @@ class FindView(BaseView):
             self.guarded(self.c.set_data_selected, r.path, not r.selected)
 
     def _click(self, event) -> None:
-        iid = self.tree.identify_row(event.y)
+        iid = cell_row(self.tree, event)
         if iid:
             self._toggle(iid)
 

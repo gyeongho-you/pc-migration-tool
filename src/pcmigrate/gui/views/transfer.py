@@ -12,7 +12,7 @@ from tkinter import filedialog, messagebox, ttk
 from .. import state as S
 from .. import texts as T
 from ...progress import fmt_bytes
-from .common import (DANGER_BG, DANGER_FG, INFO_BG, INFO_FG, MUTED_FG, OK_FG, WARN_BG, WARN_FG, ActionButton, BaseView, Collapsible,
+from .common import (FoldLabel, FoldTLabel, DANGER_BG, DANGER_FG, INFO_BG, INFO_FG, MUTED_FG, OK_FG, WARN_BG, WARN_FG, ActionButton, BaseView, Collapsible,
                      PathField, ResultSummary, ScrollBody, StepStrip, TextDialog, TreeTooltip, add_tooltip, autowrap, clean_path, clear,
                      make_tree)
 
@@ -47,7 +47,7 @@ class TransferView(BaseView):
             rb = ttk.Radiobutton(row, text=title, value=key, variable=self.mode_var, command=self._on_mode)
             rb.pack(side="left", padx=(0, 18))
             self.mode_btns[key] = rb
-        self.mode_desc = ttk.Label(modes, text="", justify="left", foreground=MUTED_FG)
+        self.mode_desc = FoldTLabel(modes, text="", justify="left", foreground=MUTED_FG)
         self.mode_desc.pack(anchor="w", fill="x", pady=(2, 0))
         autowrap(self.mode_desc, 40)
         self.stage_frame = ttk.Frame(modes)
@@ -77,7 +77,7 @@ class TransferView(BaseView):
                                    drives=self.c.list_drives, on_drive=self._pick_dst_drive)
         self.dst_field.pack(fill="x", pady=(6, 0))
         self.src_label, self.dst_label = self.src_field.label, self.dst_field.label
-        self.sel_box = tk.Label(form, text="", anchor="w", justify="left", padx=10, pady=6, bg=INFO_BG, fg=INFO_FG)  # stage30a: 선택 목록 흐름의 원본 표시
+        self.sel_box = FoldLabel(form, text="", anchor="w", justify="left", padx=10, pady=6, bg=INFO_BG, fg=INFO_FG)  # stage30a: 선택 목록 흐름의 원본 표시
         autowrap(self.sel_box, 40)
         self.src_entry = self.src_field.entry
         self.dst_hint = self.dst_field.hint
@@ -91,7 +91,7 @@ class TransferView(BaseView):
         self.manifest_field = PathField(vf, self.manifest_var, self._pick_manifest, label=T.TR_MANIFEST_LABEL, hint=T.TR_MANIFEST_HINT,
                                         extra=[(T.BTN_AUTOFIND, self._autofind)])
         self.manifest_field.pack(fill="x", pady=(2, 0))
-        self.find_label = ttk.Label(vf, text="", justify="left")  # '자동 찾기' 결과(글이 있을 때만 보인다)
+        self.find_label = FoldTLabel(vf, text="", justify="left")  # '자동 찾기' 결과(글이 있을 때만 보인다)
         autowrap(self.find_label, 40)
         self.target_field = PathField(vf, self.target_var, lambda: self._pick_dir(self.target_var), label=T.TR_TARGET_LABEL,
                                       hint=T.TR_TARGET_HINT, drives=self.c.list_drives, on_drive=lambda root: self.target_var.set(root))
@@ -99,10 +99,10 @@ class TransferView(BaseView):
         self.manifest_var.trace_add("write", lambda *a: self._check())
         self.target_var.trace_add("write", lambda *a: self._check())
 
-        self.check_label = tk.Label(body, text="", anchor="w", justify="left", padx=2)  # 입력 확인 결과(✔/✖ 줄)
+        self.check_label = FoldLabel(body, text="", anchor="w", justify="left", padx=2)  # 입력 확인 결과(✔/✖ 줄)
         self.check_label.pack(fill="x", pady=4)
         autowrap(self.check_label, 40)
-        self.warn_label = tk.Label(body, text="", anchor="w", justify="left", padx=10, pady=6, bg=WARN_BG, fg=WARN_FG)  # 이 화면의 안내 상자
+        self.warn_label = FoldLabel(body, text="", anchor="w", justify="left", padx=10, pady=6, bg=WARN_BG, fg=WARN_FG)  # 이 화면의 안내 상자
         autowrap(self.warn_label, 40)
 
         # ---- 옵션(펼치기)
@@ -136,15 +136,15 @@ class TransferView(BaseView):
         # ---- 결과 영역
         self.result = ResultSummary(body)
         self.result.pack(fill="x", pady=(6, 0))
-        self.preview_box = tk.Label(body, text="", anchor="w", justify="left", padx=2, pady=4)  # 결과 한 줄 요약(상자 아님)
+        self.preview_box = FoldLabel(body, text="", anchor="w", justify="left", padx=2, pady=4)  # 결과 한 줄 요약(상자 아님)
         self.preview_box.pack(fill="x")
         autowrap(self.preview_box, 40)
-        self.loc_box = tk.Label(body, text="", anchor="w", justify="left", padx=10, pady=6, bg=WARN_BG, fg=WARN_FG)
+        self.loc_box = FoldLabel(body, text="", anchor="w", justify="left", padx=10, pady=6, bg=WARN_BG, fg=WARN_FG)
         autowrap(self.loc_box, 40)
-        self.notes_box = ttk.Label(body, text="", justify="left")
+        self.notes_box = FoldTLabel(body, text="", justify="left")
         autowrap(self.notes_box, 20)
         self.layout_more = Collapsible(body, T.TR_LAYOUT_MORE_TITLE, T.TR_LAYOUT_MORE_TITLE_OPEN)
-        self.layout_box = ttk.Label(self.layout_more.body, text="", justify="left", foreground=MUTED_FG)
+        self.layout_box = FoldTLabel(self.layout_more.body, text="", justify="left", foreground=MUTED_FG)
         self.layout_box.pack(anchor="w", fill="x")
         autowrap(self.layout_box, 40)
         self.res_actions = ttk.Frame(body)  # 결과가 나온 뒤에만 보이는 보조 단추
@@ -167,13 +167,13 @@ class TransferView(BaseView):
         self.more = Collapsible(body, T.TR_MORE_TITLE, T.TR_MORE_TITLE_OPEN)
         self.more.pack(fill="x", pady=(8, 0))
         mb = self.more.body
-        self.method_label = ttk.Label(mb, text="", justify="left")
+        self.method_label = FoldTLabel(mb, text="", justify="left")
         self.method_label.pack(anchor="w", fill="x", pady=2)
         autowrap(self.method_label, 40)
-        self.steps_label = ttk.Label(mb, text="", justify="left")
+        self.steps_label = FoldTLabel(mb, text="", justify="left")
         self.steps_label.pack(anchor="w", fill="x", pady=2)
         autowrap(self.steps_label, 20)
-        self.precheck_label = ttk.Label(mb, text="", justify="left", foreground=WARN_FG)
+        self.precheck_label = FoldTLabel(mb, text="", justify="left", foreground=WARN_FG)
         self.precheck_label.pack(anchor="w", fill="x", pady=2)
         autowrap(self.precheck_label, 40)
         self.detail_notes = ttk.Label(mb, text=T.TR_DETAIL_NOTES, justify="left", foreground=MUTED_FG)

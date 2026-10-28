@@ -10,7 +10,7 @@ from tkinter import ttk
 from .. import state as S
 from .. import texts as T
 from ...progress import fmt_bytes
-from .common import BODY_FONT, INFO_BORDER, INFO_FG, MUTED_FG, SUB_FONT, BaseView, ScrollBody, autowrap
+from .common import BODY_FONT, INFO_BORDER, INFO_FG, MUTED_FG, SUB_FONT, BaseView, ScrollBody, autowrap, FoldTLabel
 
 
 class MethodView(BaseView):
@@ -21,7 +21,7 @@ class MethodView(BaseView):
         self.navbar(back=lambda: self.c.go(S.FIND), next_=lambda: self.guarded(self.c.files_continue))
         self.primary = self.next_btn
         self.header(T.MV_HEADING, "")
-        self.sub = ttk.Label(self, text="", justify="left")
+        self.sub = FoldTLabel(self, text="", justify="left")
         self.sub.pack(anchor="w", fill="x", pady=(2, 8))
         autowrap(self.sub)
         scroll = ScrollBody(self)

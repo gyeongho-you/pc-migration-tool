@@ -8,9 +8,9 @@ from tkinter import filedialog, messagebox, ttk
 
 from .. import state as S
 from .. import texts as T
-from .common import (BODY_FONT, TEXT_FG, DANGER_BG, DANGER_FG, INFO_BG, INFO_FG, MUTED_FG, OK_BG, OK_FG, SUB_FONT, TITLE_FONT, WARN_FG,
+from .common import (FoldLabel, FoldTLabel, BODY_FONT, TEXT_FG, DANGER_BG, DANGER_FG, INFO_BG, INFO_FG, MUTED_FG, OK_BG, OK_FG, SUB_FONT, TITLE_FONT, WARN_FG,
                      ActionButton, BaseView, Collapsible, CoverageBox, Notice, PathField, ResultSummary, ScrollBody, TreeTooltip, autowrap, clean_path,
-                     clear, make_text, make_tree, open_location, set_text)
+                     cell_row, clear, make_text, make_tree, open_location, set_shown, set_text)
 
 
 class PackageView(BaseView):
@@ -97,13 +97,13 @@ class PreviewView(BaseView):
         super().__init__(app, controller)
         self.navbar(back=lambda: self.c.go(S.NEW_INSTALL), next_=lambda: self.c.go(S.NEW_CONFIRM), next_text=T.BTN_TO_CONFIRM)
         self.header(T.PREV_HEADING, T.PREV_SUB)
-        self.summary = ttk.Label(self, text="", justify="left", font=SUB_FONT)
+        self.summary = FoldTLabel(self, text="", justify="left", font=SUB_FONT)
         self.summary.pack(anchor="w", fill="x")
         autowrap(self.summary)
         # 설치 폴더 설정(있을 때만 보임): 기본은 복원 안 함. 체크하면 미리보기를 다시 만든다
         self.install_var = tk.BooleanVar(value=False)
         self.install_check = ttk.Checkbutton(self, variable=self.install_var, command=self._install_changed, text=T.PREV_INSTALL_CHECK)
-        self.problem_box = tk.Label(self, text="", anchor="w", justify="left", padx=10, pady=6)  # 이 화면의 유일한 안내 상자
+        self.problem_box = FoldLabel(self, text="", anchor="w", justify="left", padx=10, pady=6)  # 이 화면의 유일한 안내 상자
         self.problem_box.pack(fill="x", pady=4)
         self._empty_bg = self.problem_box.cget("bg")
         autowrap(self.problem_box, 40)
@@ -128,7 +128,7 @@ class PreviewView(BaseView):
         self.prog_note = ttk.Label(prog_note_row, text=T.PREV_PROG_NOTE, foreground=MUTED_FG, justify="left")
         self.prog_note.pack(side="left")
         self.recalc_btn = ttk.Button(prog_note_row, text=T.BTN_PREV_RECALC, command=self._recompute_now)
-        self.dirty = ttk.Label(self.prog_box, text="", foreground=WARN_FG, justify="left")
+        self.dirty = FoldTLabel(self.prog_box, text="", foreground=WARN_FG, justify="left")
         autowrap(self.dirty, 30)
         self._recalc_timer = None
         cols = [("status", T.PREV_COLS[0], 130), ("target", T.PREV_COLS[1], 460), ("backup", T.PREV_COLS[2], 250),
@@ -151,6 +151,8 @@ class PreviewView(BaseView):
         self.tips = TreeTooltip(self.tree, lambda iid, col: self.full.get(iid, ("", ""))[0 if col == 1 else 1] if col in (1, 2) else "")
         tf, self.warn = make_text(self.more.body, height=5)
         tf.pack(fill="x")
+        for w in (self.files_frame, self.cov_fold, self.more):  # 미리보기를 만들기 전에는 빈 표/빈 접이식이 자리를 차지하지 않게
+            set_shown(w, False)
         self.finish()
 
     def on_show(self) -> None:
@@ -194,7 +196,7 @@ class PreviewView(BaseView):
         self.guarded(self.c.set_restore_program, pid, on)
 
     def _prog_click(self, event) -> None:
-        iid = self.prog_tree.identify_row(event.y)
+        iid = cell_row(self.prog_tree, event)
         if iid:
             self._prog_toggle(iid)
 
@@ -264,6 +266,8 @@ class PreviewView(BaseView):
             self.next_btn.state(["disabled"])
             self.set_next_reason(T.WHY_PREVIEW_FIRST)
             self.prog_box.pack_forget()
+            for w in (self.files_frame, self.cov_fold, self.more):
+                set_shown(w, False)
             return
         counts = p.summary()
         text = T.PREV_SUMMARY.format(new=counts.get("would_copy", 0), over=counts.get("would_overwrite", 0),
@@ -291,6 +295,9 @@ class PreviewView(BaseView):
             iid = self.tree.insert("", "end", tags=tags, values=(
                 r["status"], T.ellipsize_path(r["target"]), T.ellipsize_path(r["backup"]), kind))
             self.full[iid] = (r["target"], r["backup"])
+        set_shown(self.files_frame, bool(self.tree.get_children()))  # 줄이 없으면 빈 표를 두지 않는다
+        set_shown(self.cov_fold, True)
+        set_shown(self.more, True)
         lines = (self.c.preview_lines()
                  + [f"{w.get('name', '')}: {i}" for w in p.plan.warnings for i in w.get("items", [])])
         set_text(self.warn, lines or [T.CL_EMPTY])
@@ -322,7 +329,7 @@ class ConfirmView(BaseView):
         self.scroll = scroll
         body = ttk.Frame(scroll.inner, padding=(0, 0, 8, 0))
         body.pack(fill="both", expand=True)
-        self.info = ttk.Label(body, text="", justify="left")
+        self.info = FoldTLabel(body, text="", justify="left")
         self.info.pack(anchor="w", fill="x", pady=(2, 4))
         autowrap(self.info)
         big = ttk.Frame(body)
@@ -339,7 +346,7 @@ class ConfirmView(BaseView):
         self.check_bak.pack(anchor="w", pady=4)
         self.extra_frame = ttk.LabelFrame(body, text=T.CONF_EXTRA_TITLE, padding=8)
         self.extra_var = tk.BooleanVar(value=False)
-        self.extra_label = ttk.Label(self.extra_frame, text="", justify="left", foreground=DANGER_FG)
+        self.extra_label = FoldTLabel(self.extra_frame, text="", justify="left", foreground=DANGER_FG)
         self.extra_label.pack(anchor="w", fill="x")
         autowrap(self.extra_label, 24)
         self.extra_check = ttk.Checkbutton(self.extra_frame, variable=self.extra_var, command=self._extra_changed,
@@ -428,7 +435,7 @@ class ResultView(BaseView):
         body.pack(fill="both", expand=True)
         self.summary = ResultSummary(body)
         self.summary.pack(fill="x")
-        self.note = ttk.Label(body, text="", justify="left")
+        self.note = FoldTLabel(body, text="", justify="left")
         self.note.pack(anchor="w", fill="x")
         # 프로그램별 결과 표와 프로그램별 [되돌리기]
         self.prog_box = ttk.Frame(body)
@@ -447,6 +454,7 @@ class ResultView(BaseView):
         self.cov.pack(fill="x", pady=(4, 0))
         cols = [("kind", T.RES_COLS[0], 90), ("path", T.RES_COLS[1], 520), ("detail", T.RES_COLS[2], 260)]
         frame, self.tree = make_tree(body, cols, height=6)
+        self.tree_frame = frame
         frame.pack(fill="x", pady=6)
         self.tree.tag_configure("fail", background=DANGER_BG, foreground=DANGER_FG)
         self.full: dict[str, str] = {}
@@ -478,6 +486,7 @@ class ResultView(BaseView):
         self.undo.pack(fill="x", pady=(6, 0))
         self.undo.add_text(f"{T.RES_UNDO_TITLE}\n{T.RES_UNDO_HELP}", fg=MUTED_FG, pad=40)
         self.first_target = ""
+        set_shown(self.tree_frame, False)  # 결과가 생기기 전에는 빈 표가 자리를 차지하지 않는다
         self.finish()
 
     def on_event(self, kind, payload) -> None:
@@ -564,6 +573,7 @@ class ResultView(BaseView):
             self._render_programs()
             self.cov.clear()
             self.summary.clear()
+            set_shown(self.tree_frame, False)
             self.note.configure(text=T.RES_NOT_YET)
             self.open_btn.state(["disabled"])
             self.bak_btn.state(["disabled"])
@@ -589,6 +599,7 @@ class ResultView(BaseView):
             if res.status == "copied" and not res.backup:
                 add(T.RES_KIND_COPY, res.dst, "")
                 self.first_target = self.first_target or res.dst
+        set_shown(self.tree_frame, bool(self.tree.get_children()))
         self.open_btn.state(["!disabled"] if self.first_target else ["disabled"])
         self.bak_btn.state(["!disabled"] if self.c.backup_folder() else ["disabled"])
 

@@ -13,7 +13,7 @@ from tkinter import ttk
 from .. import status as ST
 from .. import texts as T
 from .common import (BODY_FONT, BOLD_FONT, CHIP_DONE_BG, CHIP_TODO_BG, DANGER_BG, DANGER_FG, INFO_BG, INFO_BORDER, INFO_FG, MUTED_FG,
-                     OK_BG, OK_FG, SUB_FONT, TITLE_FONT, WARN_BG, WARN_FG, Collapsible, TextDialog, Tooltip, autowrap)
+                     OK_BG, OK_FG, SUB_FONT, TITLE_FONT, WARN_BG, WARN_FG, Collapsible, FoldLabel, TextDialog, Tooltip, autowrap, set_shown)
 
 CHIP_COLORS = {  # level -> (배경, 글자)
     "ok": (OK_BG, OK_FG), "info": (INFO_BG, INFO_FG), "warn": (WARN_BG, WARN_FG),
@@ -29,12 +29,14 @@ class StatusCard(tk.Frame):
         super().__init__(slot or parent, bg=INFO_BG, highlightbackground=INFO_BORDER, highlightthickness=1, padx=10, pady=6)
         self.c, self.tasks = controller, set(tasks)
         self.shown = False
+        self._compact = False  # 작업이 끝난 뒤(성공)에는 한 줄짜리 얇은 요약 줄로 줄어든다
         self.dialogs: list[TextDialog] = []
 
         # ---- 기본 3가지: 큰 문장 / 진행 막대 / 남은 시간
         self.headline = tk.Label(self, text="", bg=INFO_BG, font=TITLE_FONT, anchor="w", justify="left")
         self.headline.pack(fill="x", pady=(0, 4))
         autowrap(self.headline, 20)
+        self.headline.bind("<Button-1>", self._headline_click, add="+")  # 얇은 요약 줄일 때: 눌러서 자세히 펼침/접기
         self.bar = ttk.Progressbar(self, mode="determinate", maximum=100)
         self.bar.pack(fill="x", pady=(0, 4))
         eta_row = tk.Frame(self, bg=INFO_BG)
@@ -85,7 +87,7 @@ class StatusCard(tk.Frame):
             chip.bind("<Button-1>", lambda _e, k=kind: self.open_list(k))
             self.chips[kind] = chip
             self.chip_tips[kind] = Tooltip(chip, "")
-        self.resumed = tk.Label(box, text="", bg=INFO_BG, fg=OK_FG, anchor="w", justify="left")
+        self.resumed = FoldLabel(box, text="", bg=INFO_BG, fg=OK_FG, anchor="w", justify="left")
         self.resumed.pack(fill="x", pady=(4, 0))
         self.problem = tk.Label(box, text="", anchor="w", justify="left", padx=8, pady=2)
         self.problem.pack(fill="x", pady=(6, 0))
@@ -108,10 +110,12 @@ class StatusCard(tk.Frame):
                 self.shown = False
             return
         if not self.shown:
-            self.pack(fill="x", pady=(0, 8))
+            self.pack(fill="x", pady=(0, 4) if self._compact else (0, 8))
             self.shown = True
         snap = self.c.status.snapshot()
-        self.headline.configure(text=snap.headline, fg=DANGER_FG if snap.state == ST.FAILED else "black",
+        self._set_compact(snap.state == ST.DONE and not snap.has_problem)
+        arrow = (" ▾" if self.details.open else " ▸") if self._compact else ""
+        self.headline.configure(text=snap.headline + arrow, fg=DANGER_FG if snap.state == ST.FAILED else "black",
                                 font=TITLE_FONT if snap.state == ST.RUNNING else SUB_FONT)  # 끝난 뒤에는 한 단계 작게(카드가 낮아진다)
         eta = dict(snap.metrics).get(T.CARD_METRIC_ETA, "")
         running = snap.state == ST.RUNNING
@@ -169,6 +173,25 @@ class StatusCard(tk.Frame):
             self._problem_shown = want_problem
         self.problem_flag.configure(text=snap.problem_line if snap.has_problem else "")  # 문제가 있으면 기본 줄에도 한 줄로 알린다
         self.last.configure(text=f"{T.CARD_LAST}: {snap.last_message}")
+
+    def _set_compact(self, on: bool) -> None:
+        """성공으로 끝난 카드는 큰 상자 대신 한 줄('완료 — … ▸')로 줄인다(결과는 이미 화면 본문에 있다). 오류/중단은 그대로 눈에 띄게 둔다."""
+        if on == self._compact:
+            return
+        self._compact = on
+        self.configure(pady=1 if on else 6)
+        self.headline.configure(cursor="hand2" if on else "")
+        set_shown(self.details.toggle_btn, not on)  # 한 줄 모드에서는 '자세히' 단추 대신 요약 줄을 누른다
+        if on:
+            self.pack_configure(pady=(0, 4))
+        else:
+            self.pack_configure(pady=(0, 8))
+            self.details.set_open(False)
+
+    def _headline_click(self, _e=None) -> None:
+        if self._compact:
+            self.details.toggle()
+            self.refresh()
 
     def _fit_path(self, full: str, short: str) -> str:
         """지금 처리 중인 경로를 카드 너비에 맞게 가운데 말줄임한다(좁은 창에서 파일 이름이 잘리지 않게)."""

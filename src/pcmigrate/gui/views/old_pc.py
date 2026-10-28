@@ -8,10 +8,10 @@ from tkinter import filedialog, messagebox, ttk
 from .. import state as S
 from .. import texts as T
 from ...api import unreadable_lines
-from .common import (BOLD_FONT, DANGER_BG, DANGER_FG, INFO_BG, INFO_BORDER, INFO_FG, LIST_BG, MUTED_FG, OK_FG, SUB_FONT, WARN_FG,
+from .common import (FoldLabel, FoldTLabel, BOLD_FONT, DANGER_BG, DANGER_FG, INFO_BG, INFO_BORDER, INFO_FG, LIST_BG, MUTED_FG, OK_FG, SUB_FONT, WARN_FG,
                      ActionButton, BaseView, ExplorerLink, add_tooltip, bind_alt, CoverageBox,
-                     Collapsible, PathField, ResultSummary, ScrollBody, TreeTooltip, autowrap, clear, clean_path, make_text,
-                     make_tree, open_location, set_text, sort_tree, table_hint)
+                     Collapsible, PathField, cell_row, ResultSummary, ScrollBody, TreeTooltip, autowrap, clear, clean_path, make_text,
+                     make_tree, open_location, set_shown, set_text, sort_tree, table_hint)
 from .retry_panel import RetryPanel
 
 
@@ -27,17 +27,25 @@ class ScanView(BaseView):
         self.add_status_card({T.TASK_SCAN})
         self.summary = ttk.Label(self, text=T.SCAN_IDLE, font=SUB_FONT)
         self.summary.pack(anchor="w", pady=(0, 4))
-        ttk.Label(self, text=T.SCAN_TABLE_TITLE).pack(anchor="w", pady=(10, 2))
+        self.tree_title = ttk.Label(self, text=T.SCAN_TABLE_TITLE)
+        self.tree_title.pack(anchor="w", pady=(10, 2))
         frame, self.tree = make_tree(self, [("rule", T.COL_PROGRAM_RULE, 260), ("evidence", T.COL_EVIDENCE, 560)], height=12)
+        self.tree_frame = frame
         frame.pack(fill="both", expand=True)
         self.tips = TreeTooltip(self.tree, lambda iid, col: self.tree.set(iid, self.tree["columns"][col]))
         self.set_next_reason(T.WHY_SCAN_FIRST)
         self.next_btn.state(["disabled"])
         self.next_btn.emphasize(False)
+        self._fit_table(False)  # 검색 결과가 나오기 전에는 빈 표와 제목이 자리를 차지하지 않는다
         self.finish()
+
+    def _fit_table(self, on: bool) -> None:
+        for w in (self.tree_title, self.tree_frame):
+            set_shown(w, on)
 
     def on_show(self) -> None:
         done = bool(self.c.state.scan)
+        self._fit_table(bool(self.tree.get_children()))
         self.next_btn.state(["!disabled"] if done else ["disabled"])
         self.set_next_reason("" if done else T.WHY_SCAN_FIRST)
         self.btn.emphasize(not done)
@@ -51,6 +59,7 @@ class ScanView(BaseView):
         clear(self.tree)
         for info in r.match_info:
             self.tree.insert("", "end", values=(info.rule.name, info.evidence))
+        self._fit_table(True)
         extra = T.SCAN_RESULT_EXTRA.format(n=r.discovery[0]) if r.discovery else ""
         self.summary.configure(text=T.SCAN_RESULT.format(programs=r.program_count, rules=len(r.matched), more=extra))
         self.next_btn.state(["!disabled"])
@@ -109,7 +118,7 @@ class DiscoverView(BaseView):
         self.find_btn = ttk.Button(self.find_row, text=T.FIND_BTN, command=self._find)
         self.find_btn.pack(side="left")
         self.find_row.pack(anchor="w", fill="x", pady=(2, 0))
-        self.find_msg = ttk.Label(body, text="", justify="left")  # 찾기 결과 한 줄 요약(있을 때만 보인다)
+        self.find_msg = FoldTLabel(body, text="", justify="left")  # 찾기 결과 한 줄 요약(있을 때만 보인다)
         autowrap(self.find_msg)
 
         cols = [("sel", T.DISC_COLS_V2[0], 56), ("warn", T.DISC_COLS_V2[1], 110), ("prog", T.DISC_COLS_V2[2], 170),
@@ -146,12 +155,12 @@ class DiscoverView(BaseView):
         self.explorer = ExplorerLink(self, self.sumrow)
         self.explorer.button.pack(side="right")
         self._last_toggle: tuple | None = None  # 방금 첫 클릭이 바꾼 항목(더블클릭으로 열 때 되돌린다)
-        self.bulk_msg = ttk.Label(self.bulk, text="", justify="left")
+        self.bulk_msg = FoldTLabel(self.bulk, text="", justify="left")
         self.bulk_msg.pack(side="left", padx=6)
         for b in (self.select_all_btn, self.clear_all_btn):
             bind_alt(self.app, b, lambda: self.app.current == self.name)
         self.bulk.pack(anchor="w", fill="x")
-        self.banner = tk.Label(low, text="", anchor="w", justify="left")
+        self.banner = FoldLabel(low, text="", anchor="w", justify="left")
         self.banner.pack(fill="x", pady=2)
         autowrap(self.banner, 40)
         # 자체 이전이 필요한 프로그램(폴더를 복사해서 옮길 수 없음): 메인 표에서 빼고 표 아래의 접힌 구역에 모은다(없으면 구역 자체가 안 보인다)
@@ -173,7 +182,7 @@ class DiscoverView(BaseView):
                              click=self._click, undo=self._undo_toggle)
         self.explorer.attach(self.st_tree, lambda iid: (self.st_rows[iid].path, None) if iid in self.st_rows else None,
                              click=self._st_click, undo=self._undo_toggle_st)
-        self.detail = ttk.Label(low, text="", justify="left")  # 줄을 고르면 그때만 보인다
+        self.detail = FoldTLabel(low, text="", justify="left")  # 줄을 고르면 그때만 보인다
         autowrap(self.detail)
         self.adv = Collapsible(low, T.DISC_ADV_TOGGLE, T.DISC_ADV_TOGGLE_OPEN)  # 고급 옵션(접힘)
         self.adv.pack(anchor="w", fill="x")
@@ -337,7 +346,7 @@ class DiscoverView(BaseView):
                                     parent=self)
 
     def _st_click(self, event) -> None:
-        iid = self.st_tree.identify_row(event.y)
+        iid = cell_row(self.st_tree, event)
         if iid:
             self._toggle_st(iid)
 
@@ -389,7 +398,7 @@ class DiscoverView(BaseView):
                 messagebox.showinfo(T.DISC_NO_CONFIG_TITLE, T.DISC_NO_CONFIG_CHECK, parent=self)  # 안내만(체크는 그대로)
 
     def _click(self, event) -> None:
-        iid = self.tree.identify_row(event.y)
+        iid = cell_row(self.tree, event)
         if iid:
             self._toggle(iid)
 
@@ -605,11 +614,11 @@ class ExportView(BaseView):
                                     extra=[(T.BTN_EXP_DESKTOP, lambda: self._set_path(self.c.default_export_path()))])
         self.path_field.pack(fill="x")
         entry = self.path_field.entry
-        self.plan = ttk.Label(body, text="", justify="left")
+        self.plan = FoldTLabel(body, text="", justify="left")
         self.plan.pack(anchor="w", fill="x", pady=4)
         autowrap(self.plan)
         self.resume_box = ttk.Frame(body)  # 이어받을 수 있을 때만 보인다
-        self.resume_lbl = ttk.Label(self.resume_box, text="", justify="left", foreground=OK_FG)
+        self.resume_lbl = FoldTLabel(self.resume_box, text="", justify="left", foreground=OK_FG)
         self.resume_lbl.pack(anchor="w", fill="x")
         autowrap(self.resume_lbl)
         self.restart_var = tk.BooleanVar(value=False)
@@ -646,7 +655,7 @@ class ExportView(BaseView):
                                explorer=(self.c.can_show_in_explorer, self.c.show_in_explorer))
         self.cov.title_label.pack_forget()
         self.cov.pack(fill="x")
-        self.cache_note = ttk.Label(body, text="", justify="left", foreground=MUTED_FG)
+        self.cache_note = FoldTLabel(body, text="", justify="left", foreground=MUTED_FG)
         autowrap(self.cache_note)
         self.retry_panel = RetryPanel(body, self.c, self.guarded)  # 읽지 못해 제외된 파일이 있을 때만 보이는 '다시 담기' 상자
         self.retry_panel.pack(fill="x")

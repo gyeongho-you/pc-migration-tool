@@ -205,7 +205,8 @@ def test_discover_view_secret_rows_highlighted_gated_and_long_paths(ctx):
     def click(secret):
         target = iid(secret)
         v.tree.identify_row = lambda y, _t=target: _t
-        v._click(SimpleNamespace(y=0))
+        v.tree.identify_region = lambda x, y: "cell"  # 행 칸을 누른 것으로 흉내(머리글/경계선은 행을 바꾸지 않는다)
+        v._click(SimpleNamespace(x=1, y=0))
 
     assert len(children(v.tree)) == 2
     assert T.ICON_WARN in v.tree.item(iid(True), "values")[1] and "민감" in v.tree.item(iid(True), "values")[1]  # 색 + 아이콘 + 문구

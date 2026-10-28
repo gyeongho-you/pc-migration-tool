@@ -353,6 +353,7 @@ def test_coverage_examples_open_in_explorer_only_when_path_can_be_built(ctx, tmp
     assert opened[-1] == (str(cfg / "sub" / "big.db"), True) and len(opened) == 2
     ev = SimpleNamespace(x=1, y=1)
     box.tree.identify_row = lambda y: ids[0]
+    box.tree.identify_region = lambda x, y: "cell"
     assert box._double_example(ev) == "break" and len(opened) == 3
     box.tree.selection_set(ids[1])
     ctx.app.update()

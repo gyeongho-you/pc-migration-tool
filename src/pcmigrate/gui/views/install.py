@@ -14,8 +14,8 @@ from .. import state as S
 from .. import texts as T
 from ..controller import GuardError
 from .status_card import StatusCard
-from .common import (BOLD_FONT, INFO_FG, MUTED_FG, OK_FG, WARN_BG, WARN_FG, ActionButton, BaseView, Notice, TextDialog,
-                     TreeTooltip, autowrap, clean_path, clear, make_tree, table_hint)
+from .common import (FoldTLabel, BOLD_FONT, INFO_FG, MUTED_FG, OK_FG, WARN_BG, WARN_FG, ActionButton, BaseView, Notice, TextDialog,
+                     TreeTooltip, autowrap, cell_row, clean_path, clear, make_tree, table_hint)
 
 
 class _BusyCard(StatusCard):
@@ -46,10 +46,10 @@ class InstallPanel(ttk.Frame):
         self.folder_btn.pack(side="right")
         self.folder_label = ttk.Label(row, text="", foreground=MUTED_FG)
         self.folder_label.pack(side="right", padx=8)
-        self.copy_note = ttk.Label(self, text="", justify="left", foreground=INFO_FG)  # 명령을 복사한 뒤에만 보인다
+        self.copy_note = FoldTLabel(self, text="", justify="left", foreground=INFO_FG)  # 명령을 복사한 뒤에만 보인다
         autowrap(self.copy_note)
         # 아래쪽 묶음을 먼저 쌓아 두어야 창이 낮아도 설명 줄이 잘리지 않는다(표가 남는 높이를 쓴다)
-        self.detail = ttk.Label(self, text="", justify="left")
+        self.detail = FoldTLabel(self, text="", justify="left")
         self.detail.pack(side="bottom", anchor="w", fill="x", pady=(4, 0))
         autowrap(self.detail)
         self.hint = table_hint(self)
@@ -156,7 +156,7 @@ class InstallPanel(ttk.Frame):
     def _click(self, event) -> None:
         if self.tree.identify_column(event.x) != "#1":  # 표시 칸을 눌렀을 때만 바꾼다(줄을 고르기만 할 때는 바꾸지 않는다)
             return
-        iid = self.tree.identify_row(event.y)
+        iid = cell_row(self.tree, event)
         if iid:
             self._toggle(iid)
 

@@ -10,7 +10,7 @@ from tkinter import messagebox, ttk
 
 from .. import state as S
 from .. import texts as T
-from .common import (DANGER_BG, DANGER_FG, MUTED_FG, OK_BG, OK_FG, SUB_FONT, WARN_BG, WARN_FG, ActionButton, BaseView, ScrollBody,
+from .common import (FoldLabel, FoldTLabel, DANGER_BG, DANGER_FG, MUTED_FG, OK_BG, OK_FG, SUB_FONT, WARN_BG, WARN_FG, ActionButton, BaseView, ScrollBody,
                      autowrap, bind_alt, clean_path)
 
 
@@ -33,7 +33,7 @@ class SendView(BaseView):
         body = ttk.Frame(scroll.inner, padding=(0, 0, 8, 0))
         body.pack(fill="both", expand=True)
 
-        self.selection = ttk.Label(body, text="", font=SUB_FONT)
+        self.selection = FoldTLabel(body, text="", font=SUB_FONT)
         self.selection.pack(anchor="w", pady=(4, 6))
 
         # ---- 새 PC 찾기
@@ -46,7 +46,7 @@ class SendView(BaseView):
         self.found_box = ttk.Combobox(row, textvariable=self.found_var, state="readonly", width=44, values=[])
         self.found_box.pack(side="left", fill="x", expand=True)
         self.found_box.bind("<<ComboboxSelected>>", self._found_picked)
-        self.found_msg = ttk.Label(body, text="", justify="left", foreground=MUTED_FG)
+        self.found_msg = FoldTLabel(body, text="", justify="left", foreground=MUTED_FG)
         self.found_msg.pack(anchor="w", fill="x", pady=(2, 0))
         autowrap(self.found_msg)
 
@@ -69,15 +69,15 @@ class SendView(BaseView):
             var.trace_add("write", lambda *a: self._remember())
 
         # ---- 진단 / 오류 / 결과
-        self.diag = ttk.Label(body, text="", justify="left")
+        self.diag = FoldTLabel(body, text="", justify="left")
         autowrap(self.diag)
-        self.error = tk.Label(body, text="", anchor="w", justify="left", bg=DANGER_BG, fg=DANGER_FG, padx=10, pady=6)
+        self.error = FoldLabel(body, text="", anchor="w", justify="left", bg=DANGER_BG, fg=DANGER_FG, padx=10, pady=6)
         autowrap(self.error, 40)
-        self.note = tk.Label(body, text="", anchor="w", justify="left", bg=WARN_BG, fg=WARN_FG, padx=10, pady=6)
+        self.note = FoldLabel(body, text="", anchor="w", justify="left", bg=WARN_BG, fg=WARN_FG, padx=10, pady=6)
         autowrap(self.note, 40)
-        self.result = tk.Label(body, text="", anchor="w", justify="left", padx=10, pady=6)
+        self.result = FoldLabel(body, text="", anchor="w", justify="left", padx=10, pady=6)
         autowrap(self.result, 40)
-        self.result_notes = ttk.Label(body, text="", justify="left")
+        self.result_notes = FoldTLabel(body, text="", justify="left")
         autowrap(self.result_notes)
         for b in (self.connect_btn, self.diag_btn, self.find_btn):
             bind_alt(self.app, b, lambda: self.app.current == self.name)
