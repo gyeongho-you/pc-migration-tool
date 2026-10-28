@@ -1,12 +1,13 @@
 """v0.1.1 수정 1: 다른 프로세스가 잠근 파일을 읽지 못해도 패키지에 흔적이 남지 않고 내보내기는 끝까지 간다."""
-from conftest import make_rules_dir
+import tempfile
+from conftest import make_rules_dir, patch_pkg
 import os
 import zipfile
 from pathlib import Path
 
 import pytest
 
-from pcmigrate import package
+from pcmigrate import package, package_base
 from pcmigrate.package import (LOCK_NAMES, SourceUnreadable, _write_entry, export_package, plan_import,
                                verify_package)
 from test_package import env, make_rule  # noqa: F401  (fixture)
@@ -85,12 +86,12 @@ def test_unreadable_simulated_anywhere_leaves_no_zip_entry(env, monkeypatch):
 
     big = old / "Vendor" / "Demo 2024" / "R1" / "Support" / "a.cfg"
     big.write_bytes(b"z" * 10)
-    monkeypatch.setattr(package, "CHUNK", 4)
+    patch_pkg(monkeypatch, "CHUNK", 4)
 
     def fake_open(path, mode="r", *a, **k):
         f = real_open(path, mode, *a, **k)
         return Flaky(f) if Path(str(path)).name == "a.cfg" and "b" in mode and "r" in mode else f
-    monkeypatch.setattr(package, "open", fake_open, raising=False)
+    patch_pkg(monkeypatch, "open", fake_open, raising=False)
     out = tmp_path / "p.zip"
     m = export_package([make_rule()], out, [], None, expand=expand_for(old))
     assert [f["src"] for f in m["failed"]] == [str(big)]
@@ -137,12 +138,12 @@ def test_old_package_with_lock_entry_still_imports(env):
     d = old / "Vendor" / "Demo 2024" / "R1" / "Support"
     (d / "LOCK").write_bytes(b"1")
     old_out = tmp_path / "old.zip"
-    orig = package.GLOBAL_EXCLUDE
-    package.GLOBAL_EXCLUDE = ("*.lic", "*.pcmigrate-part")  # 이전 버전 동작을 흉내
+    orig = package_base.GLOBAL_EXCLUDE
+    package_base.GLOBAL_EXCLUDE = ("*.lic", "*.pcmigrate-part")  # 이전 버전 동작을 흉내
     try:
         export_package([make_rule()], old_out, [], None, expand=expand_for(old))
     finally:
-        package.GLOBAL_EXCLUDE = orig
+        package_base.GLOBAL_EXCLUDE = orig
     assert any(n.endswith("/LOCK") for n in zipfile.ZipFile(old_out).namelist())
     plan = plan_import(old_out, [make_rule()], expand_for(new))
     assert plan.problems == []
@@ -151,7 +152,7 @@ def test_old_package_with_lock_entry_still_imports(env):
 
 def test_verify_failure_after_export_leaves_no_temp_and_explains(env, monkeypatch):
     tmp_path, old, _, expand_for = env
-    monkeypatch.setattr(package, "verify_package", lambda p: (None, ["manifest 에 없는 엔트리: data/x"]))
+    patch_pkg(monkeypatch, "verify_package", lambda p: (None, ["manifest 에 없는 엔트리: data/x"]))
     out = tmp_path / "p.zip"
     with pytest.raises(package.PackageError) as ei:
         export_package([make_rule()], out, [], None, expand=expand_for(old))
@@ -163,12 +164,12 @@ def test_verify_failure_after_export_leaves_no_temp_and_explains(env, monkeypatc
 def test_large_file_is_staged_on_disk_not_memory(env, monkeypatch):
     tmp_path, old, _, expand_for = env
     seen = {}
-    real = package.tempfile.SpooledTemporaryFile
+    real = tempfile.SpooledTemporaryFile
 
     def spy(*a, **k):
         seen.update(k)
         return real(*a, **k)
-    monkeypatch.setattr(package.tempfile, "SpooledTemporaryFile", spy)
+    monkeypatch.setattr(tempfile, "SpooledTemporaryFile", spy)
     export_package([make_rule()], tmp_path / "p.zip", [], None, expand=expand_for(old))
     assert seen["max_size"] == package.SPOOL_MAX and Path(seen["dir"]).parent == tmp_path
 

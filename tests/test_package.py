@@ -1,3 +1,4 @@
+from conftest import patch_pkg
 import json
 import zipfile
 from pathlib import Path
@@ -109,7 +110,7 @@ def test_export_records_read_failure(env, monkeypatch):
         if src.name == "a.cfg":
             raise package.SourceUnreadable(src, PermissionError("locked"))
         return real(zf, arc, src, stage_dir)
-    monkeypatch.setattr(package, "_write_entry", flaky)
+    patch_pkg(monkeypatch, "_write_entry", flaky)
     m = export_package([make_rule()], tmp_path / "p.zip", [], None, expand=expand_for(old))
     assert len(m["failed"]) == 1 and "읽지 못함" in m["failed"][0]["error"]
     assert len(m["files"]) == 2

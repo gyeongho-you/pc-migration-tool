@@ -1,5 +1,7 @@
 """stage24: 읽지 못해 제외된 파일만 다시 담기(package.retry_failed_export / api.run_export_retry / CLI --retry-failed).
 모두 tmp_path 의 가짜 환경만 쓰고, 잠긴 파일은 msvcrt.locking 으로 흉내 낸다(Windows 전용 시험은 winonly)."""
+import time
+from conftest import patch_pkg
 import hashlib
 import json
 import os
@@ -279,11 +281,11 @@ def test_failure_midway_leaves_original_untouched(env, monkeypatch, where):
     h = sha(env.out)
     kw = {}
     if where == "write_entry":
-        monkeypatch.setattr(package, "_write_entry", lambda *a, **k: (_ for _ in ()).throw(OSError(28, "No space left")))
+        patch_pkg(monkeypatch, "_write_entry", lambda *a, **k: (_ for _ in ()).throw(OSError(28, "No space left")))
         exc = OSError
     elif where == "verify":
         real = package.verify_package
-        monkeypatch.setattr(package, "verify_package",
+        patch_pkg(monkeypatch, "verify_package",
                             lambda p: real(p) if Path(p) == env.out else (None, ["일부러 만든 문제"]))
         exc = PackageError
     elif where == "second_replace":
@@ -293,7 +295,7 @@ def test_failure_midway_leaves_original_untouched(env, monkeypatch, where):
             if str(a).endswith(".retry"):
                 raise OSError(5, "denied")
             return real(a, b)
-        monkeypatch.setattr(package.os, "replace", rep)
+        monkeypatch.setattr(os, "replace", rep)
         exc = OSError
     else:
         from pcmigrate.cancel import Cancelled
@@ -302,7 +304,7 @@ def test_failure_midway_leaves_original_untouched(env, monkeypatch, where):
             if info.phase == "pack":
                 raise Cancelled()
         kw["progress_info"] = cancel
-        monkeypatch.setattr(package.time, "monotonic", lambda: 10 ** 9)  # 첫 진행 보고부터 바로 나가게
+        monkeypatch.setattr(time, "monotonic", lambda: 10 ** 9)  # 첫 진행 보고부터 바로 나가게
         exc = Cancelled
     with pytest.raises(exc):
         do_retry(env, **kw)
@@ -370,7 +372,7 @@ def raw_records(path):
 @winonly
 def test_zip64_entries_are_copied_raw(env, monkeypatch):
     """force_zip64 경로(로컬 헤더에 zip64 extra, ZIP64_THRESHOLD 를 낮춰 흉내)의 엔트리도 바이트 그대로 옮겨진다."""
-    monkeypatch.setattr(package, "ZIP64_THRESHOLD", 100)
+    patch_pkg(monkeypatch, "ZIP64_THRESHOLD", 100)
     with ByteLock(env.sup / "f1.cfg", 2):
         do_export(env)
     before = {k: v for k, v in raw_records(env.out).items() if k != "manifest.json"}

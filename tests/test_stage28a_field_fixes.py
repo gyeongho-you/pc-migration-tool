@@ -1,5 +1,6 @@
 """stage28a: 현장 피드백(화면 제외). 민감 항목 없이 묶음 만들기, 속도/남은 시간 평활화, 모든 장기 작업의 중지와 강제 중단.
 가짜 환경만 쓴다(이 PC의 사용자 이름/설치 목록 없음)."""
+from conftest import patch_pkg
 import json
 import os
 import random
@@ -14,6 +15,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from pcmigrate import package_zip
 from pcmigrate import api as real_api
 from pcmigrate import cancel as cancel_mod
 from pcmigrate import detect, discover, package, transfer
@@ -375,19 +377,19 @@ def test_export_cancel_between_files_keeps_resumable_savepoint_and_cleans_lock(p
 
 def test_export_cancel_inside_big_file_stops_within_chunks(pk, monkeypatch):
     """큰 파일 하나를 읽는 중에도 청크마다 취소를 확인한다(파일이 끝날 때까지 기다리지 않는다)."""
-    monkeypatch.setattr(package, "CHUNK", 1024)
+    patch_pkg(monkeypatch, "CHUNK", 1024)
     big = pk.sup / "big.bin"
     big.write_bytes(os.urandom(2 * MB))
     reads = {"n": 0}
     tok = CancelToken()
-    real_checkpoint = package.checkpoint
+    real_checkpoint = package_zip.checkpoint
 
     def counting():
         reads["n"] += 1
         if reads["n"] == 5:
             tok.cancel()
         real_checkpoint()
-    monkeypatch.setattr(package, "checkpoint", counting)
+    patch_pkg(monkeypatch, "checkpoint", counting)
     with bind(tok), pytest.raises(Cancelled):
         export_package([make_rule()], pk.out, [], None, expand=pk.expand, now=NOW)
     assert reads["n"] < 40  # 2MB/1KB = 2048 청크를 모두 읽지 않고 곧바로 멈춘다

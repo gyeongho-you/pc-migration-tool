@@ -1,4 +1,5 @@
 """stage18: 내보내기 저장점 이어받기(.part/.part.journal)와 압축 생략(--compress). 모두 tmp_path 의 가짜 환경만 쓴다."""
+from conftest import patch_pkg
 import hashlib
 import json
 import os
@@ -63,8 +64,8 @@ def crash_after(monkeypatch, n, partial=False, power_loss=True):
                 w.write(b"half-written-entry" * 100)
             raise OSError("simulated power loss")
         return real(zf, arc, src, stage_dir)
-    monkeypatch.setattr(package, "_write_entry", boom)
-    monkeypatch.setattr(package, "_GRACEFUL_SAVEPOINT", not power_loss)
+    patch_pkg(monkeypatch, "_write_entry", boom)
+    patch_pkg(monkeypatch, "_GRACEFUL_SAVEPOINT", not power_loss)
     return count
 
 
@@ -244,7 +245,7 @@ def test_unreadable_file_is_retried_on_next_attempt(env, monkeypatch):
         if state["locked"] and state["n"] == 5:
             raise OSError("crash")
         return real(zf, arc, src, stage_dir)
-    monkeypatch.setattr(package, "_write_entry", flaky)
+    patch_pkg(monkeypatch, "_write_entry", flaky)
     with pytest.raises(OSError):
         run(env)
     jr = part_paths(env.out)[1]
@@ -465,7 +466,7 @@ def test_api_run_export_resume_flag_and_compress_validation(env, monkeypatch):
     monkeypatch.setenv("ROAM", str(env.old))
     from pcmigrate import envpaths
     monkeypatch.setattr(envpaths, "expand_env", lambda s: s.replace("%ROAM%", str(env.old)))
-    monkeypatch.setattr(package, "expand_env", envpaths.expand_env)
+    patch_pkg(monkeypatch, "expand_env", envpaths.expand_env)
     seen = {}
 
     def fake_export(matched, out, registry, winget_text, **kw):

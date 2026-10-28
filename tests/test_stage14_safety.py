@@ -1,5 +1,5 @@
 """v0.1.1 수정 2(오류 로그/최상위 오류 처리/입력 검증)와 수정 4(안전 가드 3종)."""
-from conftest import make_rules_dir
+from conftest import make_rules_dir, patch_pkg
 import json
 import os
 import subprocess
@@ -293,7 +293,7 @@ def test_cli_import_corrupt_manifest_friendly(tmp_path, capsys, name):
 
 def test_plan_import_wraps_unexpected_structure_in_package_error(tmp_path, monkeypatch):
     from pcmigrate import package
-    monkeypatch.setattr(package, "_plan_import", lambda *a, **k: (_ for _ in ()).throw(KeyError("rule")))
+    patch_pkg(monkeypatch, "_plan_import", lambda *a, **k: (_ for _ in ()).throw(KeyError("rule")))
     with pytest.raises(PackageError, match="패키지 검증 실패"):
         plan_import(tmp_path / "x.zip", [])
 

@@ -1,4 +1,5 @@
 """20a-2/3: 내보내기 임시(stage) 폴더 위치 옵션(--stage-dir), .gitconfig 복원 경고. 모든 시험은 tmp 가짜 환경에서만 한다."""
+from conftest import patch_pkg, set_pkg
 import json
 import os
 import time
@@ -53,7 +54,7 @@ def spy_stage(monkeypatch):
     def spy(zf, arc, src, stage=None):
         seen.append((stage, os.path.isdir(stage) if stage else None))
         return real(zf, arc, src, stage)
-    monkeypatch.setattr(package, "_write_entry", spy)
+    patch_pkg(monkeypatch, "_write_entry", spy)
     return seen
 
 
@@ -111,18 +112,18 @@ def test_stage_dir_cleaned_after_failure_and_stale_ones_swept(env):
     dead.mkdir()
     (dead / "junk").write_bytes(b"x" * 10)
     real = package._write_entry
-    package._write_entry = lambda *a, **k: (_ for _ in ()).throw(OSError("boom"))
+    set_pkg("_write_entry", lambda *a, **k: (_ for _ in ()).throw(OSError("boom")))
     try:
         with pytest.raises(OSError):
             export(env, stage_dir=local)
     finally:
-        package._write_entry = real
+        set_pkg("_write_entry", real)
     assert stage_dirs(local) == []  # 실패해도 이번 임시 폴더와 옛(주인 없는) 임시 폴더가 모두 없다
     assert not env.out.exists()
 
 
 def test_stage_space_checked_on_the_stage_drive(env, monkeypatch):
-    monkeypatch.setattr(package, "SPOOL_MAX", 50)  # big.dat(200) 은 임시 폴더를 쓰는 큰 파일
+    patch_pkg(monkeypatch, "SPOOL_MAX", 50)  # big.dat(200) 은 임시 폴더를 쓰는 큰 파일
     monkeypatch.setattr(fs, "volume_root", lambda p: "S:\\" if "stagehere" in str(p) else "O:\\")
     info = lambda p: fs.DestInfo(str(p), "fixed", "NTFS", 100 if "stagehere" in str(p) else 10 ** 12, 1, "")  # noqa: E731
     with pytest.raises(PackageError, match="임시 폴더\\(--stage-dir\\)가 있는 드라이브의 여유 공간"):
@@ -134,7 +135,7 @@ def test_stage_space_checked_on_the_stage_drive(env, monkeypatch):
 
 
 def test_stage_on_output_drive_still_counts_biggest_file_there(env, monkeypatch):
-    monkeypatch.setattr(package, "SPOOL_MAX", 50)
+    patch_pkg(monkeypatch, "SPOOL_MAX", 50)
     monkeypatch.setattr(fs, "volume_root", lambda p: "O:\\")  # 같은 드라이브
     seen = []
 
@@ -148,7 +149,7 @@ def test_stage_on_output_drive_still_counts_biggest_file_there(env, monkeypatch)
 def test_api_run_export_passes_stage_dir_only_when_given(env, monkeypatch):
     from pcmigrate import envpaths
     monkeypatch.setattr(envpaths, "expand_env", lambda s: s.replace("%ROAM%", str(env.old)))
-    monkeypatch.setattr(package, "expand_env", envpaths.expand_env)
+    patch_pkg(monkeypatch, "expand_env", envpaths.expand_env)
     seen = {}
 
     def fake_export(matched, out, registry, winget_text, **kw):

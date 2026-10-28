@@ -1,5 +1,5 @@
 """v0.1.1 수정 3: 현황 카드(상태 계산은 tkinter 없이, 화면은 스모크), 전체 단계 표시, 엔진 이벤트의 새 필드."""
-from conftest import make_rules_dir
+from conftest import make_rules_dir, patch_pkg
 import json
 import os
 from pathlib import Path
@@ -321,7 +321,7 @@ def test_export_unreadable_goes_to_unreadable_counter_and_problem_path(pkg_env, 
         if src.name == "a.cfg":
             raise package.SourceUnreadable(src, PermissionError(33, "lock"), during_read=True)
         return real(zf, arc, src, stage_dir)
-    monkeypatch.setattr(package, "_write_entry", flaky)
+    patch_pkg(monkeypatch, "_write_entry", flaky)
     events = []
     package.export_package([make_rule()], tmp_path / "p.zip", [], None, expand=expand_for(old), progress_info=events.append)
     assert events[-1].unreadable == 1 and events[-1].ok == 2

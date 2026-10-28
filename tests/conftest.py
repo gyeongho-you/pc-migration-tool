@@ -48,3 +48,31 @@ def _isolated_net_state(tmp_path_factory, monkeypatch):
     """이더넷 주소 복구 기록(%LOCALAPPDATA%/pcmigrate/net-restore.json)을 실제 위치가 아닌 임시 폴더로 돌린다(stage39). 시험은 가짜 runner 만 쓴다."""
     from pcmigrate import net_setup
     monkeypatch.setattr(net_setup, "STATE_DIR", str(tmp_path_factory.mktemp("net-state")))
+
+
+def patch_pkg(monkeypatch, name, value, raising=True):
+    """pcmigrate.package 가 package_*.py 모듈로 나뉜 뒤에도 '패키지 전체에서 이 이름을 바꾼다'는
+    기존 monkeypatch 동작을 유지한다: 그 이름을 가진 모든 package_* 모듈(과 파사드)에 같이 건다."""
+    import importlib
+    import pkgutil
+    import pcmigrate
+    hit = False
+    for mi in pkgutil.iter_modules(pcmigrate.__path__):
+        if mi.name == "package" or mi.name.startswith("package_"):
+            mod = importlib.import_module(f"pcmigrate.{mi.name}")
+            if hasattr(mod, name) or not raising:
+                monkeypatch.setattr(mod, name, value, raising=False)
+                hit = True
+    assert hit, name
+
+
+def set_pkg(name, value):
+    """patch_pkg 의 monkeypatch 없는 판(직접 대입/되돌리기용): package_* 모듈 전체에 같은 값을 건다."""
+    import importlib
+    import pkgutil
+    import pcmigrate
+    for mi in pkgutil.iter_modules(pcmigrate.__path__):
+        if mi.name == "package" or mi.name.startswith("package_"):
+            mod = importlib.import_module(f"pcmigrate.{mi.name}")
+            if hasattr(mod, name):
+                setattr(mod, name, value)

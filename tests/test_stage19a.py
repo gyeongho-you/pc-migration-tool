@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from conftest import make_rules_dir
+from conftest import make_rules_dir, patch_pkg
 from pcmigrate import api, cli, errorlog, fs, package, rules as rules_mod, transfer as tr
 from pcmigrate.copier import Report
 from pcmigrate.detect import Program, display_with_version
@@ -215,7 +215,7 @@ def test_stale_lock_is_taken_over_and_released(env):
 
 
 def test_lock_released_when_export_fails(env, monkeypatch):
-    monkeypatch.setattr(package, "_write_entry", lambda *a, **k: (_ for _ in ()).throw(OSError("boom")))
+    patch_pkg(monkeypatch, "_write_entry", lambda *a, **k: (_ for _ in ()).throw(OSError("boom")))
     with pytest.raises(OSError):
         export(env)
     assert not env.out.with_name(env.out.name + ".part.lock").exists()
@@ -239,7 +239,7 @@ def test_stale_stage_folders_are_cleaned_but_live_ones_kept(env):
 def test_stage_folder_name_carries_pid(env, monkeypatch):
     seen = []
     real = package._write_entry
-    monkeypatch.setattr(package, "_write_entry", lambda zf, arc, src, stage=None: (seen.append(stage), real(zf, arc, src, stage))[1])
+    patch_pkg(monkeypatch, "_write_entry", lambda zf, arc, src, stage=None: (seen.append(stage), real(zf, arc, src, stage))[1])
     export(env)
     assert seen and os.path.basename(seen[0]).startswith(f"{package.STAGE_PREFIX}{os.getpid()}-")
 
@@ -282,14 +282,14 @@ def test_failed_final_check_keeps_part_as_failed_with_retry_hint(env, monkeypatc
     def fake(path):
         calls.append(str(path))
         return (None, ["엔트리 손상"]) if str(path).endswith(".part") else real(path)
-    monkeypatch.setattr(package, "verify_package", fake)
+    patch_pkg(monkeypatch, "verify_package", fake)
     with pytest.raises(PackageError) as ei:
         export(env)
     failed = env.out.with_name(env.out.name + ".part.failed")
     assert failed.is_file() and not env.out.exists()
     assert ".part.failed" in str(ei.value) and "다시 내보내면 처음부터" in str(ei.value)
     assert not env.out.with_name(env.out.name + ".part").exists()
-    monkeypatch.setattr(package, "verify_package", real)
+    patch_pkg(monkeypatch, "verify_package", real)
     export(env)
     assert env.out.exists() and not failed.exists()  # 성공하면 보존해 둔 임시 파일을 치운다
 
@@ -322,7 +322,7 @@ def test_unreadable_folder_is_recorded_as_failed(env, monkeypatch):
             err.filename = str(top) + "\\sub"
             onerror(err)
         return real_walk(top, topdown, onerror, followlinks)
-    monkeypatch.setattr(package.os, "walk", walk)
+    monkeypatch.setattr(os, "walk", walk)
     m = export(env)
     assert any(f.get("reason") == "permission" and "폴더를 읽지 못함" in f["error"] for f in m["failed"])
 

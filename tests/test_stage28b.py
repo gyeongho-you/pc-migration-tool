@@ -1,5 +1,6 @@
 """stage28b: 허용 방식(설정 파일만) 내보내기, 프로그램별 복원 선택(only/skip), 프로그램별 되돌리기(undo-import).
 모두 tmp_path 의 가짜 환경만 쓴다(이 PC 의 실제 사용자/프로그램 정보는 쓰지 않는다)."""
+from conftest import patch_pkg, set_pkg
 import hashlib
 import json
 import os
@@ -212,21 +213,21 @@ def test_resume_with_other_mode_restarts(pcs, monkeypatch):
         if calls["n"] == 3:
             raise KeyboardInterrupt
         return orig(zf, arc, src, stage)
-    monkeypatch.setattr(package, "_write_entry", boom)
+    patch_pkg(monkeypatch, "_write_entry", boom)
     with pytest.raises(KeyboardInterrupt):
         export_package([], pcs.out, [], None, expand=pcs.old.expand, extras=[ex(pcs.old)], now=NOW,
                        savepoint_bytes=1)
     assert part.exists()
-    monkeypatch.setattr(package, "_write_entry", orig)
+    patch_pkg(monkeypatch, "_write_entry", orig)
     m = export_package([], pcs.out, [], None, expand=pcs.old.expand, extras=[ex(pcs.old)], now=NOW, extra_mode="all")
     assert not m["resume"]["resumed"] and "허용 방식" in m["resume"]["reason"]
     # 같은 모드로 이어받기는 그대로 된다
     pcs.out.unlink()
-    monkeypatch.setattr(package, "_write_entry", boom)
+    patch_pkg(monkeypatch, "_write_entry", boom)
     calls["n"] = 0
     with pytest.raises(KeyboardInterrupt):
         export_package([], pcs.out, [], None, expand=pcs.old.expand, extras=[ex(pcs.old)], now=NOW, savepoint_bytes=1)
-    monkeypatch.setattr(package, "_write_entry", orig)
+    patch_pkg(monkeypatch, "_write_entry", orig)
     m2 = export_package([], pcs.out, [], None, expand=pcs.old.expand, extras=[ex(pcs.old)], now=NOW)
     assert m2["resume"]["resumed"] and verify_package(pcs.out)[1] == []
 
@@ -271,12 +272,12 @@ def test_retry_old_package_without_mode_uses_all(pcs):
     def spy(*a, **kw):
         got.update(kw)
         return orig(*a, **kw)
-    package.collect_extra_items = spy
+    set_pkg("collect_extra_items", spy)
     try:
         # 읽지 못한 파일이 없으니 다시 담을 것이 없다: 바로 돌려준다(예외 없이)
         retry_failed_export(out, [], pcs.old.expand, now=NOW)
     finally:
-        package.collect_extra_items = orig
+        set_pkg("collect_extra_items", orig)
 
 
 # --------------------------------------------------------------------------- 1b. 설정 찾기 후보

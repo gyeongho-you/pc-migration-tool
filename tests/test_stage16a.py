@@ -1,4 +1,5 @@
 """16a단계: 복원/전송 안전성(리뷰 A-1/A-4/A-5/B-1~B-7/E-2/F-1/F-5/F-9). 모든 시험은 tmp 가짜 환경에서만 한다."""
+from conftest import patch_pkg
 import hashlib
 import json
 import os
@@ -435,14 +436,14 @@ def test_swapped_zip_never_replaces_destination(env, tmp_path):
 
 def test_oversized_manifest_rejected(env, tmp_path, monkeypatch):
     out, rules, new, expand_for = build(env)
-    monkeypatch.setattr(package, "MAX_MANIFEST_BYTES", 100)
+    patch_pkg(monkeypatch, "MAX_MANIFEST_BYTES", 100)
     manifest, problems = verify_package(out)
     assert manifest is None and any("너무 큽니다" in p for p in problems)
 
 
 def test_too_many_entries_rejected(env, tmp_path, monkeypatch):
     out, rules, new, expand_for = build(env)
-    monkeypatch.setattr(package, "MAX_ENTRIES", 2)
+    patch_pkg(monkeypatch, "MAX_ENTRIES", 2)
     assert any("엔트리가 너무 많" in p for p in verify_package(out)[1])
 
 
@@ -463,7 +464,7 @@ def test_entry_larger_than_declared_stops_early(tmp_path, monkeypatch):
         n, h = orig(zf, name, limit)
         read.append(n)
         return n, h
-    monkeypatch.setattr(package, "_hash_entry", spy)
+    patch_pkg(monkeypatch, "_hash_entry", spy)
     problems = verify_package(bad)[1]
     assert problems and max(read or [0]) <= 11
 
