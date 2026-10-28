@@ -27,7 +27,8 @@ from ..cancel import bind as bind_cancel
 from ..checklist import write_output
 from .. import coverage, fs
 from ..discover import fmt_size, items_from_selection
-from ..install_check import INSTALLED, import_command, newly_installed
+from ..install_check import INSTALLED, WINGET, import_command, newly_installed, safe_winget_ids, selected_commands
+from ..detect import valid_winget_id
 from ..install_dir import install_items_from_selection
 from ..manifest import DEFAULT_NAME as MANIFEST_NAME
 from ..manifest import ManifestError
@@ -1259,6 +1260,7 @@ class Controller(FilesMixin):
         s.install_package, s.install_command = "", ""
         s.install_skipped = False
         s.install_marks, s.install_new = set(), []
+        s.install_picks = set()
 
     def start_install_check(self) -> None:
         """묶음의 구 PC 프로그램과 이 PC의 설치 상태를 비교한다('다시 확인'도 같은 동작: 직전 결과와 비교해 새로 설치된 것을 센다)."""
@@ -1295,8 +1297,65 @@ class Controller(FilesMixin):
                 (it.new_version if it.status == INSTALLED else "") or it.old_version)  # 애매함/설치 안 됨은 구 PC 버전
             rows.append({"name": it.name, "status": it.status, "label": T.INST_LABELS[key], "version": version,
                          "reason": it.reason, "hint": it.hint, "markable": it.needs_action, "diff": it.version_diff,
-                         "mark": it.name in self.state.install_marks})
+                         "mark": it.name in self.state.install_marks,
+                         "pickable": self._pickable(it), "pick": self._pickable(it) and it.name in self.state.install_picks})
         return rows
+
+    # ------------------------------------------------------------------ 설치할 프로그램 고르기(선택한 것만 winget.json 으로)
+    @staticmethod
+    def _pickable(it) -> bool:
+        """고를 수 있는 줄: 'winget 으로 설치 가능' 판정이고 형식이 맞는 winget id 가 있는 항목(설치됨/버전 다름/불필요/수동은 아님)."""
+        return it.status == WINGET and valid_winget_id(it.winget_id)
+
+    def picked_items(self) -> list:
+        """지금 확인 결과에서 여전히 고를 수 있는 선택 항목(다시 확인 뒤 설치된 것은 자동으로 빠진다)."""
+        r = self.state.install_check
+        if r is None:
+            return []
+        return [it for it in r.items if self._pickable(it) and it.name in self.state.install_picks]
+
+    def install_pick_count(self) -> int:
+        return len(self.picked_items())
+
+    def toggle_install_pick(self, name: str) -> bool:
+        """설치할 프로그램 선택 켜기/끄기. 고를 수 없는 줄이면 아무것도 바꾸지 않고 False."""
+        r = self.state.install_check
+        it = next((i for i in r.items if i.name == name), None) if r is not None else None
+        if it is None or not self._pickable(it):
+            return False
+        self.state.install_picks.symmetric_difference_update({name})
+        self.emit("install_picks", name)
+        return name in self.state.install_picks
+
+    def prepare_selected_install(self) -> dict:
+        """선택한 프로그램만 담은 winget.json 을 폴더로 꺼내고(같은 이름 파일은 .bak 보존) 직접 실행할 명령을 만든다. 실행은 하지 않는다.
+
+        묶음의 목록 파일에 있는 항목만 파일에 담기고, 대표 앱 표로만 연결된 항목은 id 별 명령으로 안내한다."""
+        s = self.state
+        if not s.package:
+            raise GuardError(T.G_INSTALL_NEED_PACKAGE)
+        if s.install_check is None:
+            raise GuardError(T.G_INSTALL_NOT_YET)
+        if not s.install_picks:
+            raise GuardError(T.INST_PICK_NONE)
+        items = self.picked_items()
+        if not items:
+            raise GuardError(T.INST_PICK_NOTHING_LEFT)
+        in_file = safe_winget_ids([i.winget_id for i in items if i.in_import_file])
+        rest = safe_winget_ids([i.winget_id for i in items if not i.in_import_file])
+        cmds = selected_commands(None, [*in_file, *rest])
+        each = dict(zip(cmds["ids"], cmds["each"]))
+        target, bak, command = None, None, ""
+        if in_file:
+            folder = s.install_folder or self.default_install_folder()
+            target, bak = self.api.run_winget_extract(s.package, folder, **_supported(self.api.run_winget_extract, only_ids=in_file))
+            command = selected_commands(fs.plain_path_text(str(target)), in_file)["import"]
+        else:
+            command = "\n".join(each[i] for i in rest)
+        s.install_command = command
+        return {"command": command, "file": str(target) if target else "", "backup": str(bak) if bak else "", "count": len(items),
+                "ids": [*in_file, *rest], "each": [each[i] for i in in_file], "individual": [each[i] for i in rest],
+                "file_ids": in_file}
 
     def install_summary_text(self) -> str:
         r = self.state.install_check
