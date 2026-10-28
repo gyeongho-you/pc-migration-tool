@@ -113,7 +113,9 @@ def notify_pending() -> None:
     """아무 명령이나 실행할 때: 복구 기록이 남아 있으면 안내만 한다(자동으로 바꾸지 않는다). 어떤 오류도 명령을 막지 않는다."""
     try:
         pend = ns.pending_restore(ENV_FACTORY())
-    except Exception:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001
+        from . import errorlog
+        errorlog.record(e, "lan-setup 복구 기록 확인")
         return
     if pend:
         _err("[안내] " + pend["message"])

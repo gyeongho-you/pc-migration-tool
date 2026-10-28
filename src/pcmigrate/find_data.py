@@ -262,7 +262,9 @@ def rule_covered_paths(rules=None) -> list[str]:
         try:
             from .rules import default_rules_dir, load_rules
             rules = load_rules(default_rules_dir())
-        except Exception:  # noqa: BLE001 - 규칙 폴더가 없어도 찾기는 계속한다(규칙 제외만 못 함)
+        except Exception as e:  # noqa: BLE001 - 규칙 폴더가 없어도 찾기는 계속한다(규칙 제외만 못 함)
+            from . import errorlog
+            errorlog.record(e, "내 파일 찾기: 규칙 읽기")
             return []
     out: list[str] = []
     for rule in rules:

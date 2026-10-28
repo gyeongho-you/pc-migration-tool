@@ -1836,7 +1836,9 @@ def _plan_import_inner(path: Path, rules: list[Rule], expand: Expand, only: list
         if callable(programs):  # 신 PC 의 프로그램 목록은 설치 폴더 항목이 있을 때만 읽는다
             try:
                 programs = programs()
-            except Exception:  # 목록을 못 읽으면 프로그램 확인 없이 폴더 존재만 본다(폴더 존재/허용 확장자 확인은 그대로)
+            except Exception as e:  # 목록을 못 읽으면 프로그램 확인 없이 폴더 존재만 본다(폴더 존재/허용 확장자 확인은 그대로)
+                from . import errorlog
+                errorlog.record(e, "복원 미리보기: 설치 프로그램 목록 읽기")
                 programs = None
         items, view, progs, probs = install_dir.plan_install(
             manifest, install_files, expand, allow=allow_install_dir, programs=programs, write_check=write_check,

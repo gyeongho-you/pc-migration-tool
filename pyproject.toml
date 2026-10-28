@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,6 +7,8 @@ name = "pcmigrate"
 version = "0.3.1"
 description = "PC 이전 도우미: 구 PC의 업무용 환경을 새 PC로 안전하게 이전"
 requires-python = ">=3.10"
+license = "LicenseRef-Proprietary"
+license-files = ["LICENSE"]
 dependencies = []
 
 [project.optional-dependencies]

@@ -265,8 +265,8 @@ def _final_status(res: Any) -> tuple[dict | None, dict | None, str]:
                     T.CARD_SUMMARY_FILES.format(n=len(st)))
         if hasattr(res, "program_count"):
             return None, None, T.CARD_SUMMARY_PROGRAMS.format(n=res.program_count)
-    except Exception:  # noqa: BLE001 - 요약을 못 만들어도 작업 결과 처리에는 영향이 없어야 한다
-        pass
+    except Exception as e:  # noqa: BLE001 - 요약을 못 만들어도 작업 결과 처리에는 영향이 없어야 한다
+        errorlog.record(e, "GUI 요약")  # 삼키되 버그가 숨지 않게 로그에는 남긴다
     return None, None, T.CARD_SUMMARY_SIMPLE
 
 
@@ -540,7 +540,8 @@ class Controller(FilesMixin, NetMixin):
             return []
         try:
             return self.find_package_entries()
-        except Exception:  # noqa: BLE001 - 찾기 실패가 화면을 막지 않게(직접 고르면 된다)
+        except Exception as e:  # noqa: BLE001 - 찾기 실패가 화면을 막지 않게(직접 고르면 된다)
+            errorlog.record(e, "설정 묶음 자동 찾기")
             return []
 
     def find_packages(self, limit: int = 30) -> list[str]:

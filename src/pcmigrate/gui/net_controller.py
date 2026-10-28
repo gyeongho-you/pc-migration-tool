@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .. import errorlog
 from .. import net_setup as _ns
 from . import texts as T
 
@@ -39,7 +40,8 @@ class NetMixin:
         """프로그램이 중간에 꺼져 되돌리지 못한 변경이 있으면 요약 dict(없으면 None). 이번 실행에서 적용한 것은 제외."""
         try:
             pend = self._lan().pending_restore(self.net_env)
-        except Exception:  # noqa: BLE001 - 조회 실패가 화면을 막지 않게
+        except Exception as e:  # noqa: BLE001 - 조회 실패가 화면을 막지 않게
+            errorlog.record(e, "이더넷 복구 기록 조회")
             return None
         if pend and not pend.get("bad") and self.net.applied and self.net.applied.get("ip") == pend.get("ip"):
             return None
@@ -61,7 +63,8 @@ class NetMixin:
             st.message = "" if st.adapters else T.NET_NO_ADAPTER
         except _ns.NetSetupError as e:
             st.adapters, st.message = [], str(e)
-        except Exception:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001
+            errorlog.record(e, "이더넷 어댑터 조회")
             st.adapters, st.message = [], T.NET_NO_ADAPTER
         return list(st.adapters)
 

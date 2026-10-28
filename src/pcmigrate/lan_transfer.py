@@ -240,8 +240,9 @@ class Receiver:
         if self.on_event is not None:
             try:
                 self.on_event(ev)
-            except Exception:  # noqa: BLE001 - 화면 쪽 오류가 전송을 멈추면 안 된다
-                pass
+            except Exception as e:  # noqa: BLE001 - 화면 쪽 오류가 전송을 멈추면 안 된다
+                from . import errorlog
+                errorlog.record(e, "LAN 전송 이벤트 콜백")
 
     # ------------------------------------------------------------------ 접속 처리
     def _accept_loop(self) -> None:
