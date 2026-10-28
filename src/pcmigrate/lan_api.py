@@ -19,7 +19,8 @@ from .lan_transfer import Receiver, SendOptions, SendPlan, build_send_plan, run_
 from .progress import ProgressInfo
 
 __all__ = ["start_receiver", "discover_receivers", "resolve_target", "run_send", "run_diagnose", "SendOptions", "Receiver", "LanError",
-           "default_receive_dir", "local_addresses", "NO_DISCOVERY_HELP", "build_send_plan"]
+           "default_receive_dir", "local_addresses", "NO_DISCOVERY_HELP", "build_send_plan",
+           "list_ip_adapters", "plan_ip_setup", "apply_ip_setup", "restore_ip_setup", "pending_restore", "NetSetupError"]
 
 AUTO_WORDS = ("자동", "auto")
 
@@ -69,3 +70,33 @@ def run_send(target: str, code: str, selection=None, sources: list[str] | None =
 
 def run_diagnose(target: str, code: str | None = None, **kw) -> Diagnosis:
     return diagnose(target, code, **kw)
+
+
+# --------------------------------------------------------------------------- stage39: 랜선 직결용 이더넷 주소 임시 맞추기(net_setup 의 얇은 창구)
+# env 는 시험에서 가짜 runner 가 든 net_setup.NetEnv 를 넣는 자리(None 이면 실제 PC).
+from . import net_setup as _ns  # noqa: E402
+from .net_setup import NetSetupError  # noqa: E402,F401
+
+
+def list_ip_adapters(env=None) -> list:
+    """직결 후보 어댑터 목록(읽기 전용)."""
+    return _ns.list_adapters(env)
+
+
+def plan_ip_setup(role: str, adapter: str | None = None, peer: str | None = None, *, allow_internet: bool = False, env=None):
+    """계획만 만든다(읽기 전용). role: 'sender'(.1) / 'receiver'(.2). peer: 받는 쪽 주소(있으면 그 대역에 맞춘다)."""
+    return _ns.plan_ip_setup(role, adapter, peer, allow_internet=allow_internet, env=env)
+
+
+def apply_ip_setup(plan, confirm_fn: Callable[[str], bool], env=None) -> dict:
+    """confirm_fn(계획 설명) 이 True 일 때만 원래 설정을 저장하고 적용한다. 실패하면 롤백한다."""
+    return _ns.apply_ip_setup(plan, confirm_fn, env)
+
+
+def restore_ip_setup(env=None) -> dict:
+    return _ns.restore_ip_setup(env)
+
+
+def pending_restore(env=None) -> dict | None:
+    """프로그램이 중간에 꺼져 되돌리지 못한 변경이 있으면 요약 dict, 없으면 None."""
+    return _ns.pending_restore(env)

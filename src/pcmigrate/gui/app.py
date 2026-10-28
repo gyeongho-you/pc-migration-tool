@@ -260,6 +260,15 @@ class App(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self._close)
         self.show(S.START)
         self.after(100, self._tick)
+        self.after(1200, self._offer_net_restore)  # stage39: 이전에 바꾼 이더넷 설정이 남아 있으면 되돌리기를 제안한다
+
+    def _offer_net_restore(self) -> None:
+        try:
+            text = self.c.net_pending_text()
+            if text and messagebox.askyesno(T.NET_RESTORE_ASK_TITLE, text + chr(10) * 2 + T.NET_RESTORE_ASK, parent=self):
+                self.c.net_restore()
+        except Exception:  # noqa: BLE001 - 안내 실패가 프로그램을 막지 않게(화면의 '지금 되돌리기'로도 할 수 있다)
+            pass
 
     # ------------------------------------------------------------------ 구성
     def _measure_scale(self) -> float:

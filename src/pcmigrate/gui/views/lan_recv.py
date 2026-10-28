@@ -14,6 +14,7 @@ from .. import texts as T
 from ...progress import fmt_bytes, fmt_duration
 from .common import (FoldLabel, FoldTLabel, DANGER_FG, INFO_BG, INFO_BORDER, INFO_FG, MUTED_FG, OK_BG, OK_FG, SUB_FONT, TITLE_FONT, WARN_BG, WARN_FG, ActionButton,
                      BaseView, ScrollBody, autowrap, bind_alt, clean_path, open_location)
+from .net_section import NetSection
 
 POLL_MS = 250
 
@@ -81,7 +82,10 @@ class ReceiveView(BaseView):
         self.warn = FoldLabel(body, text="", anchor="w", justify="left", bg=WARN_BG, fg=WARN_FG, padx=10, pady=6)
         self.warn.pack(fill="x", pady=(4, 2))
         autowrap(self.warn, 40)
-
+        # ---- 이 PC 이더넷 주소 자동 맞추기(stage39, 접이식)
+        self.net = NetSection(body, self.c, "receiver", self)
+        self.net.pack(fill="x", pady=(6, 2))
+        self._net_job = None
 
         # ---- 결과
         self.result = FoldLabel(self.top, text="", anchor="w", justify="left", padx=10, pady=6)
@@ -95,13 +99,14 @@ class ReceiveView(BaseView):
 
     # ------------------------------------------------------------------ 표시
     def on_show(self) -> None:
+        self.net.refresh()
         self._render()
         self._schedule()
         self.scroll.scroll_to_top()
         (self.stop_btn if self.c.lan_receive_active() else self.start_btn).focus_set()
 
     def on_event(self, kind, payload) -> None:
-        if kind in ("lan_rx", "files_changed"):
+        if kind in ("lan_rx", "files_changed", "net_changed", "busy"):
             self._render()
 
     def _schedule(self) -> None:
@@ -127,6 +132,9 @@ class ReceiveView(BaseView):
         else:
             self.code_label.configure(text=T.RX_CODE_NONE, fg=MUTED_FG)
         lines = [self._addr_line(a) for a in f.rx_addresses]
+        applied = c.net_applied()
+        if applied and applied["ip"] not in f.rx_addresses:  # 자동으로 맞춘 이 PC 주소도 보인다(구 PC 에서 이 주소로 연결)
+            lines.append(T.NET_ADDR_LINE.format(ip=applied["ip"]))
         self.addr_label.configure(text="\n".join(lines) if lines else T.RX_ADDR_NONE)
         warns = [T.RX_WARN_PLAIN]
         if c.rx_public_warning():
@@ -143,6 +151,9 @@ class ReceiveView(BaseView):
         else:
             self.error.pack_forget()
         self._result()
+        self.net.refresh()
+        if f.rx_state in ("done", "stopped") and c.net_applied() and self._net_job is None:  # 받기가 끝나면 주소를 원래대로 되돌린다
+            self._net_job = self.after(100, self._net_auto_restore)
         for b in (self.stop_btn, self.start_btn):
             b.pack_forget()
         if active:
@@ -150,6 +161,10 @@ class ReceiveView(BaseView):
         else:
             self.start_btn.pack(side="right")
             self.start_btn.emphasize(True)
+
+    def _net_auto_restore(self) -> None:
+        self._net_job = None
+        self.c.net_restore_if_applied()
 
     def _addr_line(self, addr: str) -> str:
         kind = T.RX_ADDR_KINDS.get(self.c.files.rx_kinds.get(addr, ""), "")

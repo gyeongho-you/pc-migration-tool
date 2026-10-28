@@ -88,6 +88,7 @@ class FilesState:
     target: str = ""
     code: str = ""
     diag: str = ""
+    diag_code: str = ""  # 마지막 연결 진단의 결과 코드(subnet 이면 이더넷 주소 맞추기 안내)
     tx_report: dict | None = None
     tx_error: str = ""
     tx_error_code: str = ""

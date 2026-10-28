@@ -12,6 +12,7 @@ from .. import state as S
 from .. import texts as T
 from .common import (FoldLabel, FoldTLabel, DANGER_BG, DANGER_FG, MUTED_FG, OK_BG, OK_FG, SUB_FONT, WARN_BG, WARN_FG, ActionButton, BaseView, ScrollBody,
                      autowrap, bind_alt, clean_path)
+from .net_section import NetSection
 
 
 class SendView(BaseView):
@@ -67,6 +68,10 @@ class SendView(BaseView):
         self.code_entry.pack(anchor="w", pady=(2, 0))
         for var in (self.target_var, self.code_var):
             var.trace_add("write", lambda *a: self._remember())
+        # ---- 이 PC 이더넷 주소 자동 맞추기(stage39, 접이식)
+        self.net = NetSection(body, self.c, "sender", self)
+        self.net.pack(fill="x", pady=(10, 0))
+        self._net_job = None
 
         # ---- 진단 / 오류 / 결과
         self.diag = FoldTLabel(body, text="", justify="left")
@@ -86,6 +91,7 @@ class SendView(BaseView):
 
     # ------------------------------------------------------------------ 표시
     def on_show(self) -> None:
+        self.net.refresh()
         f = self.c.files
         self.target_var.set(f.target)
         self.code_var.set(f.code)
@@ -98,8 +104,18 @@ class SendView(BaseView):
             if self.target_var.get() != self.c.files.target and self.c.files.target:
                 self.target_var.set(self.c.files.target)
             self._render()
-        elif kind in ("lan_found", "lan_diag", "lan_send_done", "cancelled", "busy"):
+        elif kind in ("lan_found", "lan_diag", "lan_send_done", "cancelled", "busy", "net_changed"):
             self._render()
+            if kind == "cancelled" or (kind == "lan_send_done" and self.c.files.tx_report is not None):
+                self._net_restore_later()  # 전송이 끝나면(성공/취소) 맞춘 주소를 원래대로 되돌린다. 연결 실패면 다시 시도할 수 있게 둔다
+
+    def _net_restore_later(self) -> None:
+        if self.c.net_applied() and self._net_job is None:
+            self._net_job = self.after(100, self._net_auto_restore)
+
+    def _net_auto_restore(self) -> None:
+        self._net_job = None
+        self.c.net_restore_if_applied()
 
     def _remember(self) -> None:
         self.c.lan_set_target(self.target_var.get(), self.code_var.get())
@@ -116,6 +132,8 @@ class SendView(BaseView):
             idx = next(i for i, r in enumerate(f.found) if f.target == f"{r.ip}:{r.port}")
             self.found_var.set(labels[idx])
         self.found_msg.configure(text=f.found_message)
+        self.net.refresh()
+        self.net.show_subnet_hint(f.diag_code == "subnet" and not c.net_applied())
         self._show(self.diag, f.diag, after=self.code_entry)
         err_after = self.selection  # 결과/오류/안내는 맨 위(보낼 폴더 줄 바로 아래)에 보여 첫 화면에서 바로 보이게 한다
         if f.tx_error:

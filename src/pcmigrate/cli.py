@@ -1108,6 +1108,9 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as e:
         _err(str(e))
         return 2
+    if args.command not in ("lan-setup", "gui"):
+        from . import net_setup_cli  # stage39: 이더넷 주소 복구 기록이 남아 있으면 안내만 한다
+        net_setup_cli.notify_pending()
     try:
         return args.func(args)
     except KeyboardInterrupt:
