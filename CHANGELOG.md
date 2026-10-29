@@ -6,6 +6,7 @@
 - 독점 라이선스 파일(`LICENSE`) 추가, `pyproject.toml` 에 `license = "LicenseRef-Proprietary"` 지정(라이선스 표현식 사용을 위해 빌드 요구사항을 setuptools>=77 로 올림).
 - `CHANGELOG.md`, 설정 패키지 무결성 안내(`docs/package-integrity.md`), 예외 처리 감사표(`docs/exception-audit.md`) 추가.
 - 오류를 로그 없이 삼키던 8곳(묶음 요약, 설정 묶음 자동 찾기, 내 파일 찾기의 규칙 읽기, 복원 미리보기의 설치 프로그램 목록, 이더넷 어댑터/복구 기록 조회, 복구 기록 안내, LAN 전송 이벤트 콜백)이 이제 오류 로그에도 남깁니다. 화면 동작과 메시지는 그대로입니다.
+- 코드 구조 정리(동작·화면 변화 없음): `package.py`, `transfer.py`, `gui/controller.py` 를 책임별 모듈로 분해하고 기존 import 경로는 유지(원래 파일은 재export 파사드로 남음).
 
 ## v0.3.1 (2026-10-28)
 - 내용이 없는 결과·안내·요약 영역이 높이를 차지하지 않고 접힘. 작업 성공 시 현황 카드가 한 줄 요약으로 줄고 누르면 펼쳐짐(오류·중단은 크게 유지).

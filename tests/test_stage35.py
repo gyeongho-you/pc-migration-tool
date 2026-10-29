@@ -158,8 +158,8 @@ def test_find_packages_finds_new_shallow_and_old_deep_locations(env):  # noqa: F
 
 
 def test_find_packages_new_location_found_even_when_deep_scan_is_exhausted(env, monkeypatch):  # noqa: F811
-    from pcmigrate.gui import controller as C
-    monkeypatch.setattr(C, "RECEIVED_MAX_DIRS", 3)
+    from conftest import patch_ctl
+    patch_ctl(monkeypatch, "RECEIVED_MAX_DIRS", 3)  # stage43: 이 상수를 쓰는 controller_pkgfind 에도 걸리게
     recv = env.desk / "PC이전_받은파일_20260101-000000"
     for i in range(10):
         (recv / f"d{i}").mkdir(parents=True)

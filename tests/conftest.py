@@ -85,3 +85,19 @@ def set_pkg(name, value):
     for mod in _split_modules("package"):
         if hasattr(mod, name):
             setattr(mod, name, value)
+
+
+def patch_ctl(monkeypatch, name, value, raising=True):
+    """patch_pkg 의 gui.controller 판(stage43): pcmigrate.gui.controller 가 controller_*.py 로 나뉜 뒤에도
+    controller.X 를 바꾸면 그 이름을 가진 모든 controller_* 모듈(과 파사드)에 같이 건다."""
+    import importlib
+    import pkgutil
+    import pcmigrate.gui
+    hit = False
+    for mi in pkgutil.iter_modules(pcmigrate.gui.__path__):
+        if mi.name == "controller" or mi.name.startswith("controller_"):
+            mod = importlib.import_module(f"pcmigrate.gui.{mi.name}")
+            if hasattr(mod, name) or not raising:
+                monkeypatch.setattr(mod, name, value, raising=False)
+                hit = True
+    assert hit, name
