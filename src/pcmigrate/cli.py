@@ -28,7 +28,7 @@ from .discover import summarize
 from .package import export_package, plan_import, retry_failed_export
 from .rules import default_rules_dir
 from .transfer import TransferError, transfer
-from . import data_api, find_data as fd, multi_transfer
+from . import data_api, find_data as fd, multi_transfer, place_original
 
 
 def _deps() -> Deps:
@@ -860,6 +860,60 @@ def _cmd_winget_extract(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_place(args: argparse.Namespace) -> int:
+    """받기 폴더 -> 원래 위치 배치. 어떤 경우(성공/부분/실패/취소/중단/예외)에도 요약과 리포트(--report)를 남긴다."""
+    from .cancel import Cancelled
+
+    def warn(msg: str) -> None:
+        _err(f"[경고] {msg}")
+
+    if _unexpanded(recv=args.recv, report=args.report):
+        return 1
+    try:
+        maps = place_original.parse_maps(args.map)
+        check_outputs_outside(args.recv, report=args.report)
+    except ValueError as e:
+        _err(str(e))
+        return 2
+    except ApiError as e:
+        return _fail(e)
+    if args.yes and not args.keep:
+        _err("[주의] 받기 폴더의 파일을 원래 위치로 이동하거나(같은 드라이브), 복사·검증한 뒤 받기 폴더에서 지웁니다(되돌릴 수 없음). "
+             "받기 폴더가 유일한 사본이면 Ctrl+C 로 멈추고 --keep 으로 다시 실행하세요.")
+    rep = exc = None
+    try:
+        rep = place_original.place(args.recv, apply=args.yes, maps=maps, keep=args.keep, no_overwrite=args.no_overwrite,
+                                   include_unverified=args.include_unverified, progress_info=_cli_info_progress(), warn=warn)
+    except (Cancelled, KeyboardInterrupt, TransferError, Exception) as e:  # noqa: BLE001 - 보고서를 남긴 뒤 알린다
+        exc = e
+        rep = getattr(e, "report", None)
+    if rep is None:
+        if isinstance(exc, TransferError):
+            _err(f"배치 실패: {exc}")
+            return 1
+        raise exc  # type: ignore[misc]  # main 이 오류 로그에 남기고 안내한다
+    rc = 0
+    if args.report:
+        try:
+            rep.write(Path(args.report))
+        except OSError as e:
+            _write_failed(args.report, e)
+            rc = 1
+    if args.json:
+        _json_out(rep.to_dict())
+    else:
+        _print_lines(place_original.summary_lines(rep))
+    if exc is not None:
+        if isinstance(exc, (Cancelled, KeyboardInterrupt)):
+            _err("중단했습니다. 지금까지의 결과는 위 요약/리포트에 있습니다. 같은 명령을 다시 실행하면 이어서 합니다.")
+            return 130
+        _err(f"배치가 중간에 멈췄습니다: {rep.meta.get('error', exc)}",
+             "지금까지의 결과는 위 요약/리포트에 있습니다. 원인을 해결하고 같은 명령을 다시 실행하면 이어서 합니다."
+             + (f" (오류 로그: {rep.meta['error_log']})" if rep.meta.get("error_log") else ""))
+        return 1
+    return 1 if (rep.failed_count or rc) else 0
+
+
 def _cmd_gui(args: argparse.Namespace) -> int:
     try:
         from .gui.app import main as gui_main
@@ -1056,6 +1110,17 @@ def build_parser() -> argparse.ArgumentParser:
     fdp.add_argument("--output-selection", type=_path_arg, metavar="파일",
                      help="선택 파일(JSON)을 저장. 모든 폴더가 include:false 로 시작하므로 옮길 것만 true 로 바꾼 뒤 transfer --from-selection 에 사용")
     fdp.set_defaults(func=_cmd_find_data)
+
+    pl = sub.add_parser("place", help="받기 폴더(모드 B 다중 원본 전송 결과)를 원래 위치(같은 드라이브·같은 경로)로 놓는다(기본은 미리보기, --yes 로 실제 적용)")
+    pl.add_argument("recv", type=_path_arg, help="받기 폴더(.pcmigrate-multi.json 저널이 있거나 <드라이브 문자>\\... 구조)")
+    pl.add_argument("--yes", action="store_true", help="미리보기 확인 후 실제로 놓음(같은 볼륨은 이동, 다른 볼륨은 복사·검증 후 받기 폴더에서 삭제)")
+    pl.add_argument("--keep", action="store_true", help="복사만 하고 받기 폴더는 이동/삭제하지 않음(받기 폴더가 유일한 사본일 때의 안전 모드)")
+    pl.add_argument("--map", action="append", metavar="D=E", help="드라이브 매핑(여러 번 가능): 받기 폴더의 D 를 이 PC 의 E 드라이브에 놓음")
+    pl.add_argument("--no-overwrite", action="store_true", help="대상에 다른 내용의 파일이 있으면 덮어쓰지 않고 건너뜀(기본은 .bak 으로 보관하고 덮어씀)")
+    pl.add_argument("--include-unverified", action="store_true", help="저널 상태가 done 이 아닌(받기가 끝나지 않았거나 검증 전인) 폴더도 놓음")
+    pl.add_argument("--report", type=_path_arg, help="결과 리포트(JSON) 저장 경로(받기 폴더 밖)")
+    pl.add_argument("--json", action="store_true", help="사람이 읽는 요약 대신 JSON 으로 출력")
+    pl.set_defaults(func=_cmd_place)
 
     j = sub.add_parser("join", help="--split-large 로 나눠 저장된 조각(.pcm001 ...)을 원래 파일로 합친다(조각은 읽기만 함)")
     j.add_argument("src", type=_path_arg, help="조각이 있는 폴더(하위 폴더 포함) 또는 첫 조각 파일(.pcm001)")
