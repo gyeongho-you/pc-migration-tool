@@ -78,6 +78,19 @@ def test_classify_table_samples():
     assert not (set(fd.DESIGN_EXT) & set(fd.PHOTO_EXT))  # 한 확장자는 한 분류
 
 
+def test_classify_stage45_new_extensions():
+    for n in ("a.STEP", "a.stp", "a.iges", "a.igs", "a.sat", "s.las", "s.LAZ", "s.e57", "m.ply", "t.osgb", "g.kml", "g.kmz", "g.shp"):
+        assert fd.classify_name(n)[0] == "design", n
+    for n in ("a.svg", "a.eps", "o.geotiff"):
+        assert fd.classify_name(n)[0] == "photo", n
+    assert fd.classify_name("s.las") == ("design", "A") and fd.classify_name("a.svg") == ("photo", "C")
+    # 보류한 확장자는 그대로 미분류(작으면 None), .obj 는 큰 기타 제외 목록 유지
+    for n in ("a.xyz", "a.pts", "a.tfw", "a.dbf"):
+        assert fd.classify_name(n, 10) is None, n
+    assert ".obj" in fd.OTHER_EXCLUDED_EXT and fd.classify_name("a.obj", fd.LARGE_OTHER_BYTES) is None
+    assert fd.classify_name("setup.exe", fd.LARGE_OTHER_BYTES) is None and fd.classify_name("a.tmp", fd.LARGE_OTHER_BYTES) is None
+
+
 def test_find_groups_projects_and_excludes_system(tmp_path):
     d = make_pc(tmp_path)
     before = snapshot(d)

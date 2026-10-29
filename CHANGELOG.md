@@ -2,9 +2,10 @@
 
 형식은 최신순입니다. 버전은 git 태그(v0.1.0 ~ v0.3.1)와 맞춥니다.
 
-## Unreleased
+## v0.3.3 (2026-10-29)
 - `pcmigrate place <받기폴더>`: 받기 폴더(`<드라이브>\<경로>`)를 새 PC 의 원래 위치로 놓는 2단계 명령 추가(기본 미리보기, `--yes` 로 적용). 같은 볼륨은 이동, 다른 볼륨은 복사·SHA-256 검증 후 검증된 파일만 받기 폴더에서 삭제, `--keep` 은 복사만. `--map D=E`, `--no-overwrite`, `--include-unverified`, `--report`, `--json` 지원.
 - 시스템 폴더·없는 드라이브·링크·받기 폴더 안·잠긴 파일 등은 멈추지 않고 건너뛰어 `예상 위치/현재 위치/사유` 표로 보고. 어떤 종료(취소·드라이브 분리·공간 부족·예상 못 한 오류)에도 요약·JSON 리포트·오류 로그를 남김. 화면(GUI) 변경 없음.
+- 내 파일 찾기 분류 표 보강(`find_data.py`): 설계에 CAD 교환(`.step .stp .iges .igs .sat`), 포인트클라우드(`.las .laz .e57`), 사진측량/GIS 결과물(`.ply .osgb .kml .kmz .shp`), 사진(그래픽)에 `.svg .eps .geotiff` 추가. `.obj .xyz .pts .tfw .dbf` 등 다른 용도와 겹치는 것은 넣지 않음. 화면 문구·배치 변화 없음.
 
 ## v0.3.2 (2026-10-29)
 - 독점 라이선스 파일(`LICENSE`) 추가, `pyproject.toml` 에 `license = "LicenseRef-Proprietary"` 지정(라이선스 표현식 사용을 위해 빌드 요구사항을 setuptools>=77 로 올림).
