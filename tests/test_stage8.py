@@ -1,4 +1,4 @@
-from conftest import make_rules_dir
+from conftest import make_rules_dir, patch_xfer
 import hashlib
 import io
 import json
@@ -83,7 +83,7 @@ def test_strict_repairs_only_mismatched_files(tmp_path, monkeypatch):
     same_size_tamper(victim, b"Q" * victim.stat().st_size)
     calls = []
     real = tr.repair_file
-    monkeypatch.setattr(tr, "repair_file", lambda s, d: (calls.append(Path(s).name), real(s, d))[1])
+    patch_xfer(monkeypatch, "repair_file", lambda s, d: (calls.append(Path(s).name), real(s, d))[1])
     transfer(src, dst, runner=FakeRobocopy(skip=["a.dwg"]), strict=True)
     assert calls == ["a.dwg"]  # b.rvt, c.txt 는 건드리지 않음
 

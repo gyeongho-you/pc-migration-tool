@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from conftest import make_rules_dir, patch_pkg
+from conftest import make_rules_dir, patch_pkg, patch_xfer
 from pcmigrate import api, cli, errorlog, fs, package, rules as rules_mod, transfer as tr
 from pcmigrate.copier import Report
 from pcmigrate.detect import Program, display_with_version
@@ -403,7 +403,7 @@ def test_cancel_during_preserve_rolls_back(tmp_path, monkeypatch):
         if n["c"] == 3:
             raise Cancelled()
         return real(target)
-    monkeypatch.setattr(tr, "_bak_name", third_time_cancel)
+    patch_xfer(monkeypatch, "_bak_name", third_time_cancel)
     with pytest.raises(Cancelled):
         run_tr(src, dst)
     assert [(dst / "sub" / f"f{i}.dwg").read_bytes() for i in range(3)] == [f"기존 {i}".encode() for i in range(3)]
@@ -607,7 +607,7 @@ def test_import_blocked_output_lists_problems_in_korean(env, tmp_path, monkeypat
 def test_verify_and_transfer_default_output_human_readable(tmp_path, monkeypatch, capsys):
     src = make_src(tmp_path)
     dst = tmp_path / "dst"
-    monkeypatch.setattr(tr, "default_runner", FakeRobocopy())
+    patch_xfer(monkeypatch, "default_runner", FakeRobocopy())
     monkeypatch.setattr(cli, "run_transfer", lambda *a, **k: run_tr(src, dst, **{x: v for x, v in k.items()
                                                                                  if x in ("dry_run", "strict", "verify_only")}))
     assert cli.main(["transfer", str(src), str(dst), "--dry-run"]) == 0

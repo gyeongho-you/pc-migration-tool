@@ -4,6 +4,7 @@ import shutil
 from pathlib import Path
 
 import pytest
+from conftest import patch_xfer
 
 from pcmigrate import cli, transfer as tr
 from pcmigrate.copier import (CLOUD_ONLY, MISMATCH, MISSING, SKIPPED_SAME, VERIFIED,
@@ -81,7 +82,7 @@ def test_runner_never_receives_forbidden_args(tmp_path):
 
 def test_forbidden_arg_from_runner_path_blocked(tmp_path, monkeypatch):
     src = make_src(tmp_path)
-    monkeypatch.setattr(tr, "base_args", lambda *a, **k: ["robocopy", "s", "d", "/MIR"])
+    patch_xfer(monkeypatch, "base_args", lambda *a, **k: ["robocopy", "s", "d", "/MIR"])
     rc = FakeRobocopy()
     with pytest.raises(TransferError):
         transfer(src, tmp_path / "dst", runner=rc)
@@ -167,7 +168,7 @@ def test_resume_skips_rehash_of_verified_files(tmp_path, monkeypatch):
 
     calls = []
     real = tr.verify_file
-    monkeypatch.setattr(tr, "verify_file", lambda s, d, **kw: (calls.append(s), real(s, d, **kw))[1])
+    patch_xfer(monkeypatch, "verify_file", lambda s, d, **kw: (calls.append(s), real(s, d, **kw))[1])
     rep = transfer(src, dst, runner=FakeRobocopy())
     assert calls == [] and rep.meta["resumed_skipped"] == 3
 
@@ -203,7 +204,7 @@ def test_corrupt_or_mismatched_state_causes_full_reverify(tmp_path, content, mon
     (dst / STATE_NAME).write_text(content.replace("SRC", str(src)), encoding="utf-8")
     calls = []
     real = tr.verify_file
-    monkeypatch.setattr(tr, "verify_file", lambda s, d, **kw: (calls.append(s), real(s, d, **kw))[1])
+    patch_xfer(monkeypatch, "verify_file", lambda s, d, **kw: (calls.append(s), real(s, d, **kw))[1])
     rep = transfer(src, dst, runner=FakeRobocopy())
     assert len(calls) == 3 and rep.failures == []
     if "OTHER" in content or "broken" in content or "[]" == content or "99" in content or '"x"' in content:
@@ -266,7 +267,7 @@ def test_include_cloud_copies_everything(tmp_path):
 def test_cli_transfer_dry_run_and_real(tmp_path, monkeypatch, capsys):
     src = make_src(tmp_path)
     rc = FakeRobocopy()
-    monkeypatch.setattr(tr, "default_runner", rc)
+    patch_xfer(monkeypatch, "default_runner", rc)
     monkeypatch.setattr(cli, "transfer", lambda *a, **k: tr.transfer(*a, runner=rc, **k))
     report = tmp_path / "rep.json"
     assert cli.main(["transfer", str(src), str(tmp_path / "dst"), "--dry-run",

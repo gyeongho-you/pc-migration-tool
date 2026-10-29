@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import pytest
+from conftest import patch_xfer
 
 from pcmigrate import cli, transfer as tr
 from pcmigrate.checklist_data import COMMON_ITEMS
@@ -57,7 +58,7 @@ def test_strict_rehashes_every_file(tmp_path, monkeypatch):
     transfer(src, dst, runner=FakeRobocopy())
     calls = []
     real = tr.verify_file
-    monkeypatch.setattr(tr, "verify_file", lambda s, d, **kw: (calls.append(s), real(s, d, **kw))[1])
+    patch_xfer(monkeypatch, "verify_file", lambda s, d, **kw: (calls.append(s), real(s, d, **kw))[1])
     rep = transfer(src, dst, runner=FakeRobocopy(), strict=True)
     assert len(calls) == 3 and rep.failures == []
 

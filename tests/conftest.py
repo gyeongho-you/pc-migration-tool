@@ -50,29 +50,38 @@ def _isolated_net_state(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(net_setup, "STATE_DIR", str(tmp_path_factory.mktemp("net-state")))
 
 
-def patch_pkg(monkeypatch, name, value, raising=True):
-    """pcmigrate.package 가 package_*.py 모듈로 나뉜 뒤에도 '패키지 전체에서 이 이름을 바꾼다'는
-    기존 monkeypatch 동작을 유지한다: 그 이름을 가진 모든 package_* 모듈(과 파사드)에 같이 건다."""
+def _split_modules(prefix):
+    """파사드(`prefix`)와 `prefix_*` 로 나뉜 모든 모듈을 import 해서 돌려준다."""
     import importlib
     import pkgutil
     import pcmigrate
+    return [importlib.import_module(f"pcmigrate.{mi.name}") for mi in pkgutil.iter_modules(pcmigrate.__path__)
+            if mi.name == prefix or mi.name.startswith(prefix + "_")]
+
+
+def _patch_split(monkeypatch, prefix, name, value, raising=True):
     hit = False
-    for mi in pkgutil.iter_modules(pcmigrate.__path__):
-        if mi.name == "package" or mi.name.startswith("package_"):
-            mod = importlib.import_module(f"pcmigrate.{mi.name}")
-            if hasattr(mod, name) or not raising:
-                monkeypatch.setattr(mod, name, value, raising=False)
-                hit = True
+    for mod in _split_modules(prefix):
+        if hasattr(mod, name) or not raising:
+            monkeypatch.setattr(mod, name, value, raising=False)
+            hit = True
     assert hit, name
+
+
+def patch_pkg(monkeypatch, name, value, raising=True):
+    """pcmigrate.package 가 package_*.py 모듈로 나뉜 뒤에도 '패키지 전체에서 이 이름을 바꾼다'는
+    기존 monkeypatch 동작을 유지한다: 그 이름을 가진 모든 package_* 모듈(과 파사드)에 같이 건다."""
+    _patch_split(monkeypatch, "package", name, value, raising)
+
+
+def patch_xfer(monkeypatch, name, value, raising=True):
+    """patch_pkg 의 transfer 판(stage42): pcmigrate.transfer 가 transfer_*.py 로 나뉜 뒤에도
+    transfer.X 를 바꾸면 그 이름을 쓰는 모든 transfer_* 모듈(과 파사드)에 같이 건다."""
+    _patch_split(monkeypatch, "transfer", name, value, raising)
 
 
 def set_pkg(name, value):
     """patch_pkg 의 monkeypatch 없는 판(직접 대입/되돌리기용): package_* 모듈 전체에 같은 값을 건다."""
-    import importlib
-    import pkgutil
-    import pcmigrate
-    for mi in pkgutil.iter_modules(pcmigrate.__path__):
-        if mi.name == "package" or mi.name.startswith("package_"):
-            mod = importlib.import_module(f"pcmigrate.{mi.name}")
-            if hasattr(mod, name):
-                setattr(mod, name, value)
+    for mod in _split_modules("package"):
+        if hasattr(mod, name):
+            setattr(mod, name, value)

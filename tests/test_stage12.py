@@ -6,6 +6,7 @@ import shutil
 from pathlib import Path
 
 import pytest
+from conftest import patch_xfer
 
 from pcmigrate import cli, fs, manifest as mf, transfer as tr
 from pcmigrate.copier import FAILED, MISMATCH, MISSING, PENDING_VERIFY, VERIFIED, EXTRA, sha256_file
@@ -195,7 +196,7 @@ def test_fat32_blocks_files_over_4gb(tmp_path, monkeypatch):
         r = orig(*a, **k)
         r.max_size = fs.FAT4G + 1  # 4GB 초과 파일이 있다고 가정(실제 큰 파일을 만들지 않음)
         return r
-    monkeypatch.setattr(tr, "scan_source_info", fat_scan)
+    patch_xfer(monkeypatch, "scan_source_info", fat_scan)
     with pytest.raises(TransferError, match="FAT32"):
         run(src, tmp_path / "dst", dest_info_fn=info(fs_name="FAT32"))
     assert not (tmp_path / "dst").exists()  # 쓰기 전에 막힘
