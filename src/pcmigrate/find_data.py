@@ -47,12 +47,22 @@ DESIGN_EXT: dict[str, str] = {
     ".vwx": "A",                                                                      # Vectorworks
     ".max": "B", ".3ds": "B", ".fbx": "B", ".stl": "B", ".rcp": "B", ".rcs": "B",      # 3D/포인트클라우드 일반 형식
     ".c4d": "B", ".blend": "B", ".lmv": "B",
+    # CAD 교환: 국제/업계 표준 규격으로 확장자가 정해져 있어 A (ISO 10303-21 STEP, ANSI IGES, ACIS SAT)
+    ".step": "A", ".stp": "A", ".iges": "A", ".igs": "A", ".sat": "A",
+    # 포인트클라우드/스캔: LAS(ASPRS 규격)와 E57(ASTM E2807)은 규격 확장자라 A, .laz 는 LAS 압축 사실상 표준이라 B
+    ".las": "A", ".e57": "A", ".laz": "B",
+    # 드론/사진측량·GIS 결과물: 다른 용도와 겹침이 적은 것만. .ply(스캔 메시, 3D 프린팅/게임에도 쓰여 B),
+    # .osgb(경사사진 3D 타일, OpenSceneGraph 형식이라 B), .kml/.kmz(OGC 규격이나 지도 앱 내보내기도 많아 B), .shp(Esri 문서화 형식, A)
+    ".ply": "B", ".osgb": "B", ".kml": "B", ".kmz": "B", ".shp": "A",
 }
 PHOTO_EXT: dict[str, str] = {
     ".jpg": "B", ".jpeg": "B", ".png": "B", ".tif": "B", ".tiff": "B", ".bmp": "B", ".gif": "B", ".webp": "B",
     ".heic": "B", ".heif": "B",
     ".raw": "A", ".cr2": "A", ".cr3": "A", ".nef": "A", ".arw": "A", ".dng": "A", ".orf": "A", ".rw2": "A",  # 카메라 RAW
     ".psd": "A", ".psb": "A", ".ai": "A", ".indd": "A",                                # Adobe 그래픽
+    ".eps": "B",                                                                      # 벡터 그래픽(Adobe 계열이나 LaTeX/인쇄에도 쓰여 B)
+    ".svg": "C",                                                                      # 벡터 그래픽(W3C 표준). 웹/개발 폴더의 아이콘으로도 많아 C
+    ".geotiff": "B",                                                                  # 정사영상(.tif 와 같은 사진 분류)
 }
 VIDEO_EXT: dict[str, str] = {
     ".mp4": "B", ".mov": "B", ".avi": "B", ".mkv": "B", ".wmv": "B", ".m4v": "B", ".mts": "B", ".m2ts": "B",

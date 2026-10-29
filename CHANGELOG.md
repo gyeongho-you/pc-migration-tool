@@ -2,6 +2,9 @@
 
 형식은 최신순입니다. 버전은 git 태그(v0.1.0 ~ v0.3.1)와 맞춥니다.
 
+## Unreleased
+- 내 파일 찾기 분류 표 보강(`find_data.py`): 설계에 CAD 교환(`.step .stp .iges .igs .sat`), 포인트클라우드(`.las .laz .e57`), 사진측량/GIS 결과물(`.ply .osgb .kml .kmz .shp`), 사진(그래픽)에 `.svg .eps .geotiff` 추가. `.obj .xyz .pts .tfw .dbf` 등 다른 용도와 겹치는 것은 넣지 않음. 화면 문구·배치 변화 없음.
+
 ## v0.3.2 (2026-10-29)
 - 독점 라이선스 파일(`LICENSE`) 추가, `pyproject.toml` 에 `license = "LicenseRef-Proprietary"` 지정(라이선스 표현식 사용을 위해 빌드 요구사항을 setuptools>=77 로 올림).
 - `CHANGELOG.md`, 설정 패키지 무결성 안내(`docs/package-integrity.md`), 예외 처리 감사표(`docs/exception-audit.md`) 추가.
