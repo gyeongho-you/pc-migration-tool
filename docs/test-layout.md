@@ -54,3 +54,7 @@
 | `tests/test_stage38_winget_select.py` | `tests/test_winget_select_export.py` | 설치 확인에서 골라 winget.json 내보내기 |
 | `tests/test_stage39_gui.py` | `tests/test_gui_ethernet_setup.py` | 이더넷 주소 맞추기 컨트롤러/화면 |
 | `tests/test_stage39_net.py` | `tests/test_ethernet_setup.py` | 이더넷 주소 임시 맞추기(net_setup) |
+
+## 테스트에서 값을 바꿀 때(패치) 주의
+
+`package.py`, `transfer.py`, `gui/controller.py` 는 분해 후 재export 파사드입니다. 테스트에서 `package.X` 처럼 파사드의 이름을 바꾸면 실제로 그 값을 쓰는 하위 모듈(`package_*`, `transfer_*`, `controller_*`)에는 반영되지 않아 오류 없이 무력화될 수 있습니다. 반드시 `tests/conftest.py` 의 `patch_pkg` / `set_pkg` / `patch_xfer` / `patch_ctl` 헬퍼를 쓰세요(그 이름을 가진 모든 하위 모듈에 같이 적용됩니다).
