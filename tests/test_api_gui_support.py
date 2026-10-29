@@ -14,7 +14,7 @@ from pcmigrate.rules import load_rules
 from pcmigrate.transfer import STATE_NAME, cancellable_runner, transfer
 
 from test_discover import REPO_RULES, Env, touch
-from test_stage4 import WINGET
+from test_checklist_winget import WINGET
 from test_transfer import FakeRobocopy, make_src
 
 

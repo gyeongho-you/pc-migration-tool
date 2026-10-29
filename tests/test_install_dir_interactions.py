@@ -7,7 +7,7 @@ from pcmigrate import import_record, install_dir as idr, settings_filter
 from pcmigrate.api import ApiError, run_import, run_undo_import
 from pcmigrate.package import NOT_SELECTED, program_matches, retry_failed_export, verify_package
 from conftest import make_rules_dir
-from test_stage25_install_dir import deps_for, export, fake, item, pkg_for  # noqa: F401
+from test_install_dir import deps_for, export, fake, item, pkg_for  # noqa: F401
 
 
 @pytest.fixture

@@ -4,7 +4,7 @@ import json
 from pcmigrate import envpaths
 from pcmigrate.discover import CONFIG_NONE, CONFIG_UNKNOWN, Candidate, to_dict
 from pcmigrate.find_program import find_program, render
-from test_stage25_install_dir import Fake, fake, touch  # noqa: F401
+from test_install_dir import Fake, fake, touch  # noqa: F401
 
 
 def roaming(fake):
@@ -95,7 +95,7 @@ import pytest
 from pcmigrate.gui import state as S
 from pcmigrate.gui import texts as T
 from test_gui_controller import cand
-from test_stage30b import new_ctl, set_discovery
+from test_gui_screens_4_7 import new_ctl, set_discovery
 
 tk = pytest.importorskip("tkinter")
 from test_gui_smoke import ctx  # noqa: E402,F401

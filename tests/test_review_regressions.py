@@ -19,8 +19,8 @@ from pcmigrate.package import (PackageError, apply_import, collect_items, export
                                restore_denied, unsafe_name, verify_package)
 from pcmigrate.rules import RuleError, load_rules, parse_rule
 
-from test_stage12 import FakeRobocopy, info, make_src
-from test_stage12 import run as run_tr
+from test_transfer_safety_manifest import FakeRobocopy, info, make_src
+from test_transfer_safety_manifest import run as run_tr
 
 nt_only = pytest.mark.skipif(os.name != "nt", reason="Windows 전용")
 REPO_RULES = Path(__file__).resolve().parents[1] / "rules"

@@ -18,7 +18,7 @@ from pcmigrate.rules import load_rules
 from pcmigrate.transfer import STATE_NAME, transfer
 
 from test_discover import Env, REPO_RULES, cli_env, programs_for, select, touch
-from test_stage4 import WINGET, patch_detection, same_size_tamper
+from test_checklist_winget import WINGET, patch_detection, same_size_tamper
 from test_transfer import FakeRobocopy, make_src
 
 

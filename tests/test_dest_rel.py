@@ -11,8 +11,8 @@ from pcmigrate import data_api, find_data as fd, lan_api, multi_transfer as mt
 from pcmigrate.gui import texts as T
 from pcmigrate.transfer import TransferError
 
-from test_stage29_lan import _fast_kdf, make_src, rx_factory, send  # noqa: F401
-from test_stage34 import env, make_zip, touch  # noqa: F401
+from test_lan_transfer import _fast_kdf, make_src, rx_factory, send  # noqa: F401
+from test_start_cards_settings_bundle import env, make_zip, touch  # noqa: F401
 
 
 def S(path, **kw):

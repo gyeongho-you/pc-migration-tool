@@ -16,7 +16,7 @@ from pcmigrate.gui.controller import Controller, GuardError
 from pcmigrate.gui.runner import Runner
 
 from test_gui_controller import FakeApi
-from test_stage30a_files import FakeData, FakeLan, folder
+from test_gui_my_files_controller import FakeData, FakeLan, folder
 
 GUI_DIR = Path(__file__).resolve().parents[1] / "src" / "pcmigrate" / "gui"
 ROOT = Path(__file__).resolve().parents[1]

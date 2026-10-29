@@ -6,7 +6,7 @@ import pytest
 
 from pcmigrate import cli, coverage, envpaths, package, settings_filter as sf
 from pcmigrate.package import collect_extra_items, export_package, plan_import, verify_package
-from test_stage28b import NOW, PC, ex, touch
+from test_per_program_restore_undo import NOW, PC, ex, touch
 
 
 @pytest.fixture

@@ -20,7 +20,7 @@ from pcmigrate.package import (PackageError, apply_import, collect_extra_items, 
 from pcmigrate.rules import parse_rule
 
 from test_package import env, make_rule  # noqa: F401  (fixture)
-from test_stage12 import FakeRobocopy, info, make_src, run
+from test_transfer_safety_manifest import FakeRobocopy, info, make_src, run
 
 nt_only = pytest.mark.skipif(os.name != "nt", reason="Windows 전용(정션/잠금)")
 

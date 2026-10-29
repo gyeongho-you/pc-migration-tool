@@ -14,7 +14,7 @@ from pcmigrate.gui.controller import Controller, GuardError
 from pcmigrate.gui.runner import Runner
 
 from test_discover import Env, touch
-from test_stage4 import WINGET
+from test_checklist_winget import WINGET
 
 
 def make_controller(tmp_path, registry):

@@ -15,8 +15,8 @@ from pcmigrate.gui.controller import GuardError
 from pcmigrate.package import PackageError, export_package, extract_winget, list_winget_packages
 
 from test_gui_controller import install_result
-from test_stage19a import NOW, env, make_rule  # noqa: F401  (env: 가짜 환경 fixture)
-from test_stage20b_gui import ctx, make  # noqa: F401
+from test_review_regressions import NOW, env, make_rule  # noqa: F401  (env: 가짜 환경 fixture)
+from test_gui_auto_run_options import ctx, make  # noqa: F401
 
 DOC = {"$schema": "https://aka.ms/winget-packages.schema.json", "CreationDate": "2030-01-01", "WinGetVersion": "1.9",
        "Sources": [

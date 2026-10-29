@@ -17,8 +17,8 @@ from pcmigrate.gui.controller import GuardError
 from pcmigrate.package import export_package
 
 from test_gui_controller import install_result
-from test_stage19a import make_rule
-from test_stage20b_gui import ctx, make, steps  # noqa: F401  (ctx: tk 화면 시험용 fixture)
+from test_review_regressions import make_rule
+from test_gui_auto_run_options import ctx, make, steps  # noqa: F401  (ctx: tk 화면 시험용 fixture)
 
 NOW = lambda: datetime(2030, 1, 1)  # noqa: E731
 

@@ -291,8 +291,8 @@ import time
 
 from pcmigrate import transfer as tr
 from pcmigrate.cancel import Cancelled
-from test_stage12 import FakeRobocopy, info, make_src
-from test_stage12 import run as run_tr
+from test_transfer_safety_manifest import FakeRobocopy, info, make_src
+from test_transfer_safety_manifest import run as run_tr
 
 
 def _bak_files(root):

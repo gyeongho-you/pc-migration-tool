@@ -19,7 +19,7 @@ from pcmigrate.package import (EXTRA_ID, NOT_SELECTED, PackageError, apply_impor
                                plan_import, program_key, program_matches, retry_failed_export, verify_package)
 from pcmigrate.rules import parse_rule
 from pcmigrate.settings_filter import (ALLOWED_CONFIG_EXTS, ConfigGate, ConfigLimits, EXTRA_MODE_ALL, EXTRA_MODE_CONFIG)
-from test_stage14_export import ByteLock
+from test_export_locked_files import ByteLock
 
 winonly = pytest.mark.skipif(os.name != "nt", reason="바이트 범위 잠금은 Windows 전용 시나리오")
 NOW = lambda: __import__("datetime").datetime(2030, 1, 1, tzinfo=__import__("datetime").timezone.utc)  # noqa: E731

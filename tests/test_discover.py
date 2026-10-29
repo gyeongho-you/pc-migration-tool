@@ -16,7 +16,7 @@ from pcmigrate.discover_data import (DOT_HINTS, EXTRA_ROOTS, RESTORE_DENY_SUBSTR
 from pcmigrate.package import EXTRA_ID, export_package, plan_import, verify_package
 from pcmigrate.rules import load_rules
 
-from test_stage4 import WINGET, patch_detection
+from test_checklist_winget import WINGET, patch_detection
 
 REPO_RULES = Path(__file__).resolve().parents[1] / "rules"
 

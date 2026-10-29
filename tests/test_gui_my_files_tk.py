@@ -18,7 +18,7 @@ from pcmigrate.lan_protocol import LanError  # noqa: E402
 from pcmigrate.progress import ProgressInfo  # noqa: E402
 
 from test_gui_controller import FakeApi  # noqa: E402
-from test_stage30a_files import FakeData, FakeLan, folder  # noqa: E402
+from test_gui_my_files_controller import FakeData, FakeLan, folder  # noqa: E402
 
 
 @pytest.fixture
@@ -197,7 +197,7 @@ def test_add_folder_button_uses_dialog_and_selects(ctx, monkeypatch):
 
 
 def test_partial_and_empty_results_show_plain_notices(ctx):
-    from test_stage30a_files import find_result
+    from test_gui_my_files_controller import find_result
     ctx.data.result = find_result(complete=False, errors=3)
     v = go(ctx, S.FIND)
     v.find_btn.invoke()

@@ -16,9 +16,9 @@ from pcmigrate.gui.runner import Runner  # noqa: E402
 from pcmigrate.gui.views.common import CoverageBox  # noqa: E402
 
 from test_gui_controller import FakeApi  # noqa: E402
-from test_stage30a_files import FakeLan, folder  # noqa: E402
-from test_stage30a_gui_tk import ctx, go, labels_of  # noqa: E402,F401  (ctx 는 시험 모듈의 fixture)
-from test_stage34 import StagedData, StagedLan, make_zip, touch  # noqa: E402
+from test_gui_my_files_controller import FakeLan, folder  # noqa: E402
+from test_gui_my_files_tk import ctx, go, labels_of  # noqa: E402,F401  (ctx 는 시험 모듈의 fixture)
+from test_start_cards_settings_bundle import StagedData, StagedLan, make_zip, touch  # noqa: E402
 
 
 @pytest.fixture

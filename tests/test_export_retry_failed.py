@@ -14,7 +14,7 @@ import pytest
 from pcmigrate import api, cli, package
 from pcmigrate.package import PackageError, export_package, part_paths, retry_failed_export, retry_paths, verify_package
 from pcmigrate.rules import parse_rule
-from test_stage14_export import ByteLock
+from test_export_locked_files import ByteLock
 
 winonly = pytest.mark.skipif(os.name != "nt", reason="바이트 범위 잠금은 Windows 전용 시나리오")
 NOW = lambda: __import__("datetime").datetime(2030, 1, 1, tzinfo=__import__("datetime").timezone.utc)  # noqa: E731

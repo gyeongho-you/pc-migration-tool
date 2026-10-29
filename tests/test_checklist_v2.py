@@ -11,7 +11,7 @@ from pcmigrate.checklist import (build_checklist, bundle_reason, classify_progra
 from pcmigrate.checklist_data import (BUNDLE_PATTERNS, COMMON_ITEMS, KNOWN_APPS)
 from pcmigrate.detect import Program
 
-from test_stage4 import WINGET, patch_detection, wg
+from test_checklist_winget import WINGET, patch_detection, wg
 
 
 def P(name, version="", publisher=""):

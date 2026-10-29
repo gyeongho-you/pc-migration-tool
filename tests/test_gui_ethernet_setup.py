@@ -11,7 +11,7 @@ from pcmigrate.gui import texts as T
 from pcmigrate.gui.controller import GuardError
 
 from net_fakes import FakePC, adapter
-from test_stage30a_files import FakeLan, env  # noqa: F401  (env 는 시험 모듈의 fixture)
+from test_gui_my_files_controller import FakeLan, env  # noqa: F401  (env 는 시험 모듈의 fixture)
 
 
 class NetLan(FakeLan):
@@ -113,7 +113,7 @@ def test_diag_code_recorded(env, netpc):
 tk = pytest.importorskip("tkinter")
 from tkinter import messagebox  # noqa: E402
 
-from test_stage30a_gui_tk import ctx, go, labels_of  # noqa: E402,F401
+from test_gui_my_files_tk import ctx, go, labels_of  # noqa: E402,F401
 
 
 def pump(ctx, cond, secs=2.0):

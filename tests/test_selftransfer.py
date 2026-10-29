@@ -13,7 +13,7 @@ from pcmigrate.detect import Program
 from pcmigrate.discover import Candidate, build_selection, discover, flag_extra, render, to_dict
 from pcmigrate.find_program import find_program, render as render_find
 from conftest import make_rules_dir
-from test_stage25_install_dir import Fake, fake, touch  # noqa: F401
+from test_install_dir import Fake, fake, touch  # noqa: F401
 
 ROOT = Path(__file__).resolve().parents[1]
 ITEMS = st.load_items(ROOT / "selftransfer")

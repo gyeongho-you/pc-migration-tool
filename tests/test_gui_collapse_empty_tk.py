@@ -11,8 +11,8 @@ from pcmigrate.gui import state as S  # noqa: E402
 from pcmigrate.gui import texts as T  # noqa: E402
 from pcmigrate.gui.views import common as C  # noqa: E402
 
-from test_stage30a_gui_tk import ctx, go, labels_of  # noqa: E402,F401  (ctx 는 시험 모듈의 fixture)
-from test_stage34_gui_tk import real  # noqa: E402,F401
+from test_gui_my_files_tk import ctx, go, labels_of  # noqa: E402,F401  (ctx 는 시험 모듈의 fixture)
+from test_gui_start_cards_tk import real  # noqa: E402,F401
 
 
 def occupies(w, root) -> bool:
