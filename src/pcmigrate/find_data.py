@@ -50,6 +50,7 @@ DESIGN_EXT: dict[str, str] = {
     # CAD 교환: 국제/업계 표준 규격으로 확장자가 정해져 있어 A (ISO 10303-21 STEP, ANSI IGES, ACIS SAT)
     ".step": "A", ".stp": "A", ".iges": "A", ".igs": "A", ".sat": "A",
     # 포인트클라우드/스캔: LAS(ASPRS 규격)와 E57(ASTM E2807)은 규격 확장자라 A, .laz 는 LAS 압축 사실상 표준이라 B
+    # (.las 는 지구물리 시추 로그(LAS, Log ASCII Standard)와 확장자가 겹쳐 토목/지질 폴더에서 오탐할 수 있다)
     ".las": "A", ".e57": "A", ".laz": "B",
     # 드론/사진측량·GIS 결과물: 다른 용도와 겹침이 적은 것만. .ply(스캔 메시, 3D 프린팅/게임에도 쓰여 B),
     # .osgb(경사사진 3D 타일, OpenSceneGraph 형식이라 B), .kml/.kmz(OGC 규격이나 지도 앱 내보내기도 많아 B), .shp(Esri 문서화 형식, A)
@@ -129,7 +130,7 @@ def classify_name(name: str, size: int = 0, other_large: int = LARGE_OTHER_BYTES
 
 # --------------------------------------------------------------------------- 결과 형식
 class _Agg:
-    __slots__ = ("cats", "files", "bytes", "latest", "exts", "cloud_n", "cloud_b", "errors")
+    __slots__ = ("cats", "files", "bytes", "latest", "exts", "cloud_n", "cloud_b", "errors", "weak")
 
     def __init__(self) -> None:
         self.cats: dict[str, list[int]] = {}
@@ -137,11 +138,14 @@ class _Agg:
         self.latest = 0.0
         self.exts: Counter = Counter()
         self.cloud_n = self.cloud_b = self.errors = 0
+        self.weak: dict[str, int] = {}  # 등급 C 라서 파일 1개로는 폴더를 후보로 만들지 않는 분류(설계/사진/영상)별 개수
 
-    def add_file(self, size: int, mtime: float, cat: str | None, ext: str) -> None:
+    def add_file(self, size: int, mtime: float, cat: str | None, ext: str, weak: bool = False) -> None:
         self.files += 1
         self.bytes += size
         if cat:
+            if weak and cat in ("design", "photo", "video"):
+                self.weak[cat] = self.weak.get(cat, 0) + 1
             c = self.cats.setdefault(cat, [0, 0])
             c[0] += 1
             c[1] += size
@@ -303,9 +307,13 @@ def _drive_of(path: str) -> str:
 def _qualifies_direct(a: _Agg, cats: Iterable[str] = DEFAULT_CATEGORIES) -> bool:
     """이 폴더에 선택한 분류의 데이터가 직접 있어 폴더 하나를 후보로 볼 만한지(설계/사진/영상/큰 기타 1개, 문서/압축 3개 이상)."""
     c, cats = a.cats, tuple(cats)
-    if any(k in c and k in cats for k in ("design", "photo", "video", "other")):
+    if "other" in c and "other" in cats:
         return True
-    return sum(c.get(k, [0])[0] for k in ("doc", "archive") if k in cats) >= 3
+    for k in ("design", "photo", "video"):  # 등급 C 형식(.svg 등)만 있으면 파일 1개로는 후보가 아니다(문서/압축과 같은 3개 이상 기준)
+        if k in c and k in cats and c[k][0] > a.weak.get(k, 0):
+            return True
+    weak = sum(a.weak.get(k, 0) for k in ("design", "photo", "video") if k in cats)
+    return sum(c.get(k, [0])[0] for k in ("doc", "archive") if k in cats) + weak >= 3
 
 
 class _Finder:
@@ -419,7 +427,7 @@ class _Finder:
                 direct.cloud_b += st.st_size
                 continue
             hit = classify_name(name, st.st_size, self.other_large)
-            direct.add_file(st.st_size, st.st_mtime, hit[0] if hit else None, os.path.splitext(name)[1].lower())
+            direct.add_file(st.st_size, st.st_mtime, hit[0] if hit else None, os.path.splitext(name)[1].lower(), bool(hit and hit[1] == "C"))
         total.merge(direct)
         child_units: list[FolderItem] = []
         if depth < MAX_RECURSION and not self.stopped:

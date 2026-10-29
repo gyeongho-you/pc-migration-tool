@@ -163,7 +163,7 @@ class Report:
 def _backup_path(dst: Path) -> Path:
     cand = dst.with_name(dst.name + ".bak")
     n = 1
-    while cand.exists():
+    while os.path.lexists(long_path(cand)):  # 260자 이상 경로도 판정(Path.exists 는 긴 경로를 '없음'으로 보아 기존 .bak 을 덮어썼다)
         cand = dst.with_name(f"{dst.name}.bak.{n}")
         n += 1
     return cand

@@ -860,6 +860,15 @@ def _cmd_winget_extract(args: argparse.Namespace) -> int:
     return 0
 
 
+def _gather_arg(text: str) -> str:
+    """--gather 값: 양끝 공백/따옴표 정리(_path_arg), ~ 는 사용자 폴더로 확장. 끝에 따옴표가 남은 모양(cmd 의 "X:\\폴더\\" )은 거부한다."""
+    if text.endswith('"') and not text.startswith('"'):
+        raise argparse.ArgumentTypeError(
+            f"경로 끝에 따옴표(\")가 붙었습니다: {text!r}. 경로 끝이 역슬래시(\\)인 채 따옴표로 닫으면 cmd 가 따옴표를 경로의 일부로 넘깁니다. 끝의 역슬래시를 빼세요.")
+    v = _path_arg(text) if text else text
+    return os.path.expanduser(v) if v.startswith("~") else v
+
+
 def _cmd_place(args: argparse.Namespace) -> int:
     """받기 폴더 -> 원래 위치 배치. 어떤 경우(성공/부분/실패/취소/중단/예외)에도 요약과 리포트(--report)를 남긴다."""
     from .cancel import Cancelled
@@ -867,7 +876,7 @@ def _cmd_place(args: argparse.Namespace) -> int:
     def warn(msg: str) -> None:
         _err(f"[경고] {msg}")
 
-    if _unexpanded(recv=args.recv, report=args.report):
+    if _unexpanded(recv=args.recv, report=args.report, gather=args.gather or None):
         return 1
     try:
         maps = place_original.parse_maps(args.map)
@@ -900,6 +909,13 @@ def _cmd_place(args: argparse.Namespace) -> int:
         except OSError as e:
             _write_failed(args.report, e)
             rc = 1
+    from .transfer_base import DriveDisconnected
+    if isinstance(exc, TransferError) and not isinstance(exc, (DriveDisconnected, place_original.DiskFull)):
+        # 착수 전 입력/환경 오류(받기 폴더 없음, 잘못된 --gather 등): 요약 없이 오류 한 줄(리포트는 위에서 이미 저장)
+        if args.json:
+            _json_out(rep.to_dict())
+        _err(f"배치 실패: {exc}", "아무것도 옮기지 않았습니다.")
+        return 1
     if args.json:
         _json_out(rep.to_dict())
     else:
@@ -912,6 +928,9 @@ def _cmd_place(args: argparse.Namespace) -> int:
              "지금까지의 결과는 위 요약/리포트에 있습니다. 원인을 해결하고 같은 명령을 다시 실행하면 이어서 합니다."
              + (f" (오류 로그: {rep.meta['error_log']})" if rep.meta.get("error_log") else ""))
         return 1
+    if rep.manual_count or rep.warnings:  # 종료 코드는 바꾸지 않고(실패만 1) 수동 작업이 남았음을 알린다. 판정은 JSON 의 success/needs_manual
+        _err(f"[수동 작업 필요] 직접 처리할 항목이 {rep.manual_count}건 남았습니다(리포트의 success=false, needs_manual=true)."
+             + (f" 확인할 경고 {len(rep.warnings)}건." if rep.warnings else ""))
     return 1 if (rep.failed_count or rc) else 0
 
 
@@ -1119,7 +1138,7 @@ def build_parser() -> argparse.ArgumentParser:
     pl.add_argument("--map", action="append", metavar="D=E", help="드라이브 매핑(여러 번 가능): 받기 폴더의 D 를 이 PC 의 E 드라이브에 놓음")
     pl.add_argument("--no-overwrite", action="store_true", help="대상에 다른 내용의 파일이 있으면 덮어쓰지 않고 건너뜀(기본은 .bak 으로 보관하고 덮어씀)")
     pl.add_argument("--include-unverified", action="store_true", help="저널 상태가 done 이 아닌(받기가 끝나지 않았거나 검증 전인) 폴더도 놓음")
-    pl.add_argument("--gather", nargs="?", const="", default=None, metavar="폴더",
+    pl.add_argument("--gather", nargs="?", const="", default=None, metavar="폴더", type=_gather_arg,
                     help="원래 위치에 놓을 수 없어 건너뛴 항목(보호 위치, 없는 드라이브, 공간 부족, 지정 이름 폴더 등)을 이 폴더로 모음(원래 구조 유지, 방식은 place 와 같음). "
                          "폴더를 생략하면 바탕화면의 '이전 파일' 폴더(OneDrive 로 옮겨진 바탕화면이면 경고). 폴더를 쓸 때는 --gather=폴더 또는 받기 폴더 뒤에 적으세요")
     pl.add_argument("--report", type=_path_arg, help="결과 리포트(JSON) 저장 경로(받기 폴더 밖)")
