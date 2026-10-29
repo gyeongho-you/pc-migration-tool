@@ -11,6 +11,9 @@ r"""받기 폴더 -> 원래 위치 배치(2단계): 모드 B 다중 원본 전�
 - keep        복사만 한다(받기 폴더는 읽기만, 이동/삭제 없음).
 이미 같은 내용이 대상에 있으면(해시 비교) 복사하지 않고 받기 폴더 쪽 사본만 정리한다(keep 이면 그대로 둠) — 중간에 멈춘 뒤 다시 실행해도 같은 결과가 된다(멱등).
 빈 폴더는 지우지 않는다(남은 항목만 보고). 링크/reparse 지점은 따라가지 않고 건너뛴다.
+--gather: '위치 문제'로 못 놓은 항목(보호 위치, 없는 드라이브, 공간 부족, 지정 이름 폴더, UNC, 받기 폴더 안 등)을 한 폴더로 모은다.
+원래 구조(D\프로젝트\A)를 유지해 그 아래에 두고, 방식은 place 와 같다(같은 볼륨 이동 / 복사-검증-삭제 / --keep 복사만).
+읽기·복사 오류로 '실패'한 항목은 모으지 않고 받기 폴더에 둔다. 모은 폴더에 `이전 안내.txt`(구조/예상 원위치/사유)를 쓴다.
 
 놓을 수 없는 것(시스템 폴더, 대상 드라이브 없음, 잠긴 파일, 덮어쓰기 거부, 대상이 받기 폴더 안, 링크 등)은 예외로 멈추지 않고 건너뛰어
 '예상 위치 / 현재 위치 / 사유' 표로 모은다. 취소와 드라이브 분리만 바로 멈춘다(다시 실행하면 이어서 한다).
@@ -55,6 +58,13 @@ NO_SPACE, NO_OVERWRITE, BLOCKED, UNKNOWN_LOC, UNC, UNVERIFIED, READONLY_DRIVE, B
     "no_space", "no_overwrite", "dest_blocked", "unknown_location", "unc", "unverified", "readonly_drive",
     "bad_journal", "receive_unreadable")
 LEFTOVER = "source_not_removed"
+GATHER_DIR_NAME = "이전 파일"
+GUIDE_NAME = "이전 안내.txt"
+GUIDE_FILES_PER_ROW = 500
+GUIDE_OLD_MAX = 1024 * 1024
+# 모으기 대상: 원래 위치에 놓을 수 없는 '위치 문제'로 건너뛴 사유만(실패/덮어쓰기 거부/링크/미검증/이름 문제는 모으지 않는다)
+GATHER_CODES = frozenset({"protected_system", "drive_missing", "no_space", "unknown_location", "unc", "inside_receive",
+                         "readonly_drive", "dest_blocked"})
 REASONS: dict[str, tuple[str, str]] = {
     PROTECTED: ("시스템/보호 폴더라 자동으로 놓지 않음", "Windows, Program Files, ProgramData, 사용자 AppData, 시작 프로그램 같은 위치는 직접 확인하고 옮기세요."),
     DRIVE_MISSING: ("대상 드라이브가 이 PC 에 없음", "드라이브를 연결하거나 --map 으로 다른 드라이브를 지정하세요(예: --map D=E)."),
@@ -185,6 +195,9 @@ class PlaceReport:
     removed_truncated: int = 0
     remaining: dict = field(default_factory=dict)
     meta: dict = field(default_factory=dict)
+    gather_rep: "PlaceReport | None" = None  # --gather 결과(모은 파일의 성공/실패/삭제 기록)
+    gather_info: dict = field(default_factory=dict)
+    gathered: list[dict] = field(default_factory=list)  # 모은 항목 표: 원래 놓으려던 위치 / 모은 위치 / 사유
 
     @property
     def mode(self) -> str:
@@ -199,7 +212,7 @@ class PlaceReport:
 
     @property
     def manual_count(self) -> int:
-        return len(self.skipped) + len(self.failed) + len(self.leftover)
+        return len(self.skipped) + len(self.failed) + len(self.leftover) + len(self.gathered)
 
     def to_dict(self) -> dict:
         placed_n = sum(self.counts.get(k, 0) for k in ("copied", "moved", "would_copy", "would_move", "would_overwrite"))
@@ -213,15 +226,67 @@ class PlaceReport:
              "failed": [r.to_dict() for r in self.failed[:MAX_LISTED]],
              "leftover": [r.to_dict() for r in self.leftover[:MAX_LISTED]],
              "placed": self.placed, "placed_truncated": self.placed_truncated, "remaining_in_receive": self.remaining, **self.meta}
+        if self.gather_info:
+            g = self.gather_rep
+            d["gather"] = {**self.gather_info, "summary": dict(g.counts) if g else {}, "gathered_count": len(self.gathered),
+                           "gathered": self.gathered[:MAX_LISTED], "placed": g.placed if g else [],
+                           "removed_files": g.removed_list if g else [], "removed_sources": g.removed_sources if g else 0,
+                           "delete_planned_files": g.delete_planned if g else 0,
+                           "delete_planned_bytes": g.delete_planned_bytes if g else 0, "mode": g.mode if g else "auto"}
         if self.dry_run:
             d["preview"] = True
             d["delete_planned_files"] = self.delete_planned
             d["delete_planned_bytes"] = self.delete_planned_bytes
-        d["success"] = not self.failed and not self.skipped and not self.leftover and not self.meta.get("interrupted")
+        d["success"] = (not self.failed and not self.skipped and not self.leftover and not self.gathered
+                        and not self.meta.get("interrupted"))
         return d
 
     def write(self, path: Path) -> None:
         Path(path).write_text(json.dumps(self.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+# --------------------------------------------------------------------------- 모으기 폴더
+def onedrive_redirected(path: str | os.PathLike, env: dict | None = None) -> bool:
+    """경로가 OneDrive 동기화 폴더 안이면 True(환경변수 OneDrive/OneDriveConsumer/OneDriveCommercial 아래이거나 이름이 OneDrive 로 시작하는 상위 폴더)."""
+    env = env if env is not None else os.environ
+    norm = ntpath.normcase(ntpath.abspath(os.fspath(path)))
+    for var in ("OneDrive", "OneDriveConsumer", "OneDriveCommercial"):
+        base = env.get(var)
+        if base:
+            b = ntpath.normcase(ntpath.abspath(base)).rstrip("\\")
+            if norm == b or norm.startswith(b + "\\"):
+                return True
+    return any(part.startswith("onedrive") for part in norm.replace("/", "\\").split("\\"))
+
+
+def default_desktop() -> str:
+    """바탕화면 폴더(Windows 알려진 폴더 조회 = find_data.default_user_folders 재사용, OneDrive 로 옮겨진 위치 포함)."""
+    from .find_data import default_user_folders
+    d = default_user_folders().get("desktop")
+    return d or os.path.join(os.path.expanduser("~"), "Desktop")
+
+
+def default_gather_folder(desktop_fn: Callable[[], str] | None = None) -> Path:
+    return Path((desktop_fn or default_desktop)()) / GATHER_DIR_NAME
+
+
+def resolve_gather(arg: str | None, recv: Path, *, desktop_fn=None, env: dict | None = None,
+                   protected_fn=None) -> tuple[Path | None, dict]:
+    """--gather 값(None=끔, ''=기본 바탕화면\\이전 파일)을 검증해 (폴더, 정보)를 돌려준다. 받기 폴더와 겹치거나 보호 위치면 TransferError."""
+    if arg is None:
+        return None, {}
+    default = not arg
+    g = default_gather_folder(desktop_fn) if default else Path(arg)
+    g = Path(os.path.abspath(g))
+    if _is_within(g, recv) or _is_within(recv, g):
+        raise TransferError(f"모으는 폴더가 받기 폴더 안이거나 받기 폴더를 포함합니다: {g}. 받기 폴더와 겹치지 않는 다른 폴더를 지정하세요(--gather 폴더).")
+    why = (protected_fn or protected_reason)(str(g), is_dir=True)
+    if why:
+        raise TransferError(f"모으는 폴더가 보호 위치입니다({why}): {g}. 다른 폴더를 지정하세요(--gather 폴더).")
+    if os.path.lexists(g) and not os.path.isdir(g):
+        raise TransferError(f"모으는 폴더 자리에 같은 이름의 파일이 있습니다: {g}")
+    od = onedrive_redirected(g, env)
+    return g, {"folder": str(g), "default_folder": default, "onedrive_redirected": od}
 
 
 # --------------------------------------------------------------------------- 단위 찾기
@@ -380,6 +445,7 @@ class _Placer:
         self._last_emit = 0.0
         self._vol_cache: dict[str, bool] = {}
         self.unit_counts: dict[str, int] = {}
+        self.gather_mode = False  # True 면 대상은 '모은 폴더'(보호 위치 검사 없음, 보고 경로는 실제 경로)
 
     # ---- 보조
     def _check_cancel(self) -> None:
@@ -409,8 +475,8 @@ class _Placer:
     # ---- 폴더
     def walk(self, src_dir: Path, parts: tuple[str, ...], letter: str, root: Path, unit_root: bool = False) -> None:
         self._check_cancel()
-        logical = f"{letter}:\\" + "\\".join(parts)
         phys = root.joinpath(*parts)
+        logical = str(phys) if self.gather_mode else f"{letter}:\\" + "\\".join(parts)
         problem = self._dir_problem(src_dir, parts, logical, phys, root, unit_root)
         if problem:
             code, detail = problem
@@ -457,7 +523,7 @@ class _Placer:
     def _dir_problem(self, src_dir, parts, logical, phys, root, unit_root) -> tuple[str, str] | None:
         if parts and name_problem(parts[-1]):
             return UNSAFE_NAME, parts[-1]
-        why = protected_reason(logical, is_dir=True)
+        why = None if self.gather_mode else protected_reason(logical, is_dir=True)
         if why:
             return PROTECTED, why
         if _is_within(phys, self.recv):
@@ -490,7 +556,7 @@ class _Placer:
         if name_problem(name):
             self._row("file", logical, src, UNSAFE_NAME, name)
             return
-        why = protected_reason(logical, is_dir=False)
+        why = None if self.gather_mode else protected_reason(logical, is_dir=False)
         if why:
             self._row("file", logical, src, PROTECTED, why)
             return
@@ -691,7 +757,9 @@ def place(recv: str | os.PathLike, *, apply: bool = False, maps: dict[str, str] 
           drive_root_fn: Callable[[str], Path | None] = default_drive_root,
           same_volume_fn: Callable[[str, str], bool] = _same_volume,
           dest_info_fn=None, progress_info: Callable[[ProgressInfo], None] | None = None,
-          cancel: Callable[[], bool] | None = None, warn: Callable[[str], None] = lambda m: None) -> PlaceReport:
+          cancel: Callable[[], bool] | None = None, warn: Callable[[str], None] = lambda m: None,
+          gather: str | None = None, desktop_fn: Callable[[], str] | None = None, env: dict | None = None,
+          protected_fn=None) -> PlaceReport:
     """받기 폴더의 내용을 원래 위치로 놓는다(apply=False 면 미리보기만: 아무것도 바꾸지 않는다).
 
     어떤 이유로 끝나든 보고서가 남는다: 정상 종료는 PlaceReport 를 돌려주고, 취소/드라이브 분리/공간 부족/예상 못 한 오류는
@@ -702,9 +770,10 @@ def place(recv: str | os.PathLike, *, apply: bool = False, maps: dict[str, str] 
         raise TransferError(f"받기 폴더가 없습니다: {recv}")
     rep = PlaceReport(dry_run=not apply, keep=keep, recv=str(recv), maps=dict(maps or {}))
     t0 = time.monotonic()
+    gather_opts = (gather, desktop_fn, env, protected_fn)
     try:
         _place_impl(rep, recv, apply, keep, no_overwrite, include_unverified, drive_root_fn, same_volume_fn, dest_info_fn,
-                    progress_info, cancel, warn)
+                    progress_info, cancel, warn, gather_opts)
     except (Cancelled, KeyboardInterrupt) as e:
         rep.meta["interrupted"] = "cancelled"
         _attach(e, rep, recv, apply, t0)
@@ -739,8 +808,14 @@ def _attach(e: BaseException, rep: PlaceReport, recv: Path, apply: bool, t0: flo
 
 
 def _place_impl(rep: PlaceReport, recv: Path, apply: bool, keep: bool, no_overwrite: bool, include_unverified: bool,
-                drive_root_fn, same_volume_fn, dest_info_fn, progress_info, cancel, warn) -> None:
+                drive_root_fn, same_volume_fn, dest_info_fn, progress_info, cancel, warn, gather_opts=(None, None, None, None)) -> None:
     maps = rep.maps
+    groot, ginfo = resolve_gather(gather_opts[0], recv, desktop_fn=gather_opts[1], env=gather_opts[2], protected_fn=gather_opts[3])
+    if groot is not None:  # 아무것도 바꾸기 전에 검증/경고
+        rep.gather_info = ginfo
+        if ginfo["onedrive_redirected"]:
+            warn("모으는 폴더가 OneDrive 동기화 폴더 안입니다. 모은 파일이 대용량이면 OneDrive 로 업로드(동기화)될 수 있습니다. "
+                 "OneDrive 밖의 폴더를 쓰려면 --gather 폴더 로 직접 지정하세요. 이 폴더로 진행하려면 --yes 로 실행하세요.")
     units, rows, meta = discover(recv, maps, include_unverified, warn)
     rep.meta.update(meta)
     rep.skipped.extend(rows)
@@ -810,6 +885,135 @@ def _place_impl(rep: PlaceReport, recv: Path, apply: bool, keep: bool, no_overwr
         rep.meta["items_planned"] = len(ready2)
     if p.progress_info is not None:
         p.progress_info(p.tracker.snapshot("완료"))
+    if groot is not None:
+        _gather_leftovers(rep, recv, groot, apply, keep, no_overwrite, same_volume_fn, info_fn, progress_info, cancel, warn)
+
+
+def _gather_one(gp: _Placer, r: Row, rel: tuple[str, ...], groot: Path) -> None:
+    cur = Path(r.current)
+    phys = groot.joinpath(*rel)
+    if r.kind == "folder" and cur.is_dir():
+        gp.walk(cur, rel, "G", groot, unit_root=True)
+        return
+    link = fs.reparse_in_chain(groot, phys.parent)
+    if link:
+        gp._row("file", str(phys), cur, LINK, link)
+        return
+    gp.file(cur, str(phys), phys, groot, gp._same_vol_dir(cur.parent, phys.parent))
+
+
+_PLACED_KEYS = ("copied", "moved", "skipped_identical", "would_copy", "would_move", "would_overwrite")
+
+
+def _gather_leftovers(rep: PlaceReport, recv: Path, groot: Path, apply: bool, keep: bool, no_overwrite: bool, same_volume_fn,
+                      info_fn, progress_info, cancel, warn) -> None:
+    """위치 문제로 건너뛴 항목을 groot 아래(받기 폴더 안 구조 그대로)로 모은다. 항목(폴더/파일) 단위로 격리하고 결과를 rep 에 바로 반영한다."""
+    gat = PlaceReport(dry_run=not apply, keep=keep, recv=str(recv))
+    rep.gather_rep = gat
+    gp = _Placer(recv, dry_run=not apply, keep=keep, no_overwrite=no_overwrite, drive_root_fn=None,
+                 same_volume_fn=same_volume_fn, cancel=cancel, progress_info=progress_info, report=gat)
+    gp.gather_mode = True
+    rows: list[tuple[Row, tuple[str, ...]]] = []
+    for r in list(rep.skipped):
+        if r.code not in GATHER_CODES or not os.path.lexists(r.current):
+            continue
+        if r.kind == "folder" and not _count_tree(Path(r.current))[0]:
+            continue  # 파일이 없는 빈 폴더는 모으지 않는다(다시 실행할 때 같은 결과가 되도록)
+        try:
+            rel = Path(r.current).relative_to(recv).parts
+        except ValueError:
+            continue
+        if rel:
+            rows.append((r, rel))
+    rep.gather_info["candidates"] = len(rows)
+    if not rows:
+        return
+    gp.phase = "scan"
+    for i, (r, rel) in enumerate(rows):
+        gp.cur_key = str(i)
+        gp.totals.setdefault(gp.cur_key, _Totals())
+        _gather_one(gp, r, rel, groot)
+    need = sum(t.copy_bytes for t in gp.totals.values())
+    required = int(need * (1 + SPACE_MARGIN))
+    free = info_fn(str(_nearest_existing(groot))).free
+    rep.gather_info.update(required_bytes=required, free_bytes=free)
+    if need and free is not None and free < required:
+        rep.gather_info["blocked"] = "no_space"
+        warn(f"모으는 폴더의 드라이브 여유 공간이 부족해 모으지 않았습니다(필요 약 {fmt_bytes(required)}, 여유 {fmt_bytes(free)}). 항목은 받기 폴더에 그대로 있습니다.")
+        return
+    total_files = sum(t.files for t in gp.totals.values())
+    gp.phase = "apply"
+    gp.tracker = ProgressTracker("copy", sum(t.bytes for t in gp.totals.values()), total_files)
+    for i, (r, rel) in enumerate(rows):
+        gp.unit_counts = {}
+        n0 = (len(gat.failed), len(gat.leftover), len(gat.skipped))
+        try:
+            _gather_one(gp, r, rel, groot)
+        finally:  # 취소/중단으로 빠져나가도 지금까지의 실패/남은 것은 보고서에 반영한다
+            rep.failed.extend(gat.failed[n0[0]:])
+            rep.leftover.extend(gat.leftover[n0[1]:])
+            rep.skipped.extend(gat.skipped[n0[2]:])
+        done = sum(gp.unit_counts.get(k, 0) for k in _PLACED_KEYS)
+        bad = (len(gat.failed) - n0[0]) or (len(gat.skipped) - n0[2])
+        if done or not bad:
+            if not bad:
+                rep.skipped.remove(r)
+            rep.gathered.append({"kind": r.kind, "expected": fs.plain_path_text(r.expected), "current": fs.plain_path_text(r.current),
+                                 "gathered": fs.plain_path_text(str(groot.joinpath(*rel))), "reason_code": r.code,
+                                 "reason": fs.plain_path_text(r.reason), "files": done,
+                                 "status": ("preview" if not apply else "gathered") if not bad else "partial"})
+    if apply and rep.gathered:
+        _write_guide(rep, groot, rows, warn)
+
+
+def _write_guide(rep: PlaceReport, groot: Path, rows, warn) -> None:
+    """모은 폴더에 이전 안내.txt 를 쓴다(구조/예상 원위치/사유만, 받기 폴더·사용자 경로 없음). 실패해도 중단하지 않고 보고한다."""
+    path = groot / GUIDE_NAME
+    try:
+        lines = ["이전 안내: 원래 위치에 놓을 수 없어 이 폴더에 모은 항목입니다. 아래 '예상 원위치'로 직접 옮기세요.",
+                 "(파일 내용 안의 경로는 고쳐 쓰지 않았습니다.)", "", "모은 위치(이 폴더 기준) | 예상 원위치 | 사유"]
+        for g in rep.gathered:
+            if g["status"] == "preview":
+                continue
+            rel = os.path.relpath(g["gathered"], groot)
+            exp = g["expected"]
+            reason = g["reason"]
+            if g["kind"] == "folder" and os.path.isdir(g["gathered"]):
+                n = 0
+                for root, dirs, files in os.walk(g["gathered"]):
+                    dirs.sort()
+                    for f in sorted(files):
+                        n += 1
+                        if n > GUIDE_FILES_PER_ROW:
+                            break
+                        full = os.path.join(root, f)
+                        sub = os.path.relpath(full, g["gathered"])
+                        lines.append(f"{os.path.relpath(full, groot)} | {exp.rstrip(chr(92)) + chr(92) + sub if exp not in ('-', '') else '(알 수 없음)'} | {reason}")
+                    if n > GUIDE_FILES_PER_ROW:
+                        lines.append(f"{rel} | {exp} | 파일이 많아 {GUIDE_FILES_PER_ROW}개까지만 나열했습니다")
+                        break
+                if n == 0:
+                    lines.append(f"{rel} | {exp} | {reason}")
+            else:
+                lines.append(f"{rel} | {exp if exp != '-' else '(알 수 없음)'} | {reason}")
+        old = ""
+        if path.is_file():
+            try:
+                old = path.read_text(encoding="utf-8-sig", errors="replace")[:GUIDE_OLD_MAX]
+            except OSError as e:
+                errorlog.record(e, f"pcmigrate place: 이전 안내.txt 읽기 {path}")
+        text = "\n".join(lines) + "\n"
+        if old:
+            text += "\n=== 이전 실행 기록 ===\n" + old
+        tmp = path.with_name(path.name + PART_SUFFIX)
+        os.makedirs(groot, exist_ok=True)
+        tmp.write_text(text, encoding="utf-8-sig")
+        os.replace(tmp, path)
+        rep.gather_info["guide_file"] = str(path)
+    except OSError as e:
+        errorlog.record(e, f"pcmigrate place: 이전 안내.txt 쓰기 {path}")
+        rep.gather_info["guide_error"] = f"{type(e).__name__}: {failure.classify(e, str(path)).label}"
+        warn(f"이전 안내.txt 를 쓰지 못했습니다({rep.gather_info['guide_error']}). 모은 항목 표는 리포트에 있습니다.")
 
 
 def _finish(rep: PlaceReport, recv: Path, apply: bool, keep: bool, t0: float) -> None:
@@ -846,6 +1050,31 @@ def summary_lines(rep: PlaceReport) -> list[str]:
             lines.append(f"  {what} | {fs.plain_path_text(r.expected)} | {fs.plain_path_text(r.current)} | {fs.plain_path_text(r.reason)}")
         if len(rows) > 30:
             lines.append(f"  … 외 {len(rows) - 30}건(전체는 --report 파일)")
+    gi = rep.gather_info
+    if gi:
+        g = rep.gather_rep
+        gc = g.counts if g else {}
+        lines.append(f"- 모으기(--gather): 폴더 {gi['folder']}" + (" [OneDrive 동기화 폴더 — 업로드 주의]" if gi.get("onedrive_redirected") else ""))
+        if gi.get("onedrive_redirected"):
+            lines.append("  경고: 모은 파일이 OneDrive 로 동기화(업로드)될 수 있습니다. OneDrive 밖의 폴더를 쓰려면 --gather 폴더 로 지정하세요.")
+        if gi.get("blocked"):
+            lines.append("  모으는 폴더의 드라이브 여유 공간이 부족해 모으지 않았습니다.")
+        elif rep.dry_run:
+            lines.append(f"  모을 항목 {len(rep.gathered)}건: 이동 {gc.get('would_move', 0)}개, 복사 {gc.get('would_copy', 0)}개, 이미 같음 {gc.get('skipped_identical', 0)}개")
+            if g and g.delete_planned:
+                lines.append(f"  삭제 예정: 모은 뒤 받기 폴더에서 지울 파일 {g.delete_planned:,}개 / {fmt_bytes(g.delete_planned_bytes)} (되돌릴 수 없음)")
+        else:
+            lines.append(f"  모은 항목 {len(rep.gathered)}건: 이동 {gc.get('moved', 0)}개, 복사 {gc.get('copied', 0)}개, 받기 폴더에서 정리한 파일 {g.removed_sources if g else 0}개")
+            if gi.get("guide_file"):
+                lines.append(f"  안내 파일: {GUIDE_NAME}(모은 폴더 안)")
+            if gi.get("guide_error"):
+                lines.append(f"  안내 파일을 쓰지 못했습니다: {gi['guide_error']}")
+        if rep.gathered:
+            lines.append("[모은 항목] 파일/폴더 | 원래 놓으려던 위치 | 모은 위치 | 사유")
+            for x in rep.gathered[:30]:
+                lines.append(f"  {'폴더' if x['kind'] == 'folder' else '파일'} | {x['expected']} | {x['gathered']} | {x['reason']}")
+            if len(rep.gathered) > 30:
+                lines.append(f"  … 외 {len(rep.gathered) - 30}건(전체는 --report 파일)")
     if rep.remaining:
         lines.append(f"- 받기 폴더에 남은 것: 파일 {rep.remaining['files']:,}개 / {fmt_bytes(rep.remaining['bytes'])}, 빈 폴더 {rep.remaining['empty_folders']}개"
                      "(빈 폴더는 지우지 않았습니다. 확인한 뒤 직접 지우세요)")
@@ -854,5 +1083,5 @@ def summary_lines(rep: PlaceReport) -> list[str]:
     elif rep.dry_run:
         lines.append("다음 할 일: 이상 없으면 같은 명령에 --yes 를 붙여 실행하세요. 파일 내용 안의 경로는 고쳐 쓰지 않습니다.")
     elif rep.manual_count:
-        lines.append("다음 할 일: 표의 항목은 사용자가 직접 옮기세요(현재 위치의 파일은 그대로 있습니다).")
+        lines.append("다음 할 일: " + ("모은 폴더의 이전 안내.txt 를 보고 모은 항목을 직접 놓고, " if rep.gathered else "") + "표의 항목은 사용자가 직접 옮기세요(현재 위치의 파일은 그대로 있습니다).")
     return lines

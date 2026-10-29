@@ -883,7 +883,8 @@ def _cmd_place(args: argparse.Namespace) -> int:
     rep = exc = None
     try:
         rep = place_original.place(args.recv, apply=args.yes, maps=maps, keep=args.keep, no_overwrite=args.no_overwrite,
-                                   include_unverified=args.include_unverified, progress_info=_cli_info_progress(), warn=warn)
+                                   include_unverified=args.include_unverified, progress_info=_cli_info_progress(), warn=warn,
+                                   gather=args.gather)
     except (Cancelled, KeyboardInterrupt, TransferError, Exception) as e:  # noqa: BLE001 - 보고서를 남긴 뒤 알린다
         exc = e
         rep = getattr(e, "report", None)
@@ -1118,6 +1119,9 @@ def build_parser() -> argparse.ArgumentParser:
     pl.add_argument("--map", action="append", metavar="D=E", help="드라이브 매핑(여러 번 가능): 받기 폴더의 D 를 이 PC 의 E 드라이브에 놓음")
     pl.add_argument("--no-overwrite", action="store_true", help="대상에 다른 내용의 파일이 있으면 덮어쓰지 않고 건너뜀(기본은 .bak 으로 보관하고 덮어씀)")
     pl.add_argument("--include-unverified", action="store_true", help="저널 상태가 done 이 아닌(받기가 끝나지 않았거나 검증 전인) 폴더도 놓음")
+    pl.add_argument("--gather", nargs="?", const="", default=None, metavar="폴더",
+                    help="원래 위치에 놓을 수 없어 건너뛴 항목(보호 위치, 없는 드라이브, 공간 부족, 지정 이름 폴더 등)을 이 폴더로 모음(원래 구조 유지, 방식은 place 와 같음). "
+                         "폴더를 생략하면 바탕화면의 '이전 파일' 폴더(OneDrive 로 옮겨진 바탕화면이면 경고). 폴더를 쓸 때는 --gather=폴더 또는 받기 폴더 뒤에 적으세요")
     pl.add_argument("--report", type=_path_arg, help="결과 리포트(JSON) 저장 경로(받기 폴더 밖)")
     pl.add_argument("--json", action="store_true", help="사람이 읽는 요약 대신 JSON 으로 출력")
     pl.set_defaults(func=_cmd_place)
