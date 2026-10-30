@@ -507,7 +507,7 @@ def test_docs_mention_place_screen_and_stay_synced():
     for needle in ("받은 파일을 원래 위치에 놓기", "pcmigrate place"):
         assert needle in md and needle in ht and needle in readme, needle
     assert "받은 파일을 원래 위치로 놓습니다" in readme  # 전체 이전 순서 표(texts.py 의 ROADMAP_NEW 에서 만든 것)
-    assert "## Unreleased" in (root / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert "## v0.3.4" in (root / "CHANGELOG.md").read_text(encoding="utf-8")  # 릴리스 전에는 Unreleased, 릴리스 뒤에는 버전 제목
     assert "받은 파일 원래 위치에 놓기" in (root / "CHANGELOG.md").read_text(encoding="utf-8").split("## v0.3.3")[0]
 
 
