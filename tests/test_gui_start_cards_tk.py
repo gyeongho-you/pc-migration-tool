@@ -76,7 +76,7 @@ def test_roadmap_dialog_shows_new_intro_and_keys_unchanged(ctx):
     ctx.app.update()
     texts = " ".join(labels_of(dlg))
     assert "연결(보내기·받기)은 ②에서만" in texts and "'② 내 파일 옮기기'" in texts
-    assert [k for k, *_ in T.ROADMAP_OLD] == [f"old{i}" for i in range(1, 7)] and [k for k, *_ in T.ROADMAP_NEW] == [f"new{i}" for i in range(1, 7)]
+    assert [k for k, *_ in T.ROADMAP_OLD] == [f"old{i}" for i in range(1, 7)] and [k for k, *_ in T.ROADMAP_NEW] == ["new1", "new2", "new3", "new3b", "new4", "new5", "new6"]  # stage50: 받은 파일 놓기 항목 추가
     dlg.destroy()
 
 

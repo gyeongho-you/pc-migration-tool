@@ -385,7 +385,7 @@ def test_transfer_view_switches_flows(monkeypatch, tmp_path):
 # ------------------------------------------------------------------ 전체 이전 순서(? 도움말 / README 동기화)
 
 def test_roadmap_covers_required_steps_and_marks_who():
-    assert len(T.ROADMAP_OLD) == 6 and len(T.ROADMAP_NEW) == 6
+    assert len(T.ROADMAP_OLD) == 6 and len(T.ROADMAP_NEW) == 7  # stage50: 새 PC 쪽에 '받은 파일을 원래 위치로 놓습니다' 추가
     for key, title, who, detail in (*T.ROADMAP_OLD, *T.ROADMAP_NEW):
         assert who in (T.WHO_TOOL, T.WHO_HUMAN, T.WHO_BOTH) and title and detail
     blob = T.roadmap_text()
@@ -431,7 +431,7 @@ def test_roadmap_reachable_from_every_screen_and_help(tmp_path):
         assert dlg.roadmap_btn.cget("text") == T.BTN_ROADMAP  # ? 도움말에서도
         rd = app.show_roadmap()
         app.update()
-        assert isinstance(rd, RoadmapDialog) and len(rd.vars) == 12
+        assert isinstance(rd, RoadmapDialog) and len(rd.vars) == 13
         assert {w.cget("text") for w in rd.who_labels.values()} == {T.WHO_TOOL, T.WHO_HUMAN, T.WHO_BOTH}
         c.toggle_roadmap("old2")
         rd2 = app.show_roadmap()  # 다시 열어도 체크 유지

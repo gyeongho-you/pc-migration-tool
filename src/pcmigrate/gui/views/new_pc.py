@@ -476,6 +476,10 @@ class ResultView(BaseView):
                                 highlightthickness=2, highlightbackground=INFO_BG, highlightcolor=INFO_FG)
             cb.pack(anchor="w", fill="x", pady=2)
             self.box_checks.append(cb)
+        self.place_note = tk.Label(self.next_box, text=T.PL_ENTER_NOTE, bg=INFO_BG, anchor="w", justify="left", wraplength=700, font=BODY_FONT)  # stage50
+        self.place_note.pack(anchor="w", fill="x", pady=(6, 2))
+        self.place_btn = ActionButton(self.next_box, text=T.BTN_PL_ENTER, kind="plain", command=lambda: self.guarded(self.c.place_open, S.NEW_RESULT))
+        self.place_btn.pack(anchor="w")
         row = ttk.Frame(body)
         row.pack(fill="x", pady=(6, 0))
         self.open_btn = ttk.Button(row, text=T.BTN_OPEN_RESTORED, command=self._open)

@@ -13,7 +13,7 @@ from pcmigrate.gui import texts as T
 BANNED = ["dry-run", "dry run", "manifest", "SHA-256", "sha256", "robocopy", "extra", "strict", "UNC"]
 GUI_DIR = Path(__file__).resolve().parents[1] / "src" / "pcmigrate" / "gui"
 SCREENS = (S.START, S.OLD_SCAN, S.OLD_DISCOVER, S.OLD_CHECKLIST, S.OLD_EXPORT, S.NEW_PACKAGE, S.NEW_INSTALL, S.NEW_PREVIEW,
-           S.NEW_CONFIRM, S.NEW_RESULT, S.TRANSFER, S.FIND, S.METHOD, S.LAN_RECV, S.LAN_SEND)  # stage30a: 내 파일 옮기기 화면들
+           S.NEW_CONFIRM, S.NEW_RESULT, S.TRANSFER, S.FIND, S.METHOD, S.LAN_RECV, S.LAN_SEND, S.PLACE)  # stage30a: 내 파일 옮기기 화면들, stage50: 받은 파일 놓기
 
 
 def banned_in(text: str) -> list[str]:

@@ -93,6 +93,9 @@ class ReceiveView(BaseView):
         self.result_note = ttk.Label(self.top, text=T.RX_DONE_NOTE, justify="left")
         autowrap(self.result_note)
         self.open_btn = ActionButton(self.top, text=T.RX_OPEN_DEST, kind="link", command=lambda: open_location(self.c.lan_dest()))
+        self.place_btn = ActionButton(self.top, text=T.BTN_PL_ENTER, kind="plain", command=self._enter_place)  # stage50: 받기가 정상으로 끝났을 때만
+        self.place_note = FoldTLabel(self.top, text=T.PL_ENTER_NOTE, justify="left")
+        autowrap(self.place_note)
         bind_alt(self.app, self.start_btn, lambda: self.app.current == self.name)
         self.finish()
         self._render()
@@ -189,7 +192,7 @@ class ReceiveView(BaseView):
     def _result(self) -> None:
         text, ok = self.c.rx_result_text()
         if not text:
-            for w in (self.result, self.result_note, self.open_btn):
+            for w in (self.result, self.result_note, self.open_btn, self.place_btn, self.place_note):
                 w.pack_forget()
             return
         head = T.RX_RESULT_OK if ok else T.RX_RESULT_BAD
@@ -197,6 +200,15 @@ class ReceiveView(BaseView):
         self.result.pack(fill="x", pady=(2, 2))
         self.result_note.pack(anchor="w", fill="x")
         self.open_btn.pack(anchor="w", pady=(4, 0))
+        if ok:  # 받은 파일을 원래 위치에 놓는 화면으로 들어가는 길(실패/중지로 끝났으면 보이지 않는다)
+            self.place_btn.pack(anchor="w", pady=(6, 0))
+            self.place_note.pack(anchor="w", fill="x", pady=(2, 0))
+        else:
+            self.place_btn.pack_forget()
+            self.place_note.pack_forget()
+
+    def _enter_place(self) -> None:
+        self.guarded(self.c.place_open, S.LAN_RECV, self.c.lan_dest())
 
     # ------------------------------------------------------------------ 동작
     def _change_dest(self) -> None:

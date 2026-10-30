@@ -29,6 +29,7 @@ from .views.lan_send import SendView
 from .views.method import MethodView
 from .views.new_pc import ConfirmView, PackageView, PreviewView, ResultView
 from .views.old_pc import ChecklistView, DiscoverView, ExportView, ScanView
+from .views.place import PlaceView
 from .views.start import StartView
 from .views.transfer import TransferView
 
@@ -219,7 +220,7 @@ class ErrorDialog(tk.Toplevel):
 
 
 VIEW_CLASSES = (StartView, ScanView, DiscoverView, ChecklistView, ExportView, PackageView, InstallView, PreviewView, ConfirmView,
-                ResultView, TransferView, AutoView, FindView, MethodView, ReceiveView, SendView)  # stage30a: 뒤의 네 화면
+                ResultView, TransferView, AutoView, FindView, MethodView, ReceiveView, SendView, PlaceView)  # stage30a: 뒤의 네 화면, stage50: 받은 파일 놓기
 
 
 class App(tk.Tk):

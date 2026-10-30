@@ -69,7 +69,7 @@ class FilesMixin:
     def _files_on_go(self, screen: str) -> None:
         """다른 흐름의 화면으로 가면 '선택 목록으로 복사' 모드를 끝낸다(예전 단일 폴더 흐름이 선택 목록을 쓰지 않게)."""
         f = self.files
-        if f.use_selection and screen not in (S.TRANSFER, S.METHOD, S.LAN_RECV, S.LAN_SEND, S.FIND):
+        if f.use_selection and screen not in (S.TRANSFER, S.METHOD, S.LAN_RECV, S.LAN_SEND, S.FIND, S.PLACE):  # stage50: 놓기 화면에 다녀와도 고른 목록은 유지
             self._end_selection_mode()
 
     def _end_selection_mode(self) -> None:

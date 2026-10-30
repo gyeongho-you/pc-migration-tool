@@ -611,11 +611,11 @@ def test_roadmap_dialog_has_title_progress_and_close_button(ctx):  # U-17
     dlg = app.show_roadmap()
     dlg.update()
     total = len(T.ROADMAP_OLD) + len(T.ROADMAP_NEW)
-    assert total == 12 and dlg.heading.cget("text") == T.ROADMAP_HEADING
-    assert dlg.progress_label.cget("text") == T.ROADMAP_PROGRESS.format(n=0, total=12) == "진행률 0/12"
+    assert total == 13 and dlg.heading.cget("text") == T.ROADMAP_HEADING
+    assert dlg.progress_label.cget("text") == T.ROADMAP_PROGRESS.format(n=0, total=13) == "진행률 0/13"
     dlg.vars["old1"].set(True)
     dlg._toggle("old1")
-    assert dlg.progress_label.cget("text") == "진행률 1/12" and "old1" in c.roadmap_marks
+    assert dlg.progress_label.cget("text") == "진행률 1/13" and "old1" in c.roadmap_marks
     assert dlg.close_btn.cget("text") == T.BTN_CLOSE
     dlg.close_btn.invoke()
     assert not dlg.winfo_exists()

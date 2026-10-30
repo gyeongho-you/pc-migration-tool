@@ -362,6 +362,15 @@ def destination_info(dst: str | Path, deps: Deps | None = None) -> fs.DestInfo:
     return (deps or Deps()).describe_destination(str(dst))
 
 
+def run_place(recv: str | Path, **kw):
+    """받기 폴더(<드라이브>/<경로> 구조)를 원래 위치로 놓는다(place_original.place 위임, stage50). apply=False 가 기본이라 미리보기만 한다.
+
+    TransferError/Cancelled/DriveDisconnected/DiskFull 은 그대로 전파하며, 예외의 .report 에 지금까지의 결과가 붙어 있다.
+    GUI 컨트롤러가 self.api.run_place 로 부르므로 시험에서는 가짜 api 로 바꿔 끼울 수 있다."""
+    from . import place_original
+    return place_original.place(recv, **kw)
+
+
 def report_inside(path: str | Path | None, folder: str | Path) -> bool:
     """path 가 folder 안에 있는지(verify 의 읽기 전용 보장: 리포트를 대상 폴더 안에 쓰지 못하게 할 때 쓴다)."""
     if not path or not str(folder):
