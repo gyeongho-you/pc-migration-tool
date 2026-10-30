@@ -886,12 +886,18 @@ def _probe_report(path: str, create: bool) -> str | None:
             os.makedirs(fs.long_path(parent), exist_ok=True)
         if not os.path.isdir(fs.long_path(parent)):
             return None  # 미리보기에서는 없는 폴더를 만들지 않는다(쓸 때 알려 준다)
-        if os.path.isfile(fs.long_path(path)):  # 이미 있는 리포트: 읽기 전용이거나 다른 프로그램이 열고 있으면 옮기기 전에 거부한다
+        if os.path.isfile(fs.long_path(path)):  # 이미 있는 리포트: 실제로 교체(이름 바꾸기)가 되는지 되돌릴 수 있는 방식으로 확인한다
+            swap = Path(path).with_name(Path(path).name + f".pcmigrate-swap-{os.getpid()}")
             try:
-                open(fs.long_path(path), "r+b").close()
+                os.replace(fs.long_path(path), fs.long_path(swap))
+            except OSError as e:  # 읽기 전용 속성은 이름 바꾸기가 되므로 걸리지 않고, 다른 프로그램이 열어 둔 파일은 여기서 걸린다
+                return (f"기존 리포트 파일을 교체할 수 없습니다: {path} (다른 프로그램이 열어 두었거나 권한이 없을 수 있습니다: "
+                        f"{type(e).__name__}). 아무것도 옮기기 전에 멈췄습니다. 그 프로그램을 닫거나 다른 --report 경로를 쓰세요.")
+            try:
+                os.replace(fs.long_path(swap), fs.long_path(path))  # 곧바로 원래 이름으로 되돌린다(데이터는 건드리지 않았다)
             except OSError as e:
-                return (f"기존 리포트 파일에 쓸 수 없습니다: {path} (기존 파일이 읽기 전용이거나 다른 프로그램이 사용 중일 수 있습니다: "
-                        f"{type(e).__name__}). 아무것도 옮기기 전에 멈췄습니다. 속성을 풀거나 다른 --report 경로를 쓰세요.")
+                return (f"기존 리포트 파일을 원래 이름으로 되돌리지 못했습니다: {swap} ({type(e).__name__}). 파일은 그 이름으로 남아 있습니다. "
+                        "아무것도 옮기기 전에 멈췄습니다.")
         probe = parent / f".pcmigrate-report-test-{os.getpid()}"
         with open(fs.long_path(probe), "wb") as h:
             h.write(b"x")
@@ -962,8 +968,14 @@ def _cmd_place(args: argparse.Namespace) -> int:
         try:
             rep.write(Path(report_path))
         except OSError as e:
-            _err(f"결과 리포트를 저장하지 못했습니다: {report_path} ({type(e).__name__}). 기존 파일이 읽기 전용이거나 사용 중일 수 있습니다. "
-                 "이전 리포트는 그대로입니다.")
+            alt = Path(report_path).with_name(Path(report_path).stem + ".new" + (Path(report_path).suffix or ".json"))
+            try:  # 결과 리포트는 항상 남긴다: 대체 이름으로 저장
+                rep.write(alt)
+                _err(f"결과 리포트를 저장하지 못했습니다: {report_path} ({type(e).__name__}). 기존 파일이 읽기 전용이거나 사용 중일 수 있습니다. "
+                     f"대신 {alt} 에 저장했습니다.")
+            except OSError as e2:
+                _err(f"결과 리포트를 저장하지 못했습니다: {report_path} ({type(e).__name__}), 대체 이름도 실패했습니다: {alt} ({type(e2).__name__}). "
+                     "요약은 화면에 출력합니다.")
             rc = 1
     from .transfer_base import DriveDisconnected
     if isinstance(exc, TransferError) and not isinstance(exc, (DriveDisconnected, place_original.DiskFull)):
@@ -1196,7 +1208,8 @@ def build_parser() -> argparse.ArgumentParser:
     fdp.set_defaults(func=_cmd_find_data)
 
     pl = sub.add_parser("place", help="받기 폴더(모드 B 다중 원본 전송 결과)를 원래 위치(같은 드라이브·같은 경로)로 놓는다(기본은 미리보기, --yes 로 실제 적용)",
-                        epilog="종료 코드: 0 = 실패 없음(수동 작업이 남아도 0), 1 = 실패한 파일이 있거나 중단/오류, 130 = 취소, 2 = 잘못된 인자. "
+                        epilog="종료 코드: 0 = 실패한 파일이 없음(수동 작업만 남아도 0), 1 = 실패한 파일이 있거나 결과 리포트를 저장하지 못했거나 --report 가 폴더이거나 중단/오류, "
+                               "130 = 취소, 2 = 잘못된 인자. "
                                "끝났는지는 종료 코드가 아니라 --report/--json 의 success 와 needs_manual 로 판단하세요.")
     pl.add_argument("recv", type=_place_path_arg, help="받기 폴더(.pcmigrate-multi.json 저널이 있거나 <드라이브 문자>\\... 구조)")
     pl.add_argument("--yes", action="store_true", help="미리보기 확인 후 실제로 놓음(같은 볼륨은 이동, 다른 볼륨은 복사·검증 후 받기 폴더에서 삭제)")

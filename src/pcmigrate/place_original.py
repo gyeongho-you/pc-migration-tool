@@ -195,10 +195,8 @@ def _protected_reason(logical: str, *, is_dir: bool = True) -> str | None:
         return None
     if low[0] in ROOT_PROTECTED:
         return f"{parts[0]} 폴더"
-    if not is_dir and low[0] == "users" and len(low) >= 5 and low[-1].endswith(".ps1") and "profile" in low[-1]:
-        di = 2 if low[2] == "documents" else (3 if len(low) >= 6 and low[2].startswith("onedrive") and low[3] == "documents" else None)
-        if di is not None and len(low) == di + 3 and low[di + 1] in ("windowspowershell", "powershell"):  # 사용자 문서 폴더의 실제 프로필 위치만
-            return "PowerShell 프로필(로그인/실행 때 자동으로 실행됨)"
+    if not is_dir and _is_ps_profile(drive, parts, low):
+        return "PowerShell 프로필(로그인/실행 때 자동으로 실행됨)"
     if low[0] == "users" and len(low) >= 3 and low[2] == "appdata":
         return "사용자 AppData"
     if not is_dir and len(low) == 1 and drive.upper() == (envpaths.lookup("SystemDrive") or "C:").upper():
@@ -264,9 +262,22 @@ def _restore_attrs(lpath: str, st) -> None:
         pass
 
 
+def _stream_error_result(err: int, fs_type: str | None) -> list[str] | None:
+    """FindFirstStreamW 실패 코드와 볼륨 파일 시스템으로 '스트림 없음([])'인지 '확인 불가(None)'인지 가른다.
+    NTFS/ReFS 가 아닌 볼륨은 오류 코드와 무관하게 스트림이 없다. 38(끝)/1(잘못된 기능)/50(지원 안 함)은 스트림 미지원으로 본다."""
+    if fs_type and fs_type.upper() not in ("NTFS", "REFS"):
+        return []
+    if err in (38, 1, 50):
+        return []
+    return None
+
+
+volume_fs_fn = fs.filesystem_type  # 시험에서 바꿔 끼운다(GetVolumeInformationW)
+
+
 def _alt_streams(path) -> list[str] | None:
-    """파일의 대체 데이터 스트림(ADS) 이름들(기본 스트림과 Zone.Identifier 제외). 스트림이 없으면 빈 목록,
-    스트림을 지원하지 않는 볼륨(FAT 등)도 빈 목록. 조회가 안 되면(알 수 없음) None — 호출자는 '없음'으로 보지 않는다."""
+    """파일의 대체 데이터 스트림(ADS) 이름들(기본 스트림과 Zone.Identifier 제외). 스트림이 없거나 지원하지 않는 볼륨이면 빈 목록,
+    조회가 안 되면(알 수 없음) None — 호출자는 '없음'으로 보지 않는다."""
     if os.name != "nt":
         return []
     try:
@@ -282,13 +293,7 @@ def _alt_streams(path) -> list[str] | None:
         data = _FindStream()
         h = k.FindFirstStreamW(long_path(path), 0, ctypes.byref(data), 0)
         if h in (None, ctypes.c_void_p(-1).value):
-            err = ctypes.get_last_error()
-            if err == 38:  # ERROR_HANDLE_EOF: 스트림이 없다(빈 파일 등)
-                return []
-            fst = fs.filesystem_type(path)
-            if err == 87 and fst and fst.upper() not in ("NTFS", "REFS"):  # 스트림을 지원하지 않는 볼륨
-                return []
-            return None
+            return _stream_error_result(ctypes.get_last_error(), volume_fs_fn(path))
         names = []
         try:
             while True:
@@ -352,6 +357,36 @@ def _has_files(p, root_level: bool = False) -> bool:
 def _note_scan_errors(errs: list[str], where) -> None:
     if errs:
         errorlog.record(OSError(errs[0]), f"pcmigrate place: 폴더를 끝까지 읽지 못함 {_plain(where)} (읽지 못한 곳 {len(errs)}개)")
+
+
+_DOC_FOLDER_NAMES = frozenset({"documents", "문서", "내 문서", "my documents"})
+
+
+def _known_documents() -> str:
+    """사용자 문서 폴더(Windows 알려진 폴더 조회, 리디렉션/OneDrive 위치 포함). 못 구하면 빈 문자열. 시험에서 바꿔 끼운다."""
+    try:
+        from .find_data import default_user_folders
+        return default_user_folders().get("documents", "") or ""
+    except Exception as e:  # noqa: BLE001 - 보호 판정 보조 조회라 실패해도 다른 규칙으로 판정한다
+        errorlog.record(e, "pcmigrate place: 문서 폴더 조회")
+        return ""
+
+
+known_documents_fn = _known_documents
+
+
+def _is_ps_profile(drive: str, parts: list[str], low: list[str]) -> bool:
+    """`...\\<문서 폴더>\\WindowsPowerShell|PowerShell\\*profile*.ps1` 인가. 문서 폴더는 이름(Documents/문서/내 문서/My Documents), 경로의 Users\\<이름> 또는
+    OneDrive 하위, 알려진 폴더 조회값 중 하나로 판정한다(임의 경로의 백업 복사본은 일반 파일로 허용). Modules\\...\\profile.ps1, profile.ps1.bak, profile.psm1 은 해당 없음."""
+    if len(low) < 3 or not low[-1].endswith(".ps1") or "profile" not in low[-1] or low[-2] not in ("windowspowershell", "powershell"):
+        return False
+    if low[-3] in _DOC_FOLDER_NAMES or (low[0] == "users" and len(low) >= 4) or any(x.startswith("onedrive") for x in low[:-2]):
+        return True
+    known = known_documents_fn()
+    if not known:
+        return False
+    cand = ntpath.normcase(ntpath.normpath(drive + "\\" + "\\".join(parts[:-2])))
+    return ntpath.normcase(ntpath.normpath(known)).rstrip("\\") == cand.rstrip("\\")
 
 
 def name_problem(name: str) -> bool:
@@ -766,8 +801,9 @@ def discover(recv: Path, maps: dict[str, str], include_unverified: bool, warn: C
         name = e.name
         if name.startswith(OWN_PREFIX) or name.endswith(PART_SUFFIX):
             continue
-        if name.lower() in _SYSTEM_ROOT_DIRS or name.lower() in _SYSTEM_FILES:  # 드라이브 루트 모양의 받기 폴더의 시스템 항목(정보로만 알림)
-            meta.setdefault("system_items_ignored", []).append(name)
+        is_dir0 = e.is_dir(follow_symlinks=False)
+        if (is_dir0 and name.lower() in _SYSTEM_ROOT_DIRS) or (not is_dir0 and name.lower() in _SYSTEM_FILES):
+            meta.setdefault("system_items_ignored", []).append(name)  # 드라이브 루트 모양의 받기 폴더의 시스템 폴더/파일(정보로만 알림)
             continue
         cur = recv / name
         isdir = e.is_dir(follow_symlinks=False)
@@ -1638,19 +1674,14 @@ def _account_gather_row(rep: PlaceReport, gat: PlaceReport, gp: _Placer, r: Row,
                           "status": status, "files": done, "summary": dict(gp.unit_counts), "leftover_count": len(gat.leftover) - n0[1]})
 
 
-_BAK_NAME = re.compile(r"\.bak(\.\d+)?$", re.I)
 _BAK_SECTION = "[보관본]"
 _GUIDE_FIRST = "이전 안내:"
 _GUIDE_MARK = "[pcmigrate-place-guide v1]"  # 두 번째 줄의 도구 고유 표식: 첫 줄만 흉내 낸 사용자 파일을 우리 것으로 오인하지 않게 한다
 
 
-def _is_bak_of_existing(full: str) -> bool:
-    m = _BAK_NAME.search(full)
-    return bool(m) and os.path.isfile(long_path(full[:m.start()]))
-
-
-def _guide_entries(rep: PlaceReport, groot: Path) -> tuple[dict[str, str], dict[str, str]]:
-    """이번 실행에서 모은 것의 안내 줄(모은 위치 상대 경로 -> 한 줄)과, 같은 이름 충돌로 밀려난 보관본(.bak) 줄. 보관본은 원위치 목록에 넣지 않는다."""
+def _guide_entries(rep: PlaceReport, groot: Path, bak_set: set[str]) -> tuple[dict[str, str], dict[str, str]]:
+    """이번 실행에서 모은 것의 안내 줄(모은 위치 상대 경로 -> 한 줄)과 보관본(.bak) 줄. 보관본은 이번 실행에서 도구가 실제로 만든 .bak
+    (overwritten 의 backup)과 이전 안내의 [보관본] 목록에서 이월한 경로(bak_set, 소문자 상대 경로)만이다. 사용자의 `draw.dwg.bak` 같은 파일은 정상 원위치 행이다."""
     out: dict[str, str] = {}
     baks: dict[str, str] = {}
     for g in rep.gathered:
@@ -1667,7 +1698,7 @@ def _guide_entries(rep: PlaceReport, groot: Path) -> tuple[dict[str, str], dict[
                 for f in sorted(files):
                     full = os.path.join(root, f)
                     key = os.path.relpath(full, groot)
-                    if _is_bak_of_existing(full):
+                    if os.path.normcase(key) in bak_set:
                         baks[key] = key
                         continue
                     n += 1
@@ -1703,33 +1734,50 @@ def _guide_path(groot: Path) -> Path:
     return p
 
 
+def _read_guide_lines(path: Path, groot: Path) -> tuple[dict[str, str], dict[str, str], str]:
+    """이전 안내 파일에서 (원위치 줄, 보관본 줄, 원문)을 읽는다. 지금도 있는 파일의 줄만 이월한다."""
+    old_entries: dict[str, str] = {}
+    old_baks: dict[str, str] = {}
+    text = path.read_text(encoding="utf-8-sig", errors="replace")
+    in_bak = False
+    for line in text.splitlines():
+        if line.startswith(_BAK_SECTION):
+            in_bak = True
+            continue
+        if in_bak:
+            if line.strip() and not line.startswith("…") and _exists(groot / line.strip()):
+                old_baks[line.strip()] = line.strip()
+            continue
+        parts = line.split(" | ")
+        if len(parts) >= 3 and line != _GUIDE_HEADER and not line.startswith("==="):
+            if _exists(groot / parts[0]):  # 사용자가 이미 옮긴 파일의 줄은 뺀다
+                old_entries[parts[0]] = line
+    return old_entries, old_baks, text
+
+
 def _write_guide(rep: PlaceReport, groot: Path, warn) -> None:
-    """모은 폴더에 이전 안내.txt 를 쓴다(구조/예상 원위치/사유만, 받기 폴더·사용자 경로 없음). 이전 실행의 줄은 지금도 있는 파일이면 합쳐 둔다.
-    같은 이름 충돌로 밀려난 .bak 은 '보관본' 구역에만 적고 원위치 줄로 올리지 않는다. 기존 안내 파일을 바꿀 때는 .bak 으로 보관한다.
-    실패해도 중단하지 않고 보고한다."""
+    """모은 폴더에 이전 안내.txt 를 쓴다(구조/예상 원위치/사유만, 받기 폴더·사용자 경로 없음). 이전 실행의 줄은 지금도 있는 파일이면 합쳐 둔다
+    (안내 파일이 없고 우리 .bak 만 남은 경우도 그 .bak 에서 이월). 같은 이름 충돌로 밀려난 .bak 은 도구가 실제로 만든 것만 '보관본' 구역에 적는다.
+    기존 안내 파일을 바꿀 때는 우리 표식이 있는 .bak 만 덮고(아니면 번호 .bak), 바꾸는 도중 취소/오류가 나면 되돌린다. 실패해도 중단하지 않고 보고한다."""
     path = _guide_path(groot)
+    bak_path = path.with_name(path.name + ".bak")
+    tmp = path.with_name(path.name + PART_SUFFIX)
     try:
-        entries, baks = _guide_entries(rep, groot)
+        old_entries: dict[str, str] = {}
+        old_baks: dict[str, str] = {}
         old_text = ""
-        if _exists(path):
+        src_old = path if _exists(path) else (bak_path if _exists(bak_path) and _is_our_guide(bak_path) else None)  # 바꾸다 죽었으면 .bak 에서 이월
+        if src_old is not None:
             try:
-                old_text = path.read_text(encoding="utf-8-sig", errors="replace")
-                in_bak = False
-                for line in old_text.splitlines():
-                    if line.startswith(_BAK_SECTION):
-                        in_bak = True
-                        continue
-                    if in_bak:
-                        if line.strip() and not line.startswith("…") and _exists(groot / line.strip()):
-                            baks.setdefault(line.strip(), line.strip())
-                        continue
-                    parts = line.split(" | ")
-                    if len(parts) >= 3 and line != _GUIDE_HEADER and not line.startswith("==="):
-                        key = parts[0]
-                        if key not in entries and _exists(groot / key):  # 사용자가 이미 옮긴 파일의 줄은 뺀다
-                            entries[key] = line
+                old_entries, old_baks, old_text = _read_guide_lines(src_old, groot)
             except OSError as e:
-                errorlog.record(e, f"pcmigrate place: 이전 안내.txt 읽기 {path}")
+                errorlog.record(e, f"pcmigrate place: 이전 안내.txt 읽기 {src_old}")
+        made = {os.path.normcase(os.path.relpath(x["backup"], groot)) for x in (rep.gather_rep.overwritten if rep.gather_rep else []) if x.get("backup")}
+        entries, baks = _guide_entries(rep, groot, made | {os.path.normcase(k) for k in old_baks})
+        for k, v in old_entries.items():
+            entries.setdefault(k, v)
+        for k, v in old_baks.items():
+            baks.setdefault(k, v)
         head = ["이전 안내: 원래 위치에 놓을 수 없어 이 폴더에 모은 항목입니다. 아래 '예상 원위치'로 직접 옮기세요.",
                 f"(파일 내용 안의 경로는 고쳐 쓰지 않았습니다.) {_GUIDE_MARK}", "", _GUIDE_HEADER]
         lines, size = list(head), sum(len(x.encode("utf-8")) + 2 for x in head)
@@ -1742,7 +1790,7 @@ def _write_guide(rep: PlaceReport, groot: Path, warn) -> None:
             lines.append(entries[k])
             size += n
         if baks:
-            lines += ["", f"{_BAK_SECTION} 이전에 모은 같은 이름 파일의 보관본(덮어쓰기 전 .bak)입니다. 원위치 목록이 아닙니다 — 필요 없으면 지워도 됩니다."]
+            lines += ["", f"{_BAK_SECTION} 이전에 모은 같은 이름 파일의 보관본입니다(내용을 확인한 뒤 정리하세요). 원위치 목록이 아닙니다."]
             for k in sorted(baks, key=str.lower):
                 if size > GUIDE_MAX_BYTES:
                     lines.append("… 보관본 목록은 용량 한도로 생략했습니다")
@@ -1753,26 +1801,35 @@ def _write_guide(rep: PlaceReport, groot: Path, warn) -> None:
         rep.gather_info["guide_file"] = str(path)
         rep.gather_info["guide_lines"] = len(entries)
         rep.gather_info["guide_backups"] = len(baks)
-        if old_text and old_text.replace("\r\n", "\n") == text:
+        if old_text and src_old == path and old_text.replace("\r\n", "\n") == text:
             return  # 내용이 같으면 다시 쓰지 않는다(.bak 이 쌓이지 않게)
-        tmp = path.with_name(path.name + PART_SUFFIX)
         os.makedirs(groot, exist_ok=True)
         tmp.write_text(text, encoding="utf-8-sig")
         bak = None
-        if _exists(path):
-            bak = path.with_name(path.name + ".bak")  # 바꾸기 전 안내 파일은 .bak 한 벌로 보관한다(실행마다 쌓이지 않게)
-            os.replace(long_path(path), long_path(bak))
         try:
-            os.replace(tmp, path)
-        except OSError:
-            if bak is not None:
-                os.replace(long_path(bak), long_path(path))
+            if _exists(path):
+                bak = bak_path
+                if _exists(bak) and not _is_our_guide(bak):
+                    bak = copier._backup_path(path)  # 우리 것이 아닌 .bak 은 덮지 않고 번호 .bak 으로 보관한다
+                os.replace(long_path(path), long_path(bak))
+            os.replace(long_path(tmp), long_path(path))
+        except BaseException:  # 취소/오류가 이 사이에 나도 이전 안내 파일을 제자리로 되돌린다
+            if bak is not None and not _exists(path):
+                try:
+                    os.replace(long_path(bak), long_path(path))
+                except OSError:
+                    pass
             raise
     except OSError as e:
         errorlog.record(e, f"pcmigrate place: 이전 안내.txt 쓰기 {path}")
         rep.gather_info.pop("guide_file", None)
         rep.gather_info["guide_error"] = f"{type(e).__name__}: {failure.classify(e, str(path)).label}"
         warn(f"이전 안내.txt 를 쓰지 못했습니다({rep.gather_info['guide_error']}). 모은 항목 표는 리포트에 있습니다.")
+    finally:
+        try:
+            os.unlink(long_path(tmp))
+        except OSError:
+            pass
 
 
 def _finish(rep: PlaceReport, recv: Path, apply: bool, keep: bool, t0: float) -> None:
@@ -1940,4 +1997,8 @@ def summary_lines(rep: PlaceReport) -> list[str]:
     elif rep.manual_count - len([f for f in rep.failed if not f.via_gather]) > 0 or rep.leftover or rep.gathered:
         lines.append("다음 할 일: " + ("모은 폴더의 안내 파일을 보고 모은 항목을 직접 놓고, " if rep.gathered else "")
                      + "건너뜀/남은 항목 표의 파일은 사용자가 직접 옮기세요('현재 위치'/'모은 위치' 열이 지금 파일이 있는 곳입니다).")
+    elif rep.needs_manual:
+        lines.append("다음 할 일: " + ("확인할 경고(리포트의 warnings)를 살펴보고 " if rep.warnings else "")
+                     + ("받기 폴더에 남은 파일(리포트의 remaining_in_receive)을 확인해 직접 처리하세요." if rep.remaining.get("files") or rep.remaining.get("unreadable")
+                        else "필요한 조치를 직접 하세요."))
     return lines

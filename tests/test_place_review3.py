@@ -38,6 +38,7 @@ def set_attrs(path: Path, flags: int) -> None:
 def get_attrs(path: Path) -> int:
     return os.stat(long_path(path)).st_file_attributes
 
+WIN = pytest.mark.skipif(os.name != "nt", reason="Windows 전용(속성/ADS)")
 
 DEEP = "/".join(["d" * 60] * 5)  # 5 * 61 = 305 글자
 
@@ -101,6 +102,7 @@ def test_unreadable_folder_is_reported_not_swallowed(tmp_path, monkeypatch):
 
 
 # --------------------------------------------------------------------------- R2 읽기 전용 원본
+@WIN
 def test_read_only_source_is_deleted_after_verified_copy(tmp_path):
     e = Env(tmp_path, letters="D")
     f = put(e.recv / "D" / "p" / "ro.txt", b"readonly-data")
@@ -112,6 +114,7 @@ def test_read_only_source_is_deleted_after_verified_copy(tmp_path):
     assert get_attrs(e.drives / "D" / "p" / "ro.txt") & stat.FILE_ATTRIBUTE_READONLY  # 속성은 대상에 옮겨진다(R6)
 
 
+@WIN
 def test_read_only_source_attribute_clear_failure_names_read_only(tmp_path, monkeypatch):
     e = Env(tmp_path, letters="D")
     f = put(e.recv / "D" / "p" / "ro.txt", b"x")
@@ -194,6 +197,7 @@ def test_gathered_file_named_like_guide_keeps_guide_separate(tmp_path):
 
 
 # --------------------------------------------------------------------------- R6 속성/ADS/폴더 메타
+@WIN
 def test_attributes_and_folder_meta_are_copied_across_volumes(tmp_path):
     e = Env(tmp_path, letters="D")
     f = put(e.recv / "D" / "p" / "h.txt", b"hidden-data")
@@ -211,6 +215,7 @@ def test_attributes_and_folder_meta_are_copied_across_volumes(tmp_path):
     assert rep.to_dict()["warnings"] == []
 
 
+@WIN
 def test_ads_source_is_not_deleted_and_reported(tmp_path):
     e = Env(tmp_path, letters="D")
     f = put(e.recv / "D" / "p" / "with_ads.txt", b"main")

@@ -14,6 +14,7 @@ from test_place_original import BIG, Env, put, tree
 
 NOPROT = lambda p, **k: None  # noqa: E731
 
+WIN = pytest.mark.skipif(os.name != "nt", reason="Windows 전용(속성/ADS)")
 
 @pytest.fixture
 def cli_env(tmp_path, monkeypatch):
@@ -81,18 +82,19 @@ def test_applied_overwrites_are_listed_with_separate_cap(tmp_path, monkeypatch):
 
 
 # --------------------------------------------------------------------------- S4/S5 리포트
-def test_existing_read_only_report_is_rejected_before_anything_moves(cli_env, tmp_path, capsys):
+def test_existing_read_only_report_is_replaced_and_old_one_kept_as_bak(cli_env, tmp_path, capsys):
+    """읽기 전용 속성은 이름 바꾸기가 되므로 막지 않는다: 새 리포트를 저장하고 이전 리포트는 .bak 으로 보관한다."""
     e = cli_env
     put(e.recv / "D" / "p" / "a.txt", b"a")
     rp = put(tmp_path / "r.json", b"{}")
     os.chmod(rp, stat.S_IREAD)
     try:
-        before = tree(e.recv)
-        assert cli.main(["place", str(e.recv), "--yes", "--report", str(rp)]) == 1
-        err = capsys.readouterr().err
-        assert "읽기 전용" in err and tree(e.recv) == before and not (e.drives / "D" / "p" / "a.txt").exists()
+        assert cli.main(["place", str(e.recv), "--yes", "--report", str(rp)]) == 0
+        assert json.loads(rp.read_text(encoding="utf-8"))["placed_files"] == 1
+        assert (tmp_path / "r.json.bak").read_bytes() == b"{}"
     finally:
-        os.chmod(rp, stat.S_IWRITE | stat.S_IREAD)
+        for f in tmp_path.glob("r.json*"):
+            os.chmod(f, stat.S_IWRITE | stat.S_IREAD)
 
 
 def test_report_rerun_keeps_previous_as_numbered_bak_even_on_long_paths(cli_env, tmp_path):
@@ -128,6 +130,7 @@ def test_report_inside_receive_is_rejected_before_probe_and_preview_does_not_cre
 
 
 # --------------------------------------------------------------------------- S6/S7 ADS
+@WIN
 def test_ads_lookup_failure_is_unknown_not_none(tmp_path):
     f = put(tmp_path / "plain.txt", b"x")
     assert po._alt_streams(f) == []
@@ -143,6 +146,7 @@ def test_unknown_ads_keeps_source(tmp_path, monkeypatch):
     assert "확인하지 못해" in rep.leftover[0].reason
 
 
+@WIN
 def test_skipped_identical_copy_gets_attributes_repaired(tmp_path):
     import ctypes
     e = Env(tmp_path, letters="D")
@@ -155,6 +159,7 @@ def test_skipped_identical_copy_gets_attributes_repaired(tmp_path):
     assert os.stat(d).st_file_attributes & stat.FILE_ATTRIBUTE_HIDDEN  # 앞 실행이 속성 복사 전에 멈춘 경우를 보정
 
 
+@WIN
 def test_preview_does_not_plan_deleting_ads_sources(tmp_path):
     e = Env(tmp_path, letters="D")
     f = put(e.recv / "D" / "p" / "with_ads.txt", b"main")
@@ -221,26 +226,22 @@ def test_powershell_profile_rule_is_limited_to_user_documents():
 
 
 # --------------------------------------------------------------------------- S12 잠긴 읽기 전용 원본
-def test_locked_read_only_source_restores_attributes_and_names_the_cause(tmp_path, monkeypatch):
+@WIN
+def test_locked_read_only_source_restores_attributes_and_names_the_cause(tmp_path):
+    """실제로 열려 있는 파일(공유 삭제 없음)로 재현한다: 속성은 풀 수 있지만 삭제가 막혀 원래 속성을 되돌리고 '사용 중'으로 보고."""
     e = Env(tmp_path, letters="D")
     f = put(e.recv / "D" / "p" / "ro.txt", b"x")
     os.chmod(f, stat.S_IREAD)
-    real = os.unlink
-
-    def unlink(path, *a, **k):
-        if str(path).endswith("ro.txt") and "recv" in str(path):
-            err = PermissionError(13, "sharing")
-            err.winerror = 32  # 다른 프로세스가 파일을 사용 중
-            raise err
-        return real(path, *a, **k)
-    monkeypatch.setattr(os, "unlink", unlink)
+    h = open(f, "rb")  # 다른 프로그램이 열어 둔 것과 같다
     try:
         rep = e.run(apply=True, same_volume_fn=lambda a, b: False)
         assert [r.code for r in rep.leftover] == [po.LEFTOVER] and "사용 중" in rep.leftover[0].reason  # 읽기 전용 해제 실패가 아니다
         assert os.stat(f).st_file_attributes & stat.FILE_ATTRIBUTE_READONLY  # 원래 속성으로 되돌렸다
+        assert (e.drives / "D" / "p" / "ro.txt").read_bytes() == b"x"  # 대상에는 온전히 있다
     finally:
-        monkeypatch.undo()
+        h.close()
         os.chmod(f, stat.S_IWRITE | stat.S_IREAD)
+
 
 
 # --------------------------------------------------------------------------- S13/S14 문구
