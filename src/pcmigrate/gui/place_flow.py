@@ -47,6 +47,8 @@ class PlaceState:
     warnings: list = field(default_factory=list)  # 작업 중 백엔드가 알려 준 경고(쉬운 말로 바꾼 것)
     saved_path: str = ""  # 결과 리포트를 실제로 저장한 위치
     save_note: str = ""  # 저장 대체/실패 안내
+    report_stale: bool = False  # 받은 폴더/옵션을 바꿔서 화면의 결과가 '이전 결과'가 됨
+    auto_report: str = ""  # 결과 리포트 기본 저장 위치(비워 둔 칸의 값: 놓을 때마다 새로 정한다. 화면이 채운 기본값은 여기에만 있고 report_path 에 저장하지 않는다)
     run_id: int = 0  # 실행 번호(강제 중단된 옛 작업이 새 작업의 상태를 덮지 않게)
 
 
@@ -54,6 +56,7 @@ class PlaceState:
 class PlaceCheck(PathCheck):
     """입력 점검 결과: ok/lines/info/warnings 는 PathCheck 와 같고, 아래는 화면이 쓰는 추가 정보."""
     drives: list = field(default_factory=list)  # 받은 폴더 맨 위의 드라이브 폴더 문자
+    recv_ok: bool = False  # 받은 폴더 자체는 올바르다(다른 입력 문제와 따로 본다)
     maps: dict | None = None  # 점검을 통과한 {원본 문자: 대상 문자}
     gather_folder: str = ""  # 모을 폴더(모으기를 켰을 때)
     gather_onedrive: bool = False
@@ -75,7 +78,7 @@ def plain_cli(text: str) -> str:
     for old, new in _AGAIN:
         out = out.replace(old, new)
     out = out.replace("저널", "받기 기록").replace("(verify)", "")
-    out = re.sub(r"`[^`]*--[^`]*`", "명령 창의 'pcmigrate join'", out)  # 명령줄 예시(백틱으로 감싼 것)
+    out = re.sub(r"`[^`]*--[^`]*`", "(README 의 4GB 분할 파일 안내 참고)", out)  # 명령줄 예시(백틱으로 감싼 것)
     out = re.sub(r"\s*\([^()]*--[a-z][^()]*\)", "", out)  # '(--gather=폴더)' 같은 괄호 안내
     for opt, word in _OPTION_WORDS.items():
         out = re.sub(re.escape(opt) + r"(?:=[^\s,.)]*)?", word, out)
@@ -130,13 +133,14 @@ def place_summary(rep: Any) -> dict:
         else:
             over_n += int(g.overwritten_count)
             dest_newer += int(g.overwritten_newer_count)
+    move_n = int((getattr(rep, "modes", {}) or {}).get(po.MOVE, 0)) + (int((g.modes or {}).get(po.MOVE, 0)) if g is not None else 0)  # 같은 드라이브 이동 예정/처리 파일 수
     remaining = dict(rep.remaining or {})
     gi = dict(rep.gather_info or {})
     return {
         "preview": preview, "interrupted": interrupted, "why": T.PL_WHY.get(interrupted, interrupted),
         "keep": bool(rep.keep), "placed_n": placed_n, "placed_bytes": placed_bytes, "same_n": same,
         "manual_n": int(rep.manual_count), "failed_n": int(rep.failed_count), "overwrite_n": over_n, "dest_newer_n": dest_newer,
-        "delete_n": delete_n, "delete_bytes": delete_bytes, "removed_n": int(rep.removed_sources) + (int(g.removed_sources) if g is not None else 0),
+        "move_n": move_n, "delete_n": delete_n, "delete_bytes": delete_bytes, "removed_n": int(rep.removed_sources) + (int(g.removed_sources) if g is not None else 0),
         "remaining_files": int(remaining.get("files", 0) or 0), "remaining_bytes": int(remaining.get("bytes", 0) or 0),
         "unreadable": int(remaining.get("unreadable", 0) or 0),
         "gather": bool(gi), "gather_folder": str(gi.get("folder", "")), "gather_n": len(rep.gathered),
@@ -254,7 +258,7 @@ def place_todo_lines(rep: Any, warnings: list[str] | None = None) -> list[str]:
     if codes - covered - {po.INSIDE_RECEIVE, po.SAME_LOCATION}:
         lines.append(T.PL_TODO_OTHER)
     if rep.warnings:
-        lines.append(T.PL_TODO_WARNINGS.format(n=len(rep.warnings)))
+        lines.append((T.PL_TODO_WARNINGS_PREVIEW if rep.dry_run else T.PL_TODO_WARNINGS).format(n=len(rep.warnings)))
         for w in rep.warnings[:MAX_WARNING_LINES]:
             lines.append("  " + f"{fs.plain_path_text(w.get('expected', ''))} | {plain_cli(w.get('text', ''))}")
     if warnings:  # 작업 중 알려 드린 내용(받기 기록이 없다는 안내 등)
@@ -268,6 +272,8 @@ def place_todo_lines(rep: Any, warnings: list[str] | None = None) -> list[str]:
 def place_notes(rep: Any, sm: dict) -> list[str]:
     """요약 아래 안내 줄들(대상이 더 새로움, 받은 폴더에 남은 것, 읽지 못한 곳, 모으기 결과, 실패 안내)."""
     notes: list[str] = []
+    if sm["preview"] and sm["move_n"] and not sm["keep"]:  # 같은 드라이브 이동: 삭제 예정은 아니지만 받은 폴더에서 사라진다(확인 체크는 요구하지 않는다)
+        notes.append(T.PL_MOVE_NOTE.format(n=sm["move_n"]))
     if sm["dest_newer_n"]:
         notes.append((T.PL_DEST_NEWER if sm["preview"] else T.PL_DEST_NEWER_DONE).format(n=sm["dest_newer_n"]))
     if not sm["preview"]:
@@ -296,10 +302,12 @@ def place_confirm_text(rep: Any, keep: bool, report_path: str) -> str:
     sm = place_summary(rep)
     if keep:
         delete = T.PL_CONFIRM_KEEP
-    elif sm["delete_n"]:
-        delete = T.PL_CONFIRM_DELETE.format(n=sm["delete_n"], size=_size(sm["delete_bytes"]))
-        delete += "\n  " + T.PL_SAME_VOLUME_NOTE
     else:
-        delete = T.PL_CONFIRM_DELETE_NONE
+        parts = []
+        if sm["move_n"]:  # 이동만이면 '지우는 파일: 없음' 대신 이동 안내, 섞이면 이동과 삭제를 둘 다 보인다
+            parts.append(T.PL_CONFIRM_MOVE.format(n=sm["move_n"]))
+        if sm["delete_n"]:
+            parts.append(T.PL_CONFIRM_DELETE.format(n=sm["delete_n"], size=_size(sm["delete_bytes"])))
+        delete = "\n".join(parts) or T.PL_CONFIRM_DELETE_NONE
     return T.PL_CONFIRM.format(n=sm["placed_n"], size=_size(sm["placed_bytes"]), over=sm["overwrite_n"], delete=delete,
                                manual=sm["manual_n"], report=report_path)

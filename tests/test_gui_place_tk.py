@@ -57,6 +57,17 @@ def shown(ctx, w):
     return occupies(w, ctx.app)
 
 
+def wait_for(ctx, cond, secs=5.0):
+    """백그라운드 찾기/미룬 입력 반영을 기다린다(창 이벤트를 돌리며)."""
+    end = time.time() + secs
+    while time.time() < end:
+        ctx.app.update()
+        if cond():
+            return True
+        time.sleep(0.02)
+    return bool(cond())
+
+
 def go(ctx, screen):
     ctx.c.go(screen)
     ctx.app.update()
@@ -77,6 +88,7 @@ def labels_of(widget):
 def run_preview(ctx, v):
     v.recv_var.set(str(ctx.recv))
     v.rep_var.set(str(ctx.tmp / "out" / "r.json"))
+    v._flush()  # 글자 입력은 잠깐 모았다가 반영하므로 버튼이 켜지게 먼저 반영한다
     ctx.app.update()
     v.preview_btn.invoke()
     ctx.app.update()
@@ -123,9 +135,11 @@ def test_found_received_folders_combobox_fills_entry(ctx, monkeypatch):
     monkeypatch.setattr(Controller, "scan_packages_on_show", True)
     ctx.c.received_dirs = lambda: [str(ctx.recv)]
     v = go(ctx, S.PLACE)
-    assert v.found_row.winfo_manager() and len(v.found_box.cget("values")) == 1
+    assert wait_for(ctx, lambda: v.found_row.winfo_manager())  # 찾기는 백그라운드로 읽고 화면이 가져다 그린다
+    assert len(v.found_box.cget("values")) == 1
     v.found_box.current(0)
     v.found_box.event_generate("<<ComboboxSelected>>")
+    v._flush()
     ctx.app.update()
     assert v.recv_var.get() == str(ctx.recv) and ctx.c.place_state.recv == str(ctx.recv)
     assert "✔" in v.check_label.cget("text") or T.ICON_OK in v.check_label.cget("text")
@@ -253,6 +267,7 @@ def test_gather_option_shows_folder_row_and_onedrive_notice(ctx):
     assert shown(ctx, v.gather_other_btn) and v.gather_other_btn.cget("text") == T.BTN_PL_GATHER_OTHER
     assert "빈" in v.gather_field.hint.cget("text") or "비워" in v.gather_field.hint.cget("text")
     v.gather_dir_var.set(str(ctx.tmp / "모은곳"))  # 직접 고르면 OneDrive 밖이라 안내가 사라진다
+    v._flush()
     ctx.app.update()
     assert not shown(ctx, v.warn_label) and not shown(ctx, v.gather_other_btn)
     v.gather_var_on.set(False)
@@ -268,11 +283,14 @@ def test_map_rows_feed_the_controller(ctx):
     v._add_map_row()  # '+ 줄 추가' 는 빈 줄을 더한다(빈 줄은 무시)
     v.map_rows[1]["src"].set("E")
     v.map_rows[1]["dst"].set("F")
+    v._flush()
     ctx.app.update()
     assert ctx.c.place_state.maps == [("D", "E"), ("E", "F")]
     v._del_map_row(v.map_rows[1])
+    v._flush()
     assert ctx.c.place_state.maps == [("D", "E")]
     v._del_map_row(v.map_rows[0])  # 마지막 줄은 지우지 않고 비운다
+    v._flush()
     assert len(v.map_rows) == 1 and ctx.c.place_state.maps == [("", "")]
 
 
@@ -350,3 +368,61 @@ def test_roadmap_has_new_place_item(ctx):
     assert dlg.progress_label.cget("text") == T.ROADMAP_PROGRESS.format(n=0, total=13)
     assert T.ROADMAP_NEW[3][0] == "new3b" and any("받은 파일을 원래 위치로 놓습니다" in t for t in labels_of(dlg))
     dlg.destroy()
+
+
+# =========================================================================== stage54: 리뷰 수정(화면 쪽)
+def test_typing_is_debounced_and_default_report_is_not_stored(ctx):
+    v = go(ctx, S.PLACE)
+    default = v.rep_var.get()
+    assert default and ctx.c.place_state.report_path == ""  # 화면이 채운 기본값은 상태에 저장하지 않는다
+    for text in ("E", "E:", str(ctx.recv)):  # 글자를 칠 때마다 점검하지 않고 잠깐 모았다가 한 번만 한다
+        v.recv_var.set(text)
+    assert ctx.c.place_state.recv == "" and v._change_job is not None
+    assert wait_for(ctx, lambda: ctx.c.place_state.recv == str(ctx.recv), secs=3)
+    assert ctx.c.place_state.report_path == "" and v._change_job is None
+    v.rep_var.set(str(ctx.tmp / "mine.json"))  # 사용자가 직접 정한 값은 저장한다
+    v._flush()
+    assert ctx.c.place_state.report_path == str(ctx.tmp / "mine.json")
+
+
+def test_default_report_name_is_new_after_an_apply(ctx):
+    v = go(ctx, S.PLACE)
+    ctx.api.place_result = lambda recv, kw: make_report(recv, dry_run=not kw["apply"], keep=kw["keep"], delete=0, total=2)
+    v.recv_var.set(str(ctx.recv))
+    v._flush()
+    first = v.rep_var.get()
+    v.preview_btn.invoke()
+    ctx.app.update()
+    v.go_btn.invoke()
+    ctx.app.update()
+    assert ctx.c.place_state.saved_path == first
+    assert v.rep_var.get() != first and ctx.c.place_state.report_path == ""  # 다음 놓기는 새 이름(이전 리포트를 덮지 않는다)
+
+
+def test_old_result_is_marked_when_recv_or_options_change_and_preview_wording(ctx):
+    v = go(ctx, S.PLACE)
+    ctx.api.place_result = lambda recv, kw: make_report(recv, dry_run=not kw["apply"], keep=kw["keep"], delete=0, total=2,
+                                                        warnings=[{"expected": "D:/a", "text": "확인 필요"}])
+    run_preview(ctx, v)
+    assert T.PL_STALE_HEAD not in v.head_label.cget("text")
+    v.todo_fold.toggle()
+    assert T.PL_TODO_WARNINGS_PREVIEW.format(n=1) in v.todo_label.cget("text")
+    v.keep_var.set(True)  # 옵션을 바꾸면 화면의 결과는 '이전 결과'
+    ctx.app.update()
+    assert v.head_label.cget("text").startswith(T.PL_STALE_HEAD) and not shown(ctx, v.delete_box)
+    run_preview(ctx, v)
+    assert T.PL_STALE_HEAD not in v.head_label.cget("text")
+
+
+def test_late_forced_stop_result_reaches_the_screen_through_pump(ctx):
+    v = go(ctx, S.PLACE)
+    ctx.api.place_result = lambda recv, kw: make_report(recv, dry_run=not kw["apply"], keep=kw["keep"], delete=0, total=2)
+    run_preview(ctx, v)
+    s = ctx.c.place_state
+    s.run_id += 1
+    holder = {"rep": make_report(ctx.recv, dry_run=False, meta={"interrupted": "cancelled"}), "exc": None, "warns": [], "saved": str(ctx.tmp / "late.json"),
+              "note": "", "finished": True}
+    ctx.c._place_late.append((holder, s.run_id, True))
+    ctx.c.pump()
+    ctx.app.update()
+    assert str(ctx.tmp / "late.json") in v.save_label.cget("text") and T.PL_WHY["cancelled"] in v.head_label.cget("text")

@@ -120,6 +120,7 @@ class Controller(FilesMixin, NetMixin, PackageFindMixin, ScanMixin, ExportMixin,
         self._in_listener_error = False
         self.auto: AutoRun | None = None  # '추천대로 한 번에' 진행 상태(없으면 None)
         self.place_state = PlaceState()  # stage50: 받은 파일 원래 위치에 놓기 화면의 상태
+        self._place_late: list = []  # 강제로 버린 놓기 작업 중 아직 끝나지 않은 것(stage54)
         self.drive_lister: Callable[[], list] | None = None  # 시험에서 가짜 드라이브 목록을 넣는 자리
         if hasattr(self.runner, "on_callback_error"):
             self.runner.on_callback_error = self._callback_failed
@@ -152,7 +153,8 @@ class Controller(FilesMixin, NetMixin, PackageFindMixin, ScanMixin, ExportMixin,
             self._in_listener_error = False
 
     def pump(self) -> int:
-        return self.runner.pump()
+        n = self.runner.pump()
+        return n + self._place_poll_late()  # stage54: 강제로 버린 받은 파일 놓기가 늦게 끝났는지(UI 스레드에서 화면 상태를 올린다)
 
     def report_error(self, exc: BaseException, context: str = "", tb: str = "") -> FriendlyError:
         """오류를 로그 파일에 기록하고 오류 대화상자용 FriendlyError 를 만든다(로그에 설치 목록/파일 내용은 쓰지 않는다)."""

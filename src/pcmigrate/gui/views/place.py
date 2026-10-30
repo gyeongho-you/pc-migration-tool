@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import os
+import threading
 import time
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -45,6 +46,10 @@ class PlaceView(BaseView):
         self.scroll = scroll
         self._loading = False  # 화면이 값을 채우는 동안에는 상태로 되돌려 쓰지 않는다
         self._last_drives: list[str] = []  # 받은 폴더 맨 위의 드라이브 폴더(드라이브 바꾸기의 왼쪽 목록)
+        self._default_report = ""  # 화면이 결과 리포트 칸에 채운 기본값(이 값 그대로면 상태에는 '비어 있음'으로 알린다)
+        self._change_job = None  # 글자 입력 뒤 점검을 미루는 after 작업(키 입력마다 폴더를 읽지 않게)
+        self._found_gen = 0  # 받은 폴더 찾기(백그라운드) 요청 번호
+        self._shown_stale = False  # 결과 영역이 '이전 결과' 표시로 그려져 있는가
 
         # ---- 1) 받은 폴더
         self.recv_var, self.rep_var = tk.StringVar(), tk.StringVar()
@@ -235,7 +240,29 @@ class PlaceView(BaseView):
             self.recv_var.set(self.found_entries[idx][0])
 
     def _scan_found(self) -> None:
-        self.found_entries = self.c.place_choices()
+        """받은 폴더 자동 찾기는 백그라운드 스레드에서 읽고, 화면(위젯)은 UI 스레드가 after 로 가져다 그린다."""
+        self._found_gen += 1
+        gen, box = self._found_gen, {"r": None}
+
+        def work() -> None:
+            try:
+                box["r"] = self.c.place_choices()
+            except Exception:  # noqa: BLE001 - place_choices 가 이미 오류 로그를 남기고 빈 목록을 돌려준다. 만약을 위해 화면만 계속 쓰게 한다
+                box["r"] = []
+        t = threading.Thread(target=work, daemon=True, name="pcmigrate-place-find")
+        t.start()
+
+        def poll() -> None:
+            if gen != self._found_gen:  # 더 새 요청이 있다
+                return
+            if t.is_alive():
+                self.after(80, poll)
+            else:
+                self._apply_found(box["r"] or [])
+        self.after(40, poll)
+
+    def _apply_found(self, entries: list) -> None:
+        self.found_entries = entries
         labels = [T.PL_FOUND_ITEM.format(when=time.strftime("%Y-%m-%d %H:%M", time.localtime(m)), where=where,
                                          folder=T.ellipsize_path(p, 50)) for p, m, _size, where in self.found_entries]
         self.found_box.configure(values=labels)
@@ -292,18 +319,48 @@ class PlaceView(BaseView):
     def _sync_state(self) -> None:
         if self._loading:
             return
+        report = clean_path(self.rep_var.get())
+        if report == self._default_report:  # 화면이 채운 기본값은 상태에 저장하지 않는다(놓을 때마다 컨트롤러가 새로 정한다)
+            report = ""
         self.c.place_set(recv=clean_path(self.recv_var.get()), maps=self._map_pairs(), keep=self.keep_var.get(), no_overwrite=self.over_var.get(),
                          include_unverified=self.unv_var.get(), gather_on=self.gather_var_on.get(), gather_dir=clean_path(self.gather_dir_var.get()),
-                         report_path=clean_path(self.rep_var.get()))
+                         report_path=report)
 
     def _options_changed(self) -> None:
-        self._changed()
+        self._changed_now()
 
     def _changed(self) -> None:
+        """글자 입력(받은 폴더, 모을 폴더, 리포트 위치, 드라이브 선택)은 잠깐 모아서 한 번만 점검한다."""
+        if self._loading:
+            return
+        if self._change_job is not None:
+            self.after_cancel(self._change_job)
+        self._change_job = self.after(250, self._changed_now)
+
+    def _changed_now(self) -> None:
+        if self._change_job is not None:
+            self.after_cancel(self._change_job)
+            self._change_job = None
         if self._loading:
             return
         self._sync_state()
         self._check()
+
+    def _flush(self) -> None:
+        """미뤄 둔 입력 반영이 있으면 지금 한다(버튼을 누르기 직전, 시험)."""
+        if self._change_job is not None:
+            self._changed_now()
+
+    def _refresh_default_report(self) -> None:
+        """결과 리포트 칸이 비어 있거나 기본값 그대로면 컨트롤러의 새 기본값으로 바꾼다(놓기를 마치면 새 이름이 된다)."""
+        new = self.c.place_default_report()
+        if self.rep_var.get() in ("", self._default_report) and new != self._default_report:
+            self._default_report = new
+            self._loading = True
+            try:
+                self.rep_var.set(new)
+            finally:
+                self._loading = False
 
     def _check(self):
         s = self.c.place_state
@@ -346,10 +403,15 @@ class PlaceView(BaseView):
 
     def on_show(self) -> None:
         s = self.c.place_state
+        self.c.place_recheck()  # 화면을 열 때는 폴더 상태를 새로 읽는다
+        if self._change_job is not None:
+            self.after_cancel(self._change_job)
+            self._change_job = None
         self._loading = True
         try:
             self.recv_var.set(s.recv)
-            self.rep_var.set(s.report_path or self.c.place_default_report())
+            self._default_report = self.c.place_default_report()
+            self.rep_var.set(s.report_path or self._default_report)
             self.keep_var.set(s.keep)
             self.over_var.set(s.no_overwrite)
             self.unv_var.set(s.include_unverified)
@@ -372,10 +434,12 @@ class PlaceView(BaseView):
 
     # ------------------------------------------------------------------ 실행
     def _preview(self) -> None:
+        self._flush()
         self._sync_state()
         self.guarded(self.c.start_place, apply=False)
 
     def _go(self) -> None:
+        self._flush()
         self._sync_state()
         msg = self.c.place_confirm_message()
         if not messagebox.askyesno(T.PL_CONFIRM_TITLE, msg, icon="warning", parent=self):
@@ -400,7 +464,10 @@ class PlaceView(BaseView):
     def on_event(self, kind, payload) -> None:
         if kind in ("busy", "place_changed"):
             self._update_buttons()
+            if kind == "place_changed" and self.c.place_state.report_stale != self._shown_stale:
+                self._render_result()  # 받은 폴더/옵션을 바꿨다: 화면의 결과를 '이전 결과' 로 다시 그린다
         if kind == "place_done":
+            self._refresh_default_report()
             self._render_result()
             self._update_buttons()
 
@@ -418,7 +485,8 @@ class PlaceView(BaseView):
                 self.paths[key][iid] = (r["path"], bool(r.get("select")))
         tree.configure(height=max(2, min(8, len(rows))))
         more = len(rows) - MAX_TABLE_ROWS
-        self.more_labels[key].configure(text=T.PL_TABLE_MORE.format(shown=MAX_TABLE_ROWS) if more > 0 else "")
+        more_text = T.PL_TABLE_MORE_PREVIEW if preview else T.PL_TABLE_MORE  # 미리보기는 리포트 파일을 저장하지 않는다
+        self.more_labels[key].configure(text=more_text.format(shown=MAX_TABLE_ROWS) if more > 0 else "")
         set_shown(fold, bool(rows))
         if rows:
             names = {"overwrite": (T.PL_FOLD_OVERWRITE, T.PL_FOLD_OVERWRITE_OPEN) if preview else (T.PL_FOLD_OVERWRITTEN, T.PL_FOLD_OVERWRITTEN_OPEN),
@@ -428,6 +496,7 @@ class PlaceView(BaseView):
 
     def _render_result(self) -> None:
         r = self.c.place_result()
+        self._shown_stale = bool(r.get("stale"))
         has = bool(r.get("sm"))
         note = r.get("stopped_note", "")
         self.empty_note.configure(text="" if (has or note) else T.PL_RESULT_EMPTY)
@@ -448,14 +517,14 @@ class PlaceView(BaseView):
             self.open_recv_btn.state(["!disabled"] if self.c.place_state.recv else ["disabled"])
             return
         sm = r["sm"]
-        self.head_label.configure(text=r["head"])
+        self.head_label.configure(text=(T.PL_STALE_HEAD + "\n" if r.get("stale") else "") + r["head"])  # 받은 폴더/옵션을 바꾼 뒤에는 '이전 결과' 표시
         self.summary.set(r["line"], r["level"])
         lines = [x for x in (note, T.PL_STOPPED_ERROR_LOG if sm["interrupted"] and sm["error_log"] else "") if x]
         if lines:
             self.stopped_box.set("\n".join(lines), "danger")
         else:
             self.stopped_box.clear()
-        if r["preview"] and sm["delete_n"] and not sm["keep"]:  # 큰 숫자 한 줄: 받은 폴더에서 지울 파일 N개 / 용량
+        if r["preview"] and sm["delete_n"] and not sm["keep"] and not r.get("stale"):  # 큰 숫자 한 줄: 받은 폴더에서 지울 파일 N개 / 용량
             self.delete_big.configure(text=T.PL_DELETE_BIG.format(n=sm["delete_n"], size=size_text(sm["delete_bytes"])))
             set_shown(self.delete_box, True)
         else:

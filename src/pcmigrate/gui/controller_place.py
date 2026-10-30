@@ -17,7 +17,7 @@ from .. import api as real_api
 from .. import errorlog, fs
 from .. import place_original as po
 from ..cancel import Cancelled
-from ..transfer import TransferError
+from ..transfer import DriveDisconnected, TransferError
 from . import state as S
 from . import texts as T
 from .controller_common import GuardError, RECEIVED_MAX_DIRS, norm_path
@@ -36,6 +36,7 @@ class PlaceMixin:
     place_desktop_fn: Callable[[], str] | None = None  # 시험에서 바탕화면 위치를 바꿔 끼우는 자리(None 이면 백엔드 기본: Windows 알려진 폴더)
     place_env: dict | None = None  # 시험에서 환경변수(OneDrive 위치)를 바꿔 끼우는 자리
     place_protected_fn: Callable | None = None  # 시험에서 '보호 위치' 판정을 바꿔 끼우는 자리(임시 폴더가 AppData 아래라서)
+    _place_chk: Any = None  # 입력 점검 결과 캐시((입력 값들), PlaceCheck): 한 번 계산해 화면 갱신 한 번에 여러 곳이 같이 쓴다
 
     # ------------------------------------------------------------------ 화면 드나들기
     def place_open(self, from_screen: str, recv: str = "") -> None:
@@ -63,6 +64,7 @@ class PlaceMixin:
         미리보기 때와 달라지면 미리보기는 무효가 되어, 보지 않은 내용으로 놓지 못하게 한다."""
         s = self.place_state
         changed = False
+        old_key = self._place_key()
         for name in ("recv", "keep", "no_overwrite", "include_unverified", "gather_on", "gather_dir", "report_path"):
             if name not in opts:
                 continue
@@ -77,6 +79,9 @@ class PlaceMixin:
                 s.maps, changed = maps, True
         if not changed:
             return
+        self._place_chk = None
+        if s.report is not None and self._place_key() != old_key:  # 받은 폴더/옵션이 바뀌면 화면의 결과는 '이전 결과'
+            s.report_stale = True
         if s.preview_key is not None and s.preview_key != self._place_key():
             s.preview_key, s.preview_stale, s.ack = None, True, False
         self.emit("place_changed")
@@ -86,12 +91,23 @@ class PlaceMixin:
         self.emit("place_changed")
 
     def place_default_report(self) -> str:
-        """결과 리포트 기본 저장 위치: 바탕화면\\이전 결과\\place-리포트-날짜시각.json (이름만 만들며 폴더는 만들지 않는다)."""
+        """결과 리포트 기본 저장 위치(칸을 비워 뒀을 때): 바탕화면\\이전 결과\\place-리포트-날짜시각.json (이름만 만들며 폴더는 만들지 않는다).
+        같은 값을 화면 표시·확인창·실행이 함께 쓰고, 그 파일이 생기면(놓기가 끝나면) 다음 호출은 새 이름을 만든다(이전 리포트를 덮지 않는다).
+        화면이 이 값을 입력칸에 채워도 report_path(사용자가 정한 값)에는 저장하지 않는다."""
+        s = self.place_state
+        if s.auto_report and not os.path.exists(s.auto_report):
+            return s.auto_report
         try:
             desktop = self.default_desktop()
         except Exception:  # noqa: BLE001 - 바탕화면을 못 찾으면 사용자 폴더 아래로
             desktop = os.path.expanduser("~")
-        return os.path.join(desktop, "이전 결과", time.strftime("place-리포트-%Y%m%d-%H%M%S.json"))
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        path, n = os.path.join(desktop, "이전 결과", f"place-리포트-{stamp}.json"), 1
+        while os.path.exists(path):
+            n += 1
+            path = os.path.join(desktop, "이전 결과", f"place-리포트-{stamp}-{n}.json")
+        s.auto_report = path
+        return path
 
     def place_gather_default(self) -> str:
         """모을 폴더를 비워 두면 쓰는 기본 폴더(문구용)."""
@@ -189,12 +205,26 @@ class PlaceMixin:
                 lines.append((False, T.PL_CHECK_REPORT_DIR.format(path=rep)))
             elif recv and real_api.report_inside(rep, recv):
                 lines.append((False, T.G_PL_REPORT_INSIDE))
+        chk.recv_ok = bool(recv_ok)
         chk.ok = bool(recv_ok) and all(ok for ok, _ in lines)
         return chk
 
     def place_check_state(self) -> PlaceCheck:
+        """지금 입력의 점검 결과. 같은 입력이면 저장해 둔 결과를 다시 쓴다(키 입력마다 폴더를 여러 번 읽지 않게). 입력이 바뀌거나
+        place_recheck()/실행 뒤에는 다시 계산한다."""
         s = self.place_state
-        return self.check_place_inputs(s.recv, s.maps, s.gather_on, s.gather_dir, s.report_path or self.place_default_report())
+        report = s.report_path or self.place_default_report()
+        key = (s.recv, tuple(s.maps), s.gather_on, s.gather_dir, report)
+        cached = self._place_chk
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        chk = self.check_place_inputs(s.recv, s.maps, s.gather_on, s.gather_dir, report)
+        self._place_chk = (key, chk)
+        return chk
+
+    def place_recheck(self) -> None:
+        """저장해 둔 입력 점검 결과를 버린다(화면을 열 때, 놓기/미리보기가 끝난 뒤: 폴더 상태가 바뀌었을 수 있다)."""
+        self._place_chk = None
 
     def place_reasons(self) -> tuple[str, str]:
         """(미리보기 버튼이 막힌 이유, 놓기 버튼이 막힌 이유). 빈 문자열이면 눌러도 됨."""
@@ -229,7 +259,7 @@ class PlaceMixin:
             return names, 2 if self.state.busy_label == T.TASK_PLACE_PREVIEW else 3
         if s.preview_key is not None and s.preview_key == self._place_key():
             return names, 3
-        if not s.recv or not self.check_place_inputs(s.recv).ok:
+        if not s.recv or not self.place_check_state().recv_ok:
             return names, 1
         return names, 2
 
@@ -329,10 +359,41 @@ class PlaceMixin:
         except Exception as e:  # noqa: BLE001 - 저장 오류가 작업 결과/원래 예외를 가리지 않게
             errorlog.record(e, "받은 파일 놓기: 결과 리포트 저장")
             saved, note = "", T.PL_REPORT_FAILED
-        holder["saved"], holder["note"] = saved, note
-        s = self.place_state
-        if s.run_id == run_id:  # 강제로 버린 옛 작업이 늦게 끝나도 새 작업의 상태를 덮지 않는다
-            s.saved_path, s.save_note = saved, note
+        holder["saved"], holder["note"] = saved, note  # 화면 상태는 UI 스레드(done/fail/_place_poll_late)만 바꾼다
+
+    def _place_minimal_report(self, recv: str, apply: bool, kw: dict, exc: BaseException) -> Any:
+        """백엔드가 부분 결과(.report)를 주지 못한 예외 때의 최소 리포트: 멈춘 이유, 옵션, 시각만 담는다(파일 내용·오류 상세 없음)."""
+        rep = po.PlaceReport(dry_run=not apply, keep=bool(kw.get("keep")), recv=recv, maps=dict(kw.get("maps") or {}))
+        why = ("cancelled" if isinstance(exc, (Cancelled, KeyboardInterrupt)) else "disk_full" if isinstance(exc, po.DiskFull)
+               else "drive_disconnected" if isinstance(exc, DriveDisconnected) else "error")
+        rep.meta.update({"interrupted": why, "minimal": True, "finished": time.strftime("%Y-%m-%d %H:%M:%S"),
+                         "error": plain_cli(str(exc)) if isinstance(exc, TransferError) else type(exc).__name__,
+                         "options": {"keep": bool(kw.get("keep")), "no_overwrite": bool(kw.get("no_overwrite")),
+                                     "include_unverified": bool(kw.get("include_unverified")), "gather": kw.get("gather") is not None,
+                                     "maps": len(kw.get("maps") or {})}})
+        return rep
+
+    def _place_poll_late(self) -> int:
+        """강제로 버린 작업이 늦게 끝났는지 본다(UI 스레드의 pump 가 부른다): 끝났으면 그 결과와 리포트 저장 위치를 화면에 올린다."""
+        late = getattr(self, "_place_late", None)
+        if not late:
+            return 0
+        s, n = self.place_state, 0
+        for item in list(late):
+            holder, run_id, apply = item
+            if not holder.get("finished"):
+                continue
+            late.remove(item)
+            n += 1
+            if s.run_id != run_id or self.state.busy:  # 그 사이 새 작업이 시작됐으면 새 작업의 상태를 덮지 않는다
+                continue
+            rep = holder.get("rep")
+            if rep is not None:
+                s.report, s.was_preview, s.warnings, s.stopped_note = rep, not apply, list(holder["warns"]), ""
+                s.stopped, s.report_stale = "cancelled" if isinstance(holder.get("exc"), Cancelled) else "error", False
+            s.saved_path, s.save_note = holder.get("saved", ""), holder.get("note", "")
+            self.emit("place_done", rep)
+        return n
 
     def start_place(self, apply: bool = False, write_confirmed: bool = False, ack: bool | None = None, **opts: Any) -> None:
         """미리보기(apply=False) 또는 놓기(apply=True). 놓기는 같은 입력·옵션의 미리보기, 확인창의 '예'(write_confirmed),
@@ -376,7 +437,7 @@ class PlaceMixin:
             kw["env"] = self.place_env
         if self.place_protected_fn is not None:
             kw["protected_fn"] = self.place_protected_fn
-        holder: dict = {"rep": None, "exc": None, "warns": [], "saved": "", "note": ""}
+        holder: dict = {"rep": None, "exc": None, "warns": [], "saved": "", "note": "", "finished": False, "minimal": False}
 
         def work(progress, token):
             def warn(msg: str) -> None:
@@ -391,16 +452,22 @@ class PlaceMixin:
                 return rep
             except BaseException as e:  # noqa: BLE001 - Cancelled/TransferError/DriveDisconnected/DiskFull/예외: 부분 결과를 붙여 다시 던진다
                 holder["rep"], holder["exc"] = getattr(e, "report", None), e
+                if holder["rep"] is None:  # 부분 결과 없이 멈춘 예외: 최소 리포트를 만들어 그래도 결과를 남긴다
+                    holder["rep"], holder["minimal"] = self._place_minimal_report(recv, apply, kw, e), True
                 if isinstance(e, TransferError):  # 오류 대화상자에 명령줄 옵션 이름이 보이지 않게
                     e.args = (plain_cli(str(e)),)
                 raise
             finally:
-                if apply:
-                    self._place_save(holder, report_path, run_id)
+                try:
+                    if apply:
+                        self._place_save(holder, report_path, run_id)
+                finally:
+                    holder["finished"] = True
 
         def adopt(rep: Any) -> None:
             s.report, s.was_preview, s.warnings = rep, not apply, list(holder["warns"])
-            s.stopped, s.stopped_note = "", ""
+            s.stopped, s.stopped_note, s.report_stale = "", "", False
+            self._place_chk = None  # 폴더 상태가 바뀌었을 수 있다
             if apply:
                 s.saved_path, s.save_note = holder.get("saved", ""), holder.get("note", "")
                 s.preview_key, s.ack = None, False  # 놓은 뒤에는 새 미리보기가 있어야 다시 놓을 수 있다
@@ -418,8 +485,15 @@ class PlaceMixin:
             rep, exc = holder.get("rep"), holder.get("exc")
             adopt(rep)
             s.stopped = "cancelled" if isinstance(exc, Cancelled) else ("error" if exc is not None else "forced")
-            if rep is None:
+            if not apply:  # 중간에 멈춘 미리보기는 '미리보기를 마친 것'이 아니다: 이전 미리보기로 놓기가 켜져 있지 않게 무효로 한다
+                s.preview_key, s.preview_stale, s.ack = None, False, False
+            if exc is None:  # 강제 중단: 작업이 아직 도는 중이다. 끝나면 결과/저장 위치를 pump 가 올린다
                 s.stopped_note = T.PL_STOPPED_NO_REPORT.format(path=report_path) if apply else T.STOP_DONE_PLACE_PREVIEW
+                if not hasattr(self, "_place_late"):
+                    self._place_late = []
+                self._place_late.append((holder, run_id, apply))
+            elif holder.get("minimal") and not isinstance(exc, Cancelled):
+                s.stopped_note = T.PL_ERR_MINIMAL
             self.emit("place_done", rep)
 
         label = T.TASK_PLACE if apply else T.TASK_PLACE_PREVIEW
@@ -449,4 +523,4 @@ class PlaceMixin:
         return {"sm": sm, "head": place_head(sm), "line": place_summary_line(sm), "level": place_level(sm),
                 "notes": place_notes(rep, sm), "rows": place_rows(rep), "todo": place_todo_lines(rep, s.warnings),
                 "warnings": list(s.warnings), "preview": sm["preview"], "stopped_note": s.stopped_note,
-                "saved_path": s.saved_path, "save_note": s.save_note, "stopped": s.stopped}
+                "saved_path": s.saved_path, "save_note": s.save_note, "stopped": s.stopped, "stale": s.report_stale}

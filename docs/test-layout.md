@@ -54,6 +54,12 @@
 | `tests/test_stage38_winget_select.py` | `tests/test_winget_select_export.py` | 설치 확인에서 골라 winget.json 내보내기 |
 | `tests/test_stage39_gui.py` | `tests/test_gui_ethernet_setup.py` | 이더넷 주소 맞추기 컨트롤러/화면 |
 | `tests/test_stage39_net.py` | `tests/test_ethernet_setup.py` | 이더넷 주소 임시 맞추기(net_setup) |
+| `tests/test_place_final.py` | `tests/test_place_guide_overwritten_report_safety.py` | place: 안내 파일 보호, 덮어쓴 목록, ADS/분할 조각 안내, 리포트 사전 점검(리뷰 최종 재검증 회귀) |
+| `tests/test_place_last.py` | `tests/test_place_powershell_profile_user_bak.py` | place: 한글 Windows 문서 폴더 PowerShell 프로필 보호, 사용자 .bak 분류, 리포트 저장 보강 |
+| `tests/test_place_review3.py` | `tests/test_place_long_paths_attrs_split_reports.py` | place: 긴 경로, 읽기 전용·ADS·속성, 분할 조각, 리포트 원자 저장, 보호 위치, 성능 |
+| `tests/test_place_followup.py` | `tests/test_place_partial_cancel_toctou.py` | place: 모으는 중 취소/공간 부족의 부분 항목, FAT 시각 허용, 링크 재확인(TOCTOU), ~ 확장 |
+| `tests/test_place_fixes.py` | `tests/test_place_links_conflicts_space.py` | place: 링크/정션 방어, 긴 경로 .bak, 드라이브 바꾸기 충돌, 기록 상태, 용량 점검 |
+| `tests/test_place_gather_paths.py` | `tests/test_place_gather_guide_onedrive.py` | place --gather: 경로 처리, 안내 파일, 부분 모으기, 재실행 수렴, OneDrive 거부 |
 
 ## 테스트에서 값을 바꿀 때(패치) 주의
 
