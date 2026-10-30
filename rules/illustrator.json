@@ -1,0 +1,34 @@
+{
+  "id": "illustrator",
+  "name": "Adobe Illustrator",
+  "version": "1",
+  "detect": {
+    "display_name_patterns": [
+      "Adobe Illustrator"
+    ],
+    "install_paths": [],
+    "registry_keys": []
+  },
+  "paths": [
+    {
+      "path": "%APPDATA%\\Adobe\\Adobe Illustrator * Settings",
+      "dest": "illustrator/settings",
+      "kind": "dir",
+      "description": "Illustrator 환경설정 폴더(Adobe Illustrator <버전> Settings, 언어/x64 하위 폴더 포함)"
+    }
+  ],
+  "manual_warnings": [
+    "Adobe 계정 로그인과 구독 라이선스는 복원하지 않습니다. 신 PC 에서 Creative Cloud 앱으로 로그인해 Illustrator 를 설치하세요(자체 이전 항목 'Adobe Creative Cloud' 와 같은 안내).",
+    "신 PC 의 Illustrator 버전이 구 PC 와 다르면 환경설정이 호환되지 않거나 새로 만들어질 수 있습니다. 같은 버전을 설치하세요.",
+    "브러시/심볼/스와치/그래픽 스타일/작업 영역은 Illustrator 의 라이브러리 저장·작업 영역 내보내기 기능이나 Creative Cloud 라이브러리로 따로 옮기세요(환경설정 폴더에 모두 들어 있다고 확인되지 않았습니다).",
+    "플러그인과 스크립트는 설치 폴더(Program Files)에 있어 복원하지 않습니다. 신 PC 에서 다시 설치하세요.",
+    "글꼴은 신 PC 에 따로 설치해야 합니다(AI 파일의 문자가 다른 글꼴로 보일 수 있음).",
+    "GPU/드라이버 의존 설정(GPU 성능 미리보기 등)은 신 PC 의 그래픽 환경에서 다시 확인하세요."
+  ],
+  "notes": "근거 등급(경로): %APPDATA%\\Adobe\\Adobe Illustrator <버전> Settings = 공식 문서 확인(Adobe 'Troubleshoot preferences file issues' https://helpx.adobe.com/illustrator/kb/troubleshoot-preference-issues.html: %AppData%\\Adobe\\Adobe Illustrator <version> Settings, 언어에 따라 폴더 이름이 다를 수 있음 — 페이지 직접 열람은 403 으로 실패해 검색 결과 발췌로 확인). 하위 <언어>\\x64\\Adobe Illustrator Prefs 구조는 Adobe 커뮤니티 글(예: Illustrator 26 에서 ...\\Adobe Illustrator 26 Settings\\en_US\\x64\\Adobe Illustrator Prefs)에 근거한 일반 지식·확인 필요. 버전 번호는 연도가 아니라 릴리스 번호(예: 26=2022)라 와일드카드로 모든 버전을 담는다. 제외한 것: 라이선스(*.lic), 임시/로그(*.tmp, *.log). 확인 필요: 브러시/스와치/작업 영역의 저장 위치, 한국어 설치의 폴더 이름. 계정·구독은 selftransfer 의 adobe_cc 가 담당하므로 이 규칙은 설정 파일만 다룬다. 감지: 표시 이름 'Adobe Illustrator' 부분일치(표시 이름 자체는 일반 지식·확인 필요).",
+  "exclude": [
+    "*.lic",
+    "*.tmp",
+    "*.log"
+  ]
+}

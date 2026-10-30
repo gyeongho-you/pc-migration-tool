@@ -1,0 +1,41 @@
+{
+  "id": "photoshop",
+  "name": "Adobe Photoshop",
+  "version": "1",
+  "detect": {
+    "display_name_patterns": [
+      "Adobe Photoshop"
+    ],
+    "install_paths": [],
+    "registry_keys": [],
+    "exclude_display_name_patterns": [
+      "Elements",
+      "Lightroom",
+      "Express",
+      "Camera Raw"
+    ]
+  },
+  "paths": [
+    {
+      "path": "%APPDATA%\\Adobe\\Adobe Photoshop *\\Adobe Photoshop * Settings",
+      "dest": "photoshop/settings",
+      "kind": "dir",
+      "description": "Photoshop 환경설정 폴더(Adobe Photoshop <버전> Settings): 환경설정 파일과 사용자 설정(버전별)"
+    }
+  ],
+  "manual_warnings": [
+    "Adobe 계정 로그인과 구독 라이선스는 복원하지 않습니다. 신 PC 에서 Creative Cloud 앱으로 로그인해 Photoshop 을 설치하세요(자체 이전 항목 'Adobe Creative Cloud' 와 같은 안내).",
+    "신 PC 의 Photoshop 버전이 구 PC 와 다르면 환경설정이 호환되지 않거나 무시될 수 있습니다. 같은 버전을 설치하세요.",
+    "브러시/패턴/액션/스타일 같은 프리셋은 환경설정 폴더가 아닌 곳(설치 폴더의 Presets, Creative Cloud 라이브러리, 사용자 지정 내보내기 파일 .abr/.atn 등)에 있을 수 있습니다. Photoshop 의 프리셋 관리자/내보내기로 따로 저장해 옮기세요.",
+    "플러그인(.8bf 등)은 설치 폴더(Program Files)에 있어 복원하지 않습니다. 신 PC 에서 다시 설치하세요.",
+    "글꼴은 신 PC 에 따로 설치해야 합니다(PSD 의 문자가 다른 글꼴로 보일 수 있음).",
+    "GPU/드라이버 의존 설정(그래픽 프로세서 사용 등)은 신 PC 의 그래픽 환경에서 다시 확인하세요.",
+    "색상 프로필(.icc/.icm)은 사용자 지정 경로를 쓰므로 자동으로 모으지 않습니다. 필요하면 직접 복사하세요."
+  ],
+  "notes": "근거 등급(경로): %APPDATA%\\Adobe\\Adobe Photoshop <버전>\\Adobe Photoshop <버전> Settings = 공식 문서 확인(Adobe 'Reset preferences in Photoshop' https://helpx.adobe.com/photoshop/desktop/get-started/settings-and-preferences/reset-preferences.html 의 수동 방법: C:\\Users\\<사용자>\\AppData\\Roaming\\Adobe\\Adobe Photoshop <버전>\\Adobe Photoshop <버전> Settings — 페이지 직접 열람은 403 으로 실패해 검색 결과 발췌로 확인, 대학 IT 문서 https://services.pitt.edu/TDClient/44/HSITServices/KB/Article/3567/Adobe-Application-File-Locations-for-Troubleshooting-Windows-and-macOS 가 같은 경로를 제시, Adobe 커뮤니티 글이 2025 의 'Adobe Photoshop 2025\\Adobe Photoshop 2025 Settings' 를 확인). 그 폴더 안 파일 구성(작업 영역/단축키/프리셋 포함 여부)은 일반 지식·확인 필요. 제외한 것: 임시/로그(*.tmp, *.log), 라이선스(*.lic). 플러그인(Program Files)·Common Files 은 허용 루트 밖이라 넣지 않았다. 확인 필요: 프리셋(브러시/패턴/액션)의 사용자 위치, 한국어 설치에서 폴더 이름이 달라지는지. 계정·구독은 selftransfer 의 adobe_cc 가 담당하므로 이 규칙은 설정 파일만 다룬다. 감지: 표시 이름 'Adobe Photoshop' 부분일치(Elements/Lightroom/Express/Camera Raw 제외; 표시 이름 자체는 일반 지식·확인 필요).",
+  "exclude": [
+    "*.lic",
+    "*.tmp",
+    "*.log"
+  ]
+}

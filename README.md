@@ -737,16 +737,16 @@ python -m pcmigrate discover --output-selection <폴더>\selection.json
 | `transfer` (대용량) | 복사(robocopy) **시작 전에** 대상에 있는 같은 이름의 **다른** 파일(크기가 다르거나 수정시각이 2초 넘게 다름)을 같은 폴더의 `<이름>.bak`(이미 있으면 `.bak.1`)으로 **이름만 바꿔 보존**한 뒤 복사합니다(데이터를 다시 쓰지 않아 빠르지만, **기존 파일은 `.bak` 으로 남아 공간을 계속 차지하고 새 파일 크기만큼 여유 공간이 더 필요합니다** — 여유 공간 검사와 `--dry-run` 이 이를 반영하고, 같은 대상에 여러 번 실행하면 `.bak` 이 쌓이니 확인한 뒤 직접 지우세요). 같은 파일은 건드리지 않습니다. `--dry-run` 이 덮어쓸 파일 수를 경고로 알려 주고, 실제 실행 뒤 리포트의 `preserved_existing_count`/`preserved_existing`(앞 200개)에 기록합니다. 보존에 실패하면(파일 사용 중 등) **복사를 시작하지 않고** 멈추며, 그때까지 `.bak` 으로 옮긴 파일은 원래 이름으로 되돌립니다(되돌리지 못한 파일이 있으면 그 이름을 알려 줍니다. 아무것도 덮어쓰지 않음). `--strict` 로 다시 복사할 때 내용이 어긋난 사본도 `.bak` 으로 남깁니다. |
 | `export/discover/checklist --output` | 같은 이름 파일이 있으면 `.bak` 으로 보존합니다. |
 
-**규칙별 복원 범위** (`rules/*.json` 22개). 복원할 폴더/파일 경로가 있는 규칙과, 감지해서 수동 작업만 안내하는 "경고 전용" 규칙이 있습니다.
+**규칙별 복원 범위** (`rules/*.json` 25개). 복원할 폴더/파일 경로가 있는 규칙과, 감지해서 수동 작업만 안내하는 "경고 전용" 규칙이 있습니다.
 
 | 구분 | 규칙 |
 |---|---|
-| 설정/템플릿 폴더를 패키지에 담고 복원 (10) | AutoCAD, Civil 3D, Enscape, JetBrains, Lumion, QGIS, Revit, Rhino, SketchUp, VS Code |
-| **경고 전용: 감지해서 수동 작업만 안내, 파일은 복원하지 않음 (12)** | ArchiCAD, ArcGIS Pro, Bluebeam, 웹 브라우저(Chrome/Edge/Firefox), EzLoad(이지로드), GeoStudio, MicroStation, MIDAS, Navisworks, PLAXIS, Trimble Business Center, V-Ray |
+| 설정/템플릿 폴더를 패키지에 담고 복원 (12) | AutoCAD(AutoCAD LT 포함), Civil 3D, Enscape, Illustrator, JetBrains, Lumion, Photoshop, QGIS, Revit, Rhino, SketchUp, VS Code |
+| **경고 전용: 감지해서 수동 작업만 안내, 파일은 복원하지 않음 (13)** | ArchiCAD, ArcGIS Pro, Bluebeam, 웹 브라우저(Chrome/Edge/Firefox), EzLoad(이지로드), GeoStudio, MicroStation, MIDAS, Navisworks, PLAXIS, Trimble Business Center, V-Ray, ZWCAD(경로 근거 부족) |
 
 **보안상 복원하지 않는 형식**: 실행/스크립트/라이브러리 형식(`.exe .dll .js .py .bat .lnk .msi .jar .xll .chm` 등), 시작 프로그램/XLSTART 폴더, 셸·SSH 시작 설정, 홈의 `.npmrc/.wslconfig/.condarc/.kube/config/.docker/config.json` 등은 `export` 때 같은 판정으로 패키지에서 빼고(경고와 `manifest.skipped` 의 `denied`), `import` 때는 **패키지 전체를 막지 않고 그 파일만 "복원 안 함(denied)"** 으로 표시한 채 나머지를 정상 복원합니다(결과/리포트에 항목별로 남고 실패로 세지 않습니다. 변조된 패키지가 이 위치에 쓰려 해도 쓰지 않습니다). 규칙이 마지막 경로 패턴에 `*.dll` 처럼 그 확장자를 직접 적어 둔 경우에만 그 규칙에서 허용합니다. 예: QGIS 플러그인의 `.py` 는 복원되지 않으므로 신 PC 에서 플러그인 관리자로 다시 설치하세요.
 
-경고 전용 프로그램의 설정은 각 프로그램의 자체 내보내기/동기화 기능으로 옮기세요(체크리스트에 안내가 나옵니다). 위 표의 근거 등급(원문/요약/미검증)은 각 규칙 파일의 `notes` 에 있습니다.
+경고 전용 프로그램의 설정은 각 프로그램의 자체 내보내기/동기화 기능으로 옮기세요(체크리스트에 안내가 나옵니다). 위 표의 근거 등급(원문/요약/미검증)은 각 규칙 파일의 `notes` 에 있습니다. 규칙이 아직 없는 프로그램(3DF Zephyr, DJI Terra, ArchiOffice, GPU-Z 등)의 설정 위치 확인 절차는 `docs/program-rules-todo.md` 에 있습니다.
 
 **프로그램 설치는 안내만 합니다.** `export` 는 설치 목록(`winget export` 와 레지스트리)을 패키지에 담고, 신 PC 의 `checklist --package` 와 GUI 체크 목록이
 **`winget import -i winget.json ...` 와 `winget install --id ...` 명령을 문장으로 보여 줄 뿐**, 도구가 `winget import` 나 설치를 자동으로 실행하지는 않습니다. 보여 준 명령을 직접 실행하세요.

@@ -10,7 +10,8 @@ REPO_RULES = Path(__file__).resolve().parents[1] / "rules"
 NEW_RULES = ["rhino", "sketchup", "archicad", "lumion", "enscape", "bluebeam"]
 WARNING_ONLY = ["vray", "navisworks", "browser"]
 CIVIL_RULES = ["civil3d", "qgis", "midas", "ezload", "plaxis", "geostudio", "tbc", "microstation", "arcgispro"]
-ALL_IDS = {"revit", "autocad", "vscode", "jetbrains", *NEW_RULES, *WARNING_ONLY, *CIVIL_RULES}
+STAGE49_RULES = ["zwcad", "photoshop", "illustrator"]
+ALL_IDS = {"revit", "autocad", "vscode", "jetbrains", *NEW_RULES, *WARNING_ONLY, *CIVIL_RULES, *STAGE49_RULES}
 
 
 @pytest.fixture(scope="module")

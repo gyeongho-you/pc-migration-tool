@@ -1,0 +1,24 @@
+{
+  "id": "zwcad",
+  "name": "ZWSOFT ZWCAD",
+  "version": "1",
+  "detect": {
+    "display_name_patterns": [
+      "ZWCAD"
+    ],
+    "install_paths": [],
+    "registry_keys": []
+  },
+  "paths": [],
+  "manual_warnings": [
+    "ZWCAD 라이선스(시리얼/계정/네트워크 라이선스)는 복원하지 않습니다. 신 PC 에서 다시 활성화하세요.",
+    "동글(하드웨어 락)이나 네트워크 라이선스를 쓰는 환경이면 자동 복원이 불가합니다. 수동으로 확인하세요.",
+    "설정 이전은 구 PC 의 OP(옵션) 명령 > 프로필(Profiles) 탭에서 프로필을 내보내고, 신 PC 에서 가져오세요. 신 PC 의 ZWCAD 버전이 구 PC 와 다르면 호환되지 않을 수 있으니 같은 버전을 설치하세요.",
+    "사용자 글꼴(SHX/TTF), 플롯 스타일(.ctb/.stb), 선종류/해치(.lin/.pat), 템플릿(.dwt)은 ZWSOFT 안내상 설치 폴더나 사용자 지정 경로에 있을 수 있습니다. 구 PC 의 OP > 파일(Files) 탭에서 경로를 확인해 그 폴더를 직접 복사하세요(자동으로 모으지 않습니다).",
+    "레지스트리(HKEY_CURRENT_USER\\SOFTWARE\\ZWSoft\\ZWCAD) 설정은 복원하지 않습니다."
+  ],
+  "notes": "근거 등급: 경로 없음(경고 전용). 공식 문서 확인(제한적): ZWSOFT 안내 'How to Reset ZWCAD to Default Settings'(https://www.zwsoft.com/user-guide/how-to-reset-zwcad-to-default-settings)는 Win+R 의 %appdata% 아래 ZWCAD 폴더(버전별)와 레지스트리 HKEY_CURRENT_USER\\SOFTWARE\\ZWSoft\\ZWCAD 에 설정이 있다고만 하며, 하위 폴더 구조와 2026 버전의 정확한 경로·내용은 제공하지 않는다. 확인 필요: %APPDATA% 아래 정확한 폴더 구조(예: ZWSoft 폴더 여부), 사용자 지원 파일(메뉴 .cuix/.cui, 별칭 .pgp, 플롯 스타일)의 위치, 템플릿 위치 — 구 PC 에서 'pcmigrate discover --program ZWCAD' 로 확인한 뒤 규칙에 추가(docs/program-rules-todo.md 참고). ZWCAD 2026 의 설치 목록 표시 이름은 확인하지 못해 '일반 지식·확인 필요' 로 'ZWCAD' 부분일치를 썼다. 근거가 없는 경로는 paths 에 넣지 않았다.",
+  "exclude": [
+    "*.lic"
+  ]
+}
