@@ -71,7 +71,7 @@ def test_cli_gather_drive_root_relative_form_rejected(cenv, capsys):
 def test_cli_gather_tilde_expands_to_home(cenv, capsys):
     rc = cli.main(["place", str(cenv.recv), "--gather", "~/__pcm_gather_test__", "--json"])  # 미리보기: 아무것도 만들지 않는다
     out = json.loads(capsys.readouterr().out)
-    assert rc == 0 and out["gather"]["folder"] == os.path.join(os.path.expanduser("~"), "__pcm_gather_test__")
+    assert rc == 0 and os.path.normpath(out["gather"]["folder"]) == os.path.normpath(os.path.join(os.path.expanduser("~"), "__pcm_gather_test__"))
     assert not os.path.exists(out["gather"]["folder"])
 
 
@@ -155,11 +155,11 @@ def test_onedrive_default_gather_cannot_be_applied_even_with_yes(genv, tmp_path,
     with pytest.raises(TransferError) as ei:
         genv.run(apply=True, **kw)
     msg = str(ei.value)
-    assert "--gather 폴더" in msg and "--yes 로도 적용할 수 없습니다" in msg and "후보" in msg
+    assert "--gather=폴더" in msg and "--yes 로도 적용할 수 없습니다" in msg and "후보" in msg
     assert (tree(genv.recv), tree(genv.drives)) == before and not (desk / po.GATHER_DIR_NAME).exists()
     warns = []
     rep = genv.run(warn=warns.append, **kw)  # 미리보기는 가능(경고와 대안 안내)
-    assert rep.gather_info["onedrive_blocked"] is True and any("--gather 폴더" in w for w in warns)
+    assert rep.gather_info["onedrive_blocked"] is True and any("--gather=폴더" in w for w in warns)
 
 
 def test_onedrive_explicit_folder_warns_but_proceeds(genv, tmp_path):
@@ -244,7 +244,7 @@ def test_partial_gather_updates_rows_counts_and_expected_paths(tmp_path, monkeyp
     assert d["failed"][0]["expected"] == "D:\\Windows\\b.dll"  # 실패 행도 원래 놓으려던 경로
     assert d["manual_count"] == 2  # 건너뜀 1(남은 것) + 모은 1, 실패 행은 이중 집계하지 않음
     assert any(i["origin"] == "gather" and i["status"] == "partial" for i in d["items"])
-    assert "'현재 위치' 열" in "\n".join(po.summary_lines(rep)) and "그대로 있습니다" not in "\n".join(po.summary_lines(rep))
+    assert "'현재 위치'" in "\n".join(po.summary_lines(rep)) and "현재 위치의 파일은 그대로 있습니다" not in "\n".join(po.summary_lines(rep))
 
 
 # --------------------------------------------------------------------------- G5/G6/G7

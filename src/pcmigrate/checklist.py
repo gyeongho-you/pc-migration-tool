@@ -17,6 +17,7 @@ from pathlib import Path
 from .checklist_data import (BUNDLE_PATTERNS, BUNDLE_REGEX, COMMON_ITEMS, KNOWN_APPS,
                              LOGIN_KEYWORDS, CommonItem)
 from .copier import _backup_path
+from .fs import long_path
 from .detect import Program, parse_winget_export
 from .rules import Rule
 
@@ -467,8 +468,8 @@ def write_output(path: Path, text: str) -> None:
     try:
         tmp.write_text(text, encoding="utf-8")
         if path.exists():
-            os.replace(path, _backup_path(path))
-        os.replace(tmp, path)
+            os.replace(long_path(path), long_path(_backup_path(path)))
+        os.replace(long_path(tmp), long_path(path))
     except BaseException:  # 쓰기 실패/중단 시 반쪽 임시 파일을 남기지 않는다
         tmp.unlink(missing_ok=True)
         raise

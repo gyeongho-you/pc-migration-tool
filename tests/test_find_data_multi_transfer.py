@@ -81,8 +81,9 @@ def test_classify_table_samples():
 def test_classify_stage45_new_extensions():
     for n in ("a.STEP", "a.stp", "a.iges", "a.igs", "a.sat", "s.las", "s.LAZ", "s.e57", "m.ply", "t.osgb", "g.kml", "g.kmz", "g.shp"):
         assert fd.classify_name(n)[0] == "design", n
-    for n in ("a.svg", "a.eps", "o.geotiff"):
+    for n in ("a.svg", "a.eps"):
         assert fd.classify_name(n)[0] == "photo", n
+    assert ".geotiff" not in fd.PHOTO_EXT  # 실제 확장자는 .tif/.tiff 라 효과가 없는 항목은 뺐다
     assert fd.classify_name("s.las") == ("design", "A") and fd.classify_name("a.svg") == ("photo", "C")
     # 보류한 확장자는 그대로 미분류(작으면 None), .obj 는 큰 기타 제외 목록 유지
     for n in ("a.xyz", "a.pts", "a.tfw", "a.dbf"):

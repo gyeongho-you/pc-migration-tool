@@ -266,7 +266,7 @@ def test_delete_source_rechecks_mtime(env2, monkeypatch):
         return r
     monkeypatch.setattr(copier, "copy_verified", fake)
     rep = env2.run(apply=True, same_volume_fn=lambda a, b: False)
-    assert (env2.recv / "D" / "P" / "a.txt").exists() and [r.code for r in rep.leftover] == [po.LEFTOVER]
+    assert (env2.recv / "D" / "P" / "a.txt").exists() and [r.code for r in rep.leftover] == [po.SRC_CHANGED]
     assert not (env2.recv / "D" / "P" / "b.txt").exists()
 
 

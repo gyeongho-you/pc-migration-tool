@@ -149,7 +149,7 @@ def test_onedrive_desktop_default_warns(genv, tmp_path):
     rep = genv.run(gather="", desktop_fn=lambda: str(desk), env={"OneDrive": str(od)}, protected_fn=NOPROT, warn=warns.append)
     gi = rep.gather_info
     assert gi["onedrive_redirected"] is True and gi["folder"] == str(desk / po.GATHER_DIR_NAME) and gi["default_folder"] is True
-    assert any("OneDrive" in w and "--yes" in w and "--gather 폴더" in w for w in warns)
+    assert any("OneDrive" in w and "--yes" in w and "--gather=폴더" in w for w in warns)
     assert "OneDrive 동기화 폴더" in "\n".join(po.summary_lines(rep))
     assert not (desk / po.GATHER_DIR_NAME).exists()  # 미리보기는 만들지 않는다
     warns.clear()
@@ -219,8 +219,14 @@ def test_unexpected_error_mid_gather_reports_and_logs(genv, monkeypatch):
     assert "boom-gather" in errorlog.last_error()[1]
 
 
-def test_guide_write_failure_does_not_stop(genv):
-    (genv.g / po.GUIDE_NAME).mkdir(parents=True)  # 안내 파일 자리에 폴더가 있어 쓸 수 없다
+def test_guide_write_failure_does_not_stop(genv, monkeypatch):
+    real = os.replace
+
+    def deny(a, b, *x, **k):  # 안내 파일 교체만 실패시킨다
+        if str(b).endswith(po.GUIDE_NAME):
+            raise PermissionError(5, "denied", str(b))
+        return real(a, b, *x, **k)
+    monkeypatch.setattr(os, "replace", deny)
     rep = run(genv, apply=True)
     d = rep.to_dict()
     assert d["gather"]["guide_error"] and "guide_file" not in d["gather"] and d["gather"]["gathered_count"] == 4
@@ -265,7 +271,7 @@ def test_cli_default_desktop_onedrive_warning_in_preview(cenv, capsys, tmp_path,
     before = tree(cenv.recv)
     assert cli.main(["place", str(cenv.recv), "--gather"]) == 0
     cap = capsys.readouterr()
-    assert "OneDrive" in cap.err and "--gather 폴더" in cap.err and "OneDrive 동기화 폴더" in cap.out
+    assert "OneDrive" in cap.err and "--gather=폴더" in cap.err and "OneDrive 동기화 폴더" in cap.out
     assert tree(cenv.recv) == before and not (od / "Desktop" / po.GATHER_DIR_NAME).exists()
 
 

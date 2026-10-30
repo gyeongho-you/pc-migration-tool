@@ -317,11 +317,11 @@ def _retry_once(out: Path, rules: list[Rule], expand: Expand, progress_info, not
             raise PackageError("다시 담은 묶음이 검사를 통과하지 못해 교체하지 않았습니다(기존 묶음은 그대로입니다). 문제: "
                                + "; ".join(problems[:3]))
         bak = _backup_path(out)
-        os.replace(out, bak)
+        os.replace(fs.long_path(out), fs.long_path(bak))
         try:
-            os.replace(tmp, out)
+            os.replace(fs.long_path(tmp), fs.long_path(out))
         except OSError:
-            os.replace(bak, out)  # 교체에 실패하면 기존 묶음을 제자리로 되돌린다
+            os.replace(fs.long_path(bak), fs.long_path(out))  # 교체에 실패하면 기존 묶음을 제자리로 되돌린다
             raise
         info["backup"] = str(bak)
     finally:

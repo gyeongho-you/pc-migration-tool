@@ -860,6 +860,40 @@ def _cmd_winget_extract(args: argparse.Namespace) -> int:
     return 0
 
 
+def _place_path_arg(text: str) -> str:
+    """place 의 받기 폴더/리포트 경로: _path_arg 와 같되, 끝에 따옴표가 남은 모양(cmd 의 "X:\폴더\\")은 조용히 고치지 않고 이유와 함께 거부한다."""
+    if text.endswith('"') and not text.startswith('"'):
+        raise argparse.ArgumentTypeError(
+            f"경로 끝에 따옴표(\")가 붙었습니다: {text!r}. 경로 끝이 역슬래시(\\)인 채 따옴표로 닫으면 cmd 가 따옴표를 경로의 일부로 넘깁니다. 끝의 역슬래시를 빼세요.")
+    return _path_arg(text)
+
+
+def _safe_print_lines(lines: list[str]) -> None:
+    """요약 출력. 터미널 인코딩으로 쓸 수 없는 문자(짝 없는 서로게이트 등)가 있어도 중단하지 않고 이스케이프 문자로 대신 보여 준다."""
+    enc = getattr(sys.stdout, "encoding", None) or "utf-8"
+    for line in lines:
+        try:
+            print(line)
+        except UnicodeEncodeError:
+            print(line.encode(enc, "backslashreplace").decode(enc, "replace"))
+
+
+def _probe_report(path: str, create: bool) -> str | None:
+    """--report 를 쓸 수 있는지 미리 점검한다(실패 문구 또는 None). create 이면 상위 폴더도 만들어 본다."""
+    parent = Path(path).parent
+    try:
+        if create:
+            parent.mkdir(parents=True, exist_ok=True)
+        if not parent.is_dir():
+            return None  # 미리보기에서는 없는 폴더를 만들지 않는다(쓸 때 알려 준다)
+        probe = parent / f".pcmigrate-report-test-{os.getpid()}"
+        probe.write_bytes(b"x")
+        probe.unlink()
+    except OSError as e:
+        return f"결과 리포트를 저장할 수 없습니다: {path} ({type(e).__name__}: {failure.classify(e, str(parent)).label}). 아무것도 옮기기 전에 멈췄습니다. --report 경로를 바꾸세요."
+    return None
+
+
 def _gather_arg(text: str) -> str:
     """--gather 값: 양끝 공백/따옴표 정리(_path_arg), ~ 는 사용자 폴더로 확장. 끝에 따옴표가 남은 모양(cmd 의 "X:\\폴더\\" )은 거부한다."""
     if text.endswith('"') and not text.startswith('"'):
@@ -880,6 +914,13 @@ def _cmd_place(args: argparse.Namespace) -> int:
 
     if _unexpanded(recv=args.recv, report=args.report, gather=args.gather or None):
         return 1
+    if args.report:
+        if _output_is_dir(report=args.report):
+            return 1
+        bad = _probe_report(args.report, create=args.yes)
+        if bad:
+            _err(bad)
+            return 1
     try:
         maps = place_original.parse_maps(args.map)
         check_outputs_outside(args.recv, report=args.report)
@@ -915,13 +956,19 @@ def _cmd_place(args: argparse.Namespace) -> int:
     if isinstance(exc, TransferError) and not isinstance(exc, (DriveDisconnected, place_original.DiskFull)):
         # 착수 전 입력/환경 오류(받기 폴더 없음, 잘못된 --gather 등): 요약 없이 오류 한 줄(리포트는 위에서 이미 저장)
         if args.json:
-            _json_out(rep.to_dict())
+            try:
+                _json_out(rep.to_dict())
+            except UnicodeEncodeError:
+                print(json.dumps(rep.to_dict(), ensure_ascii=True))
         _err(f"배치 실패: {exc}", "아무것도 옮기지 않았습니다.")
         return 1
     if args.json:
-        _json_out(rep.to_dict())
+        try:
+            _json_out(rep.to_dict())
+        except UnicodeEncodeError:  # 터미널 인코딩으로 쓸 수 없는 문자는 \uXXXX 로 이스케이프해 항상 출력한다
+            print(json.dumps(rep.to_dict(), ensure_ascii=True))
     else:
-        _print_lines(place_original.summary_lines(rep))
+        _safe_print_lines(place_original.summary_lines(rep))
     if exc is not None:
         if isinstance(exc, (Cancelled, KeyboardInterrupt)):
             _err("중단했습니다. 지금까지의 결과는 위 요약/리포트에 있습니다. 같은 명령을 다시 실행하면 이어서 합니다.")
@@ -930,9 +977,11 @@ def _cmd_place(args: argparse.Namespace) -> int:
              "지금까지의 결과는 위 요약/리포트에 있습니다. 원인을 해결하고 같은 명령을 다시 실행하면 이어서 합니다."
              + (f" (오류 로그: {rep.meta['error_log']})" if rep.meta.get("error_log") else ""))
         return 1
-    if rep.manual_count or rep.warnings:  # 종료 코드는 바꾸지 않고(실패만 1) 수동 작업이 남았음을 알린다. 판정은 JSON 의 success/needs_manual
+    if rep.needs_manual:  # 종료 코드는 바꾸지 않고(실패만 1) 수동 작업이 남았음을 알린다. 판정은 JSON 의 success/needs_manual
+        left = rep.remaining.get("files", 0) if not rep.keep else 0
         _err(f"[수동 작업 필요] 직접 처리할 항목이 {rep.manual_count}건 남았습니다(리포트의 success=false, needs_manual=true)."
-             + (f" 확인할 경고 {len(rep.warnings)}건." if rep.warnings else ""))
+             + (f" 확인할 경고 {len(rep.warnings)}건." if rep.warnings else "")
+             + (f" 받기 폴더에 남은 파일 {left:,}개." if left else ""))
     return 1 if (rep.failed_count or rc) else 0
 
 
@@ -1134,7 +1183,7 @@ def build_parser() -> argparse.ArgumentParser:
     fdp.set_defaults(func=_cmd_find_data)
 
     pl = sub.add_parser("place", help="받기 폴더(모드 B 다중 원본 전송 결과)를 원래 위치(같은 드라이브·같은 경로)로 놓는다(기본은 미리보기, --yes 로 실제 적용)")
-    pl.add_argument("recv", type=_path_arg, help="받기 폴더(.pcmigrate-multi.json 저널이 있거나 <드라이브 문자>\\... 구조)")
+    pl.add_argument("recv", type=_place_path_arg, help="받기 폴더(.pcmigrate-multi.json 저널이 있거나 <드라이브 문자>\\... 구조)")
     pl.add_argument("--yes", action="store_true", help="미리보기 확인 후 실제로 놓음(같은 볼륨은 이동, 다른 볼륨은 복사·검증 후 받기 폴더에서 삭제)")
     pl.add_argument("--keep", action="store_true", help="복사만 하고 받기 폴더는 이동/삭제하지 않음(받기 폴더가 유일한 사본일 때의 안전 모드)")
     pl.add_argument("--map", action="append", metavar="D=E", help="드라이브 매핑(여러 번 가능): 받기 폴더의 D 를 이 PC 의 E 드라이브에 놓음")
@@ -1143,7 +1192,7 @@ def build_parser() -> argparse.ArgumentParser:
     pl.add_argument("--gather", nargs="?", const="", default=None, metavar="폴더", type=_gather_arg,
                     help="원래 위치에 놓을 수 없어 건너뛴 항목(보호 위치, 없는 드라이브, 공간 부족, 지정 이름 폴더 등)을 이 폴더로 모음(원래 구조 유지, 방식은 place 와 같음). "
                          "폴더를 생략하면 바탕화면의 '이전 파일' 폴더(OneDrive 로 옮겨진 바탕화면이면 경고). 폴더를 쓸 때는 --gather=폴더 또는 받기 폴더 뒤에 적으세요")
-    pl.add_argument("--report", type=_path_arg, help="결과 리포트(JSON) 저장 경로(받기 폴더 밖)")
+    pl.add_argument("--report", type=_place_path_arg, help="결과 리포트(JSON) 저장 경로(받기 폴더 밖). --yes 로 옮기기 전에 쓸 수 있는지 먼저 점검합니다")
     pl.add_argument("--json", action="store_true", help="사람이 읽는 요약 대신 JSON 으로 출력")
     pl.set_defaults(func=_cmd_place)
 

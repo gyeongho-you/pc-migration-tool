@@ -63,7 +63,6 @@ PHOTO_EXT: dict[str, str] = {
     ".psd": "A", ".psb": "A", ".ai": "A", ".indd": "A",                                # Adobe 그래픽
     ".eps": "B",                                                                      # 벡터 그래픽(Adobe 계열이나 LaTeX/인쇄에도 쓰여 B)
     ".svg": "C",                                                                      # 벡터 그래픽(W3C 표준). 웹/개발 폴더의 아이콘으로도 많아 C
-    ".geotiff": "B",                                                                  # 정사영상(.tif 와 같은 사진 분류)
 }
 VIDEO_EXT: dict[str, str] = {
     ".mp4": "B", ".mov": "B", ".avi": "B", ".mkv": "B", ".wmv": "B", ".m4v": "B", ".mts": "B", ".m2ts": "B",
@@ -162,6 +161,8 @@ class _Agg:
         self.cloud_n += o.cloud_n
         self.cloud_b += o.cloud_b
         self.errors += o.errors
+        for k, v in o.weak.items():
+            self.weak[k] = self.weak.get(k, 0) + v
         for k, v in o.cats.items():
             c = self.cats.setdefault(k, [0, 0])
             c[0] += v[0]
@@ -587,10 +588,8 @@ def write_selection(res: FindResult, path: str | os.PathLike) -> Path:
     tmp = p.with_name(p.name + ".part")
     tmp.write_text(json.dumps(selection_dict(res), ensure_ascii=False, indent=2), encoding="utf-8")
     if p.exists():
-        bak, n = p.with_name(p.name + ".bak"), 1
-        while bak.exists():
-            bak, n = p.with_name(f"{p.name}.bak.{n}"), n + 1
-        os.replace(p, bak)
+        from .copier import _backup_path  # 번호 붙은 백업 규칙을 한 곳(긴 경로 대응)에서 쓴다
+        os.replace(p, _backup_path(p))
     os.replace(tmp, p)
     return p
 

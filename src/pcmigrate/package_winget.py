@@ -9,6 +9,7 @@ import zipfile
 from pathlib import Path
 
 from .copier import _backup_path
+from .fs import long_path
 from .detect import valid_winget_id
 from .package_base import PackageError
 from .package_savepoint import is_unfinished_part
@@ -110,12 +111,12 @@ def extract_winget(path: Path, out_dir: Path, only_ids: list[str] | None = None)
     try:
         if target.exists():
             bak = _backup_path(target)
-            os.replace(target, bak)
+            os.replace(long_path(target), long_path(bak))
         try:
-            os.replace(tmp, target)
+            os.replace(long_path(tmp), long_path(target))
         except OSError:
             if bak is not None:
-                os.replace(bak, target)  # 되돌린다
+                os.replace(long_path(bak), long_path(target))  # 되돌린다
             raise
     finally:
         tmp.unlink(missing_ok=True)

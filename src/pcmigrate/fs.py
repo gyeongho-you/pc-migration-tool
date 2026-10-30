@@ -141,9 +141,10 @@ def reparse_in_chain(base: str | os.PathLike, target: str | os.PathLike) -> str 
     cur = base_s
     for part in rel.split(os.sep):
         cur = os.path.join(cur, part)
-        if not os.path.lexists(cur):
+        lcur = long_path(cur)  # 260자 넘는 경로도 판정한다(접두 없는 조회는 '없음'으로 보아 링크를 놓친다)
+        if not os.path.lexists(lcur):
             return None
-        if os.path.islink(cur) or (os.path.isdir(cur) and is_reparse(cur)):  # 파일은 심볼릭 링크만(클라우드 자리표시 파일 제외)
+        if os.path.islink(lcur) or (os.path.isdir(lcur) and is_reparse(cur)):  # 파일은 심볼릭 링크만(클라우드 자리표시 파일 제외)
             return cur
     return None
 

@@ -82,9 +82,12 @@ def patch_xfer(monkeypatch, name, value, raising=True):
 
 def set_pkg(name, value):
     """patch_pkg 의 monkeypatch 없는 판(직접 대입/되돌리기용): package_* 모듈 전체에 같은 값을 건다."""
+    hit = False
     for mod in _split_modules("package"):
         if hasattr(mod, name):
             setattr(mod, name, value)
+            hit = True
+    assert hit, name  # 그 이름을 가진 모듈이 없으면(이름 오타/분해로 이동) 조용히 지나가지 않고 실패한다
 
 
 def patch_ctl(monkeypatch, name, value, raising=True):
