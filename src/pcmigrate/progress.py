@@ -16,7 +16,7 @@ SPEED_MIN_EVENTS = 3  # 최근 바이트가 늘어난 시점 이 개수만큼은
 SPEED_EMA_TAU = 5.0  # 표시 속도를 지수 이동 평균으로 한 번 더 부드럽게(시정수, 초)
 ETA_EMA_TAU = 8.0  # 남은 시간도 같은 방식으로 부드럽게(시간이 흐르는 만큼 줄어들면서 새 추정으로 천천히 이동)
 
-PHASE_LABELS = {"scan": "원본 조사", "copy": "복사", "verify": "검사", "manifest": "목록 만들기", "done": "완료",
+PHASE_LABELS = {"scan": "원본 조사", "copy": "복사", "move": "이동", "verify": "검사", "manifest": "목록 만들기", "done": "완료",
                 "list": "목록 읽기", "match": "규칙 맞추기", "find": "파일 찾기", "pack": "담기", "check": "검사",
                 "restore": "복원", "compare": "비교"}
 # 현황 카드의 카운터 분류(GUI 가 색/아이콘으로 구분한다). 기존 CLI 출력에는 쓰이지 않는다.
@@ -103,7 +103,7 @@ def format_info(info: ProgressInfo) -> str:
         line += f" · 파일 {info.done_files:,}/{info.total_files:,}개"
     if info.speed_bps > 0:
         line += f" · {fmt_bytes(info.speed_bps)}/s"
-    if info.eta_seconds is not None and info.phase in ("copy", "verify", "manifest"):
+    if info.eta_seconds is not None and info.phase in ("copy", "move", "verify", "manifest"):
         line += f" · 남은 시간 약 {fmt_duration(info.eta_seconds)}"
     return line
 

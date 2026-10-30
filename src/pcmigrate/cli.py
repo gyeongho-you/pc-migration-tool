@@ -883,12 +883,19 @@ def _probe_report(path: str, create: bool) -> str | None:
     parent = Path(path).parent
     try:
         if create:
-            parent.mkdir(parents=True, exist_ok=True)
-        if not parent.is_dir():
+            os.makedirs(fs.long_path(parent), exist_ok=True)
+        if not os.path.isdir(fs.long_path(parent)):
             return None  # 미리보기에서는 없는 폴더를 만들지 않는다(쓸 때 알려 준다)
+        if os.path.isfile(fs.long_path(path)):  # 이미 있는 리포트: 읽기 전용이거나 다른 프로그램이 열고 있으면 옮기기 전에 거부한다
+            try:
+                open(fs.long_path(path), "r+b").close()
+            except OSError as e:
+                return (f"기존 리포트 파일에 쓸 수 없습니다: {path} (기존 파일이 읽기 전용이거나 다른 프로그램이 사용 중일 수 있습니다: "
+                        f"{type(e).__name__}). 아무것도 옮기기 전에 멈췄습니다. 속성을 풀거나 다른 --report 경로를 쓰세요.")
         probe = parent / f".pcmigrate-report-test-{os.getpid()}"
-        probe.write_bytes(b"x")
-        probe.unlink()
+        with open(fs.long_path(probe), "wb") as h:
+            h.write(b"x")
+        os.unlink(fs.long_path(probe))
     except OSError as e:
         return f"결과 리포트를 저장할 수 없습니다: {path} ({type(e).__name__}: {failure.classify(e, str(parent)).label}). 아무것도 옮기기 전에 멈췄습니다. --report 경로를 바꾸세요."
     return None
@@ -914,21 +921,26 @@ def _cmd_place(args: argparse.Namespace) -> int:
 
     if _unexpanded(recv=args.recv, report=args.report, gather=args.gather or None):
         return 1
-    if args.report:
-        if _output_is_dir(report=args.report):
-            return 1
-        bad = _probe_report(args.report, create=args.yes)
-        if bad:
-            _err(bad)
-            return 1
     try:
         maps = place_original.parse_maps(args.map)
-        check_outputs_outside(args.recv, report=args.report)
+        check_outputs_outside(args.recv, report=args.report)  # 받기 폴더 안쪽 리포트 경로는 프로브(폴더 만들기/시험 파일 쓰기) 전에 거부한다
     except ValueError as e:
         _err(str(e))
         return 2
     except ApiError as e:
         return _fail(e)
+    report_path = args.report
+    if report_path:
+        if _output_is_dir(report=report_path):
+            return 1
+        if not args.yes and not os.path.isdir(fs.long_path(Path(report_path).parent)):  # 미리보기와 적용의 처리를 맞춘다: 미리보기는 없는 상위 폴더를 만들지 않는다
+            _err("[안내] --report 의 상위 폴더가 없어 미리보기에서는 리포트를 저장하지 않습니다(--yes 로 적용할 때 만듭니다).")
+            report_path = None
+        else:
+            bad = _probe_report(report_path, create=args.yes)
+            if bad:
+                _err(bad)
+                return 1
     if args.yes and not args.keep:
         _err("[주의] 받기 폴더의 파일을 원래 위치로 이동하거나(같은 드라이브), 복사·검증한 뒤 받기 폴더에서 지웁니다(되돌릴 수 없음). "
              "받기 폴더가 유일한 사본이면 Ctrl+C 로 멈추고 --keep 으로 다시 실행하세요.")
@@ -946,11 +958,12 @@ def _cmd_place(args: argparse.Namespace) -> int:
             return 1
         raise exc  # type: ignore[misc]  # main 이 오류 로그에 남기고 안내한다
     rc = 0
-    if args.report:
+    if report_path:
         try:
-            rep.write(Path(args.report))
+            rep.write(Path(report_path))
         except OSError as e:
-            _write_failed(args.report, e)
+            _err(f"결과 리포트를 저장하지 못했습니다: {report_path} ({type(e).__name__}). 기존 파일이 읽기 전용이거나 사용 중일 수 있습니다. "
+                 "이전 리포트는 그대로입니다.")
             rc = 1
     from .transfer_base import DriveDisconnected
     if isinstance(exc, TransferError) and not isinstance(exc, (DriveDisconnected, place_original.DiskFull)):
@@ -1182,7 +1195,9 @@ def build_parser() -> argparse.ArgumentParser:
                      help="선택 파일(JSON)을 저장. 모든 폴더가 include:false 로 시작하므로 옮길 것만 true 로 바꾼 뒤 transfer --from-selection 에 사용")
     fdp.set_defaults(func=_cmd_find_data)
 
-    pl = sub.add_parser("place", help="받기 폴더(모드 B 다중 원본 전송 결과)를 원래 위치(같은 드라이브·같은 경로)로 놓는다(기본은 미리보기, --yes 로 실제 적용)")
+    pl = sub.add_parser("place", help="받기 폴더(모드 B 다중 원본 전송 결과)를 원래 위치(같은 드라이브·같은 경로)로 놓는다(기본은 미리보기, --yes 로 실제 적용)",
+                        epilog="종료 코드: 0 = 실패 없음(수동 작업이 남아도 0), 1 = 실패한 파일이 있거나 중단/오류, 130 = 취소, 2 = 잘못된 인자. "
+                               "끝났는지는 종료 코드가 아니라 --report/--json 의 success 와 needs_manual 로 판단하세요.")
     pl.add_argument("recv", type=_place_path_arg, help="받기 폴더(.pcmigrate-multi.json 저널이 있거나 <드라이브 문자>\\... 구조)")
     pl.add_argument("--yes", action="store_true", help="미리보기 확인 후 실제로 놓음(같은 볼륨은 이동, 다른 볼륨은 복사·검증 후 받기 폴더에서 삭제)")
     pl.add_argument("--keep", action="store_true", help="복사만 하고 받기 폴더는 이동/삭제하지 않음(받기 폴더가 유일한 사본일 때의 안전 모드)")
@@ -1195,6 +1210,13 @@ def build_parser() -> argparse.ArgumentParser:
     pl.add_argument("--report", type=_place_path_arg, help="결과 리포트(JSON) 저장 경로(받기 폴더 밖). --yes 로 옮기기 전에 쓸 수 있는지 먼저 점검합니다")
     pl.add_argument("--json", action="store_true", help="사람이 읽는 요약 대신 JSON 으로 출력")
     pl.set_defaults(func=_cmd_place)
+    _orig_error = pl.error
+
+    def _place_error(message: str) -> None:
+        if "recv" in message:
+            message += " (참고: --gather 는 폴더 값을 받을 수 있어 `--gather 받기폴더` 처럼 쓰면 받기 폴더가 값으로 먹힙니다. `--gather=폴더` 로 쓰거나 받기 폴더를 먼저 적으세요)"
+        _orig_error(message)
+    pl.error = _place_error
 
     j = sub.add_parser("join", help="--split-large 로 나눠 저장된 조각(.pcm001 ...)을 원래 파일로 합친다(조각은 읽기만 함)")
     j.add_argument("src", type=_path_arg, help="조각이 있는 폴더(하위 폴더 포함) 또는 첫 조각 파일(.pcm001)")

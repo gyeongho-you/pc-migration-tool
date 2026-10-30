@@ -64,7 +64,7 @@ def test_cancel_mid_folder_reflects_partial_row_in_every_report_part(wenv):
     first = set(lines)
     run(wenv, apply=True)
     final = guide_lines(g)
-    assert first <= set(final) and len(final) == 6 and len(contents(g)) == 7  # 파일 6개 + 안내 파일
+    assert first <= set(final) and len(final) == 6 and len([k for k in contents(g) if not k.startswith(po.GUIDE_NAME)]) == 6  # 파일 6개 + 안내 파일
 
 
 def test_disk_full_mid_folder_reflects_partial_row(wenv, monkeypatch):

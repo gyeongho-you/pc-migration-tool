@@ -61,6 +61,10 @@ NO_SPACE, NO_OVERWRITE, BLOCKED, UNKNOWN_LOC, UNC, UNVERIFIED, READONLY_DRIVE, B
     "bad_journal", "receive_unreadable")
 LEFTOVER = "source_not_removed"
 SPLIT_PARTS, SRC_CHANGED, SRC_READONLY, SRC_ADS = "split_parts", "source_changed", "source_readonly", "source_ads"
+SRC_ADS_UNKNOWN = "source_ads_unknown"
+MAX_OVERWRITTEN = 5000  # 적용 뒤 '덮어쓴 파일' 목록 상한(placed 상한과 따로: .bak 정보가 묻히지 않게)
+_SYSTEM_ROOT_DIRS = frozenset({"$recycle.bin", "system volume information"})  # 드라이브 루트 모양의 받기 폴더에 있는 시스템 폴더
+_SYSTEM_FILES = frozenset({"desktop.ini", "thumbs.db"})
 _PCM = re.compile(r"\.pcm\d{3}$", re.I)  # 4GB 분할 조각(.pcm001 ...)
 MAP_CONFLICT = "map_conflict"
 MTIME_TOLERANCE_NS = 2_000_000_000  # FAT(2초)/exFAT 의 수정 시각 해상도: 크기가 같고 시각 차이가 이 안이면 같은 파일로 본다
@@ -79,7 +83,7 @@ REASONS: dict[str, tuple[str, str]] = {
     LINK: ("링크(바로가기/정션/심볼릭 링크)라 따라가지 않음", "링크 너머는 따로 확인해 직접 옮기세요."),
     INSIDE_RECEIVE: ("놓을 위치가 받기 폴더 안이라 건너뜀", "받기 폴더를 다른 위치로 옮긴 뒤 다시 실행하거나 직접 옮기세요."),
     SAME_LOCATION: ("이미 원래 위치에 있음(받기 폴더 경로와 같음)", ""),
-    NO_SPACE: ("대상 드라이브의 여유 공간이 부족함", "공간을 확보하거나 --map 으로 다른 드라이브를 지정하세요."),
+    NO_SPACE: ("대상 드라이브의 여유 공간이 부족함", "필요량은 이 드라이브로 가는 모든 폴더의 합계입니다. 공간을 확보하거나 --map 으로 다른 드라이브를 지정하세요(--gather=폴더 로 다른 드라이브에 모을 수도 있습니다)."),
     NO_OVERWRITE: ("대상에 다른 내용의 파일이 있어 덮어쓰기를 거부함(--no-overwrite)", "확인 후 직접 옮기거나 --no-overwrite 없이 다시 실행하세요(.bak 으로 보관됨)."),
     BLOCKED: ("놓을 위치에 같은 이름의 파일이 폴더 자리를 막고 있음", "그 파일의 이름을 바꾸거나 옮긴 뒤 다시 실행하세요."),
     UNKNOWN_LOC: ("원래 위치를 알 수 없는 폴더/파일(설정 묶음 등 이름을 지정해 받은 것)", "이 도구가 자동으로 놓지 않습니다. 필요하면 직접 옮기세요."),
@@ -93,7 +97,8 @@ REASONS: dict[str, tuple[str, str]] = {
     SRC_CHANGED: ("복사 뒤에 받기 폴더의 파일이 바뀌었거나 링크가 되어 지우지 않음", "대상의 사본은 복사한 시점의 내용입니다. 받기 폴더 쪽이 최신일 수 있으니 두 파일을 비교해 남길 쪽을 직접 정하세요(도구는 바뀐 파일을 지우지 않습니다)."),
     SRC_READONLY: ("받기 폴더의 파일이 읽기 전용이고 속성을 풀지 못해 지우지 못함", "대상에는 온전히 있습니다. 파일의 읽기 전용 속성을 풀고 같은 명령을 다시 실행하거나 직접 지우세요."),
     SRC_ADS: ("받기 폴더의 파일에 대체 데이터 스트림(ADS)이 있음 — 대상에 복사되지 않았으니 확인 후 직접 처리", "ADS 가 필요 없으면 받기 폴더 쪽만 지우고, 필요하면 대상에 직접 옮기세요(도구는 ADS 가 있는 원본을 지우지 않습니다)."),
-    SPLIT_PARTS: ("4GB 분할 조각(.pcm###)이라 자동으로 놓지 않음", "먼저 `pcmigrate join` 으로 조각을 하나로 합친 뒤 놓으세요(조각만 옮기면 합치기/검증이 끊깁니다)."),
+    SPLIT_PARTS: ("4GB 분할 조각(.pcm###)이라 자동으로 놓지 않음", "먼저 `pcmigrate join <조각이 있는 폴더> --output <합칠 새 폴더>` 로 하나로 합친 뒤 그 파일을 원래 위치에 놓으세요(조각만 옮기면 합치기/검증이 끊깁니다)."),
+    SRC_ADS_UNKNOWN: ("받기 폴더 파일의 대체 데이터 스트림(ADS) 여부를 확인하지 못해 지우지 않음", "대상에는 복사돼 있습니다. ADS 가 필요 없는지 확인한 뒤 받기 폴더 쪽을 직접 지우세요."),
 }
 
 # 안내 문구가 GUI 단추('실패한 것만 다시 시도' 등)를 가리키지 않도록 place 전용 문구로 바꾼다.
@@ -190,8 +195,10 @@ def _protected_reason(logical: str, *, is_dir: bool = True) -> str | None:
         return None
     if low[0] in ROOT_PROTECTED:
         return f"{parts[0]} 폴더"
-    if not is_dir and len(low) >= 2 and low[-1].endswith(".ps1") and "profile" in low[-1] and low[-2] in ("windowspowershell", "powershell"):
-        return "PowerShell 프로필(로그인/실행 때 자동으로 실행됨)"
+    if not is_dir and low[0] == "users" and len(low) >= 5 and low[-1].endswith(".ps1") and "profile" in low[-1]:
+        di = 2 if low[2] == "documents" else (3 if len(low) >= 6 and low[2].startswith("onedrive") and low[3] == "documents" else None)
+        if di is not None and len(low) == di + 3 and low[di + 1] in ("windowspowershell", "powershell"):  # 사용자 문서 폴더의 실제 프로필 위치만
+            return "PowerShell 프로필(로그인/실행 때 자동으로 실행됨)"
     if low[0] == "users" and len(low) >= 3 and low[2] == "appdata":
         return "사용자 AppData"
     if not is_dir and len(low) == 1 and drive.upper() == (envpaths.lookup("SystemDrive") or "C:").upper():
@@ -245,8 +252,21 @@ def _copy_attrs(src, dst) -> str | None:
         return f"숨김/시스템/읽기 전용 속성을 대상에 옮기지 못했습니다({type(e).__name__})"
 
 
-def _alt_streams(path) -> list[str]:
-    """파일의 대체 데이터 스트림(ADS) 이름들(기본 스트림과 Zone.Identifier 제외). NTFS 가 아니거나 조회가 안 되면 빈 목록."""
+def _restore_attrs(lpath: str, st) -> None:
+    """읽기 전용 해제 뒤 삭제가 실패했을 때 원래 속성을 되돌린다(Windows 는 속성 비트 전체, 그 밖에는 모드)."""
+    try:
+        if os.name == "nt" and hasattr(st, "st_file_attributes"):
+            import ctypes
+            ctypes.windll.kernel32.SetFileAttributesW(lpath, st.st_file_attributes)
+        else:
+            os.chmod(lpath, st.st_mode & 0o777)
+    except (OSError, AttributeError):
+        pass
+
+
+def _alt_streams(path) -> list[str] | None:
+    """파일의 대체 데이터 스트림(ADS) 이름들(기본 스트림과 Zone.Identifier 제외). 스트림이 없으면 빈 목록,
+    스트림을 지원하지 않는 볼륨(FAT 등)도 빈 목록. 조회가 안 되면(알 수 없음) None — 호출자는 '없음'으로 보지 않는다."""
     if os.name != "nt":
         return []
     try:
@@ -254,7 +274,7 @@ def _alt_streams(path) -> list[str]:
 
         class _FindStream(ctypes.Structure):
             _fields_ = [("size", ctypes.c_longlong), ("name", ctypes.c_wchar * (260 + 36))]
-        k = ctypes.windll.kernel32
+        k = ctypes.WinDLL("kernel32", use_last_error=True)
         k.FindFirstStreamW.restype = ctypes.c_void_p
         k.FindFirstStreamW.argtypes = [ctypes.c_wchar_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
         k.FindNextStreamW.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
@@ -262,7 +282,13 @@ def _alt_streams(path) -> list[str]:
         data = _FindStream()
         h = k.FindFirstStreamW(long_path(path), 0, ctypes.byref(data), 0)
         if h in (None, ctypes.c_void_p(-1).value):
-            return []
+            err = ctypes.get_last_error()
+            if err == 38:  # ERROR_HANDLE_EOF: 스트림이 없다(빈 파일 등)
+                return []
+            fst = fs.filesystem_type(path)
+            if err == 87 and fst and fst.upper() not in ("NTFS", "REFS"):  # 스트림을 지원하지 않는 볼륨
+                return []
+            return None
         names = []
         try:
             while True:
@@ -273,7 +299,7 @@ def _alt_streams(path) -> list[str]:
             k.FindClose(h)
         return [n for n in names if n != "::$DATA" and not n.lower().startswith(":zone.identifier")]
     except (OSError, AttributeError, ValueError):
-        return []
+        return None
 
 
 list_streams = _alt_streams  # 시험에서 바꿔 끼운다
@@ -291,15 +317,21 @@ def _plain(p) -> str:
     return fs.plain_path_text(str(p))
 
 
-def _scan_tree(p) -> tuple[int, int, list[str]]:
-    """폴더 아래 파일 수/용량과 읽지 못한 곳(오류 문구). 260자 넘는 경로도 센다. 오류를 삼키지 않고 돌려준다."""
+def _scan_tree(p, root_level: bool = False) -> tuple[int, int, list[str]]:
+    """폴더 아래 파일 수/용량과 읽지 못한 곳(오류 문구). 260자 넘는 경로도 센다. 오류를 삼키지 않고 돌려준다.
+    root_level 이면 드라이브 루트 모양의 받기 폴더로 보고 맨 위의 시스템 폴더($RECYCLE.BIN 등)와 desktop.ini/Thumbs.db 는 세지 않는다."""
     n = b = 0
     errs: list[str] = []
+    first = True
 
     def onerr(e: OSError) -> None:
         errs.append(f"{type(e).__name__}: {_plain(getattr(e, 'filename', '') or p)}")
     for root, dirs, files in os.walk(long_path(p), onerror=onerr):
         dirs[:] = [d for d in dirs if not fs.is_reparse(os.path.join(root, d))]
+        if first and root_level:
+            dirs[:] = [d for d in dirs if d.lower() not in _SYSTEM_ROOT_DIRS]
+            files = [f for f in files if f.lower() not in _SYSTEM_FILES]
+        first = False
         for f in files:
             if f.startswith(OWN_PREFIX) or f.endswith(PART_SUFFIX):
                 continue
@@ -311,9 +343,9 @@ def _scan_tree(p) -> tuple[int, int, list[str]]:
     return n, b, errs
 
 
-def _has_files(p) -> bool:
+def _has_files(p, root_level: bool = False) -> bool:
     """폴더 아래에 파일이 있는가. 읽지 못한 곳이 있으면 '있을 수 있음'으로 보수적으로 True(없다고 단정하지 않는다)."""
-    n, _b, errs = _scan_tree(p)
+    n, _b, errs = _scan_tree(p, root_level)
     return bool(n or errs)
 
 
@@ -340,12 +372,13 @@ class Row:
 
     @property
     def reason(self) -> str:
-        return reason_text(self.code, self.detail) + (f" ({self.detail})" if self.detail and self.code in REASONS else "")
+        detail = (self.detail or "").replace(PART_SUFFIX, "")  # 내부 임시 파일 이름은 사용자에게 보이지 않게 한다
+        return reason_text(self.code, detail) + (f" ({detail})" if detail and self.code in REASONS else "")
 
     def to_dict(self) -> dict:
         d = {"kind": self.kind, "expected": fs.plain_path_text(self.expected), "current": fs.plain_path_text(self.current),
              "reason_code": self.code, "reason": fs.plain_path_text(self.reason)}
-        if self.kind == "folder":
+        if self.kind == "folder" or self.code == SPLIT_PARTS:
             d.update(files=self.files, bytes=self.bytes)
         return d
 
@@ -380,6 +413,10 @@ class PlaceReport:
     overwrites: list[dict] = field(default_factory=list)  # (미리보기) 덮어쓸 파일: 경로/양쪽 크기·시각/대상이 더 새로운지
     overwrite_truncated: int = 0
     dest_newer_count: int = 0
+    overwritten: list[dict] = field(default_factory=list)  # (적용 뒤) 실제로 덮어쓴 파일과 .bak 위치(placed 와 별도 상한)
+    overwritten_count: int = 0
+    overwritten_newer_count: int = 0  # 덮어쓰기 전에 대상이 더 새로웠던 것
+    overwritten_truncated: int = 0
     gathered: list[dict] = field(default_factory=list)  # 모은 항목 표: 원래 놓으려던 위치 / 모은 위치 / 사유
 
     @property
@@ -412,6 +449,8 @@ class PlaceReport:
              "removed_truncated": self.removed_truncated, "failed_count": self.failed_count,
              "manual_count": self.manual_count, "needs_manual": self.needs_manual, "warnings": self.warnings, "items": self.items,
              "overwrites": self.overwrites, "overwrite_truncated": self.overwrite_truncated, "dest_newer_count": self.dest_newer_count,
+             "overwritten": self.overwritten, "overwritten_count": self.overwritten_count,
+             "overwritten_dest_newer_count": self.overwritten_newer_count, "overwritten_truncated": self.overwritten_truncated,
              "skipped": [r.to_dict() for r in self.skipped[:MAX_LISTED]], "skipped_count": len(self.skipped),
              "failed": [r.to_dict() for r in self.failed[:MAX_LISTED]],
              "leftover": [r.to_dict() for r in self.leftover[:MAX_LISTED]],
@@ -423,7 +462,9 @@ class PlaceReport:
                            "removed_files": g.removed_list if g else [], "removed_sources": g.removed_sources if g else 0,
                            "delete_planned_files": g.delete_planned if g else 0,
                            "delete_planned_bytes": g.delete_planned_bytes if g else 0, "mode": g.mode if g else "auto",
-                           "overwrites": g.overwrites if g else [], "dest_newer_count": g.dest_newer_count if g else 0}
+                           "overwrites": g.overwrites if g else [], "dest_newer_count": g.dest_newer_count if g else 0,
+                           "overwritten": g.overwritten if g else [], "overwritten_count": g.overwritten_count if g else 0,
+                           "overwritten_dest_newer_count": g.overwritten_newer_count if g else 0}
         if self.dry_run:
             d["preview"] = True
             d["delete_planned_files"] = self.delete_planned
@@ -432,8 +473,8 @@ class PlaceReport:
         return d
 
     def write(self, path: Path) -> None:
-        """JSON 리포트를 임시 파일에 쓴 뒤 교체한다(중간에 실패해도 0바이트 파일이 남지 않는다). 짝 없는 서로게이트 문자 등
-        UTF-8 로 쓸 수 없는 이름은 \\uXXXX 로 이스케이프해 항상 저장한다."""
+        """JSON 리포트를 임시 파일에 쓴 뒤 교체한다(중간에 실패해도 0바이트 파일이 남지 않는다). 같은 경로에 이전 리포트가 있으면
+        번호 붙은 .bak 으로 보관한다(긴 경로 대응). 짝 없는 서로게이트 문자 등 UTF-8 로 쓸 수 없는 이름은 이스케이프해 항상 저장한다."""
         path = Path(path)
         data_dict = self.to_dict()
         try:
@@ -441,14 +482,24 @@ class PlaceReport:
         except UnicodeEncodeError:
             data = json.dumps(data_dict, ensure_ascii=True, indent=2).encode("ascii")
         tmp = path.with_name(path.name + ".part")
+        bak: Path | None = None
         try:
-            tmp.write_bytes(data)
-            os.replace(tmp, path)
+            with open(long_path(tmp), "wb") as h:
+                h.write(data)
+            if _exists(path):
+                bak = copier._backup_path(path)
+                os.replace(long_path(path), long_path(bak))
+            os.replace(long_path(tmp), long_path(path))
         except BaseException:
             try:
-                tmp.unlink()
+                os.unlink(long_path(tmp))
             except OSError:
                 pass
+            if bak is not None and not _exists(path):
+                try:
+                    os.replace(long_path(bak), long_path(path))  # 새 리포트를 못 썼으면 이전 리포트를 제자리로 되돌린다
+                except OSError:
+                    pass
             raise
 
 
@@ -511,6 +562,8 @@ def resolve_gather(arg: str | None, recv: Path, *, desktop_fn=None, env: dict | 
         if arg == "~" or arg.startswith(("~\\", "~/")):  # '~backup' 같은 이름은 사용자 이름 확장으로 보지 않고 상대 폴더 이름으로 둔다
             arg = os.path.expanduser(arg)
     g = Path(os.path.abspath(default_gather_folder(desktop_fn) if default else arg))
+    if os.path.normcase(str(g)) == os.path.normcase(os.path.abspath(os.path.expanduser("~"))):
+        raise TransferError(f"모으는 폴더로 사용자 홈 폴더 자체는 쓸 수 없습니다: {g}. 하위 폴더를 지정하세요(예: --gather=~/{GATHER_DIR_NAME}).")
     real = Path(os.path.realpath(g))
     pf = protected_fn or protected_reason
     for cand in dict.fromkeys((g, real)):
@@ -713,6 +766,9 @@ def discover(recv: Path, maps: dict[str, str], include_unverified: bool, warn: C
         name = e.name
         if name.startswith(OWN_PREFIX) or name.endswith(PART_SUFFIX):
             continue
+        if name.lower() in _SYSTEM_ROOT_DIRS or name.lower() in _SYSTEM_FILES:  # 드라이브 루트 모양의 받기 폴더의 시스템 항목(정보로만 알림)
+            meta.setdefault("system_items_ignored", []).append(name)
+            continue
         cur = recv / name
         isdir = e.is_dir(follow_symlinks=False)
         if e.is_symlink() or (isdir and fs.is_reparse(cur)):
@@ -807,8 +863,8 @@ class _Placer:
         if self.cancel is not None and self.cancel():
             raise Cancelled()
 
-    def _row(self, kind: str, logical: str, cur, code: str, detail: str = "", count_tree: Path | None = None) -> None:
-        r = Row(kind, _plain(logical), _plain(cur), code, detail)
+    def _row(self, kind: str, logical: str, cur, code: str, detail: str = "", count_tree: Path | None = None, n_files: int = 0) -> None:
+        r = Row(kind, _plain(logical), _plain(cur), code, detail, files=n_files)
         if count_tree is not None:
             r.files, r.bytes, errs = _scan_tree(count_tree)
             _note_scan_errors(errs, count_tree)
@@ -892,7 +948,8 @@ class _Placer:
             else:
                 self._row("file", clog, child, UNKNOWN_LOC, "특수 파일")
         for base_name, plist in sorted(pieces.items()):  # 조각만 옮기면 join/검증이 끊기므로 놓지 않고 보고한다
-            self._row("file", logical.rstrip("\\") + "\\" + base_name, plist[0], SPLIT_PARTS, f"조각 {len(plist)}개")
+            self._row("file", logical.rstrip("\\") + "\\" + base_name, plist[0], SPLIT_PARTS,
+                      f"조각 {len(plist)}개 — 예: pcmigrate join \"{_plain(src_dir)}\" --output \"<합칠 새 폴더>\"", n_files=len(plist))
         if not files and not dirs and not pieces and self.phase == "apply" and not self.dry_run:
             try:
                 os.makedirs(long_path(phys), exist_ok=True)
@@ -1010,8 +1067,18 @@ class _Placer:
         self.rep.counts[key] = self.rep.counts.get(key, 0) + n
         self.unit_counts[key] = self.unit_counts.get(key, 0) + n
 
-    def _record_ok(self, src: Path, phys: Path, status: str, size: int, mode: str, backup: str = "", removed: bool = False) -> None:
+    def _record_ok(self, src: Path, phys: Path, status: str, size: int, mode: str, backup: str = "", removed: bool = False,
+                   prior: dict | None = None, logical: str = "") -> None:
         self._count(status)
+        if backup:  # 기존 파일을 .bak 으로 보관하고 덮어썼다: placed 와 별도 목록/개수로 남긴다
+            newer = bool(prior and prior["dest_mtime_ns"] > prior["recv_mtime_ns"] + MTIME_TOLERANCE_NS)
+            self.rep.overwritten_count += 1
+            self.rep.overwritten_newer_count += 1 if newer else 0
+            if len(self.rep.overwritten) < MAX_OVERWRITTEN:
+                self.rep.overwritten.append({"expected": _plain(logical), "dest": _plain(phys), "backup": _plain(backup),
+                                             "recv_size": size, "dest_size": prior["dest_size"] if prior else None, "dest_newer": newer})
+            else:
+                self.rep.overwritten_truncated += 1
         self.rep.placed_bytes += size if status not in ("skipped_identical",) else 0
         self.rep.modes[mode] = self.rep.modes.get(mode, 0) + 1
         if removed:
@@ -1027,6 +1094,7 @@ class _Placer:
         if self.dry_run:  # 미리보기: 사유 행만 남긴다(실패 집계/오류 로그 없음)
             self.rep.skipped.append(Row("file", _plain(logical), _plain(src), code, detail))
             return
+        detail = (detail or "").replace(PART_SUFFIX, "")  # 내부 임시 파일 이름 숨김
         self._count("failed")
         self.rep.failed.append(Row("file", _plain(logical), _plain(src), code, detail))
         errorlog.record(exc if exc is not None else OSError(f"{code}: {detail}"), f"pcmigrate place: {src}")
@@ -1039,7 +1107,8 @@ class _Placer:
 
     def _delete_source(self, src: Path, size: int, logical: str, mtime_ns: int | None = None) -> bool:
         """대상에 온전히 있다는 것이 확인된 뒤에만 부른다. 크기/수정 시각이 달라졌거나 링크이거나 받기 폴더 밖이면, 그리고
-        대체 데이터 스트림(ADS)이 있으면(대상에 복사되지 않았으므로) 지우지 않고 남긴 항목으로 보고한다. 읽기 전용 파일은 속성을 풀고 지운다."""
+        대체 데이터 스트림(ADS)이 있거나 확인할 수 없으면(대상에 복사되지 않았으므로) 지우지 않고 남긴 항목으로 보고한다.
+        읽기 전용 파일은 속성을 풀고 지우며, 그래도 못 지우면 원래 속성을 되돌리고 원인(잠김/권한)을 구분해 보고한다."""
         lsrc = long_path(src)
         try:
             st = os.stat(lsrc)
@@ -1047,19 +1116,26 @@ class _Placer:
                     or not self._src_safe(src) or not self._chain_ok(src)):
                 return self._leftover(src, logical, SRC_CHANGED)
             streams = list_streams(src)
+            if streams is None:
+                return self._leftover(src, logical, SRC_ADS_UNKNOWN)
             if streams:
                 return self._leftover(src, logical, SRC_ADS, ", ".join(streams[:3]))
             try:
                 os.unlink(lsrc)
-            except PermissionError as e:
+            except PermissionError:
                 if not (getattr(st, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_READONLY or not st.st_mode & stat.S_IWRITE):
                     raise
                 try:  # 해시 검증이 끝난 사본이 대상에 있으므로 받기 쪽 읽기 전용 속성을 풀고 지운다
                     os.chmod(lsrc, stat.S_IWRITE | stat.S_IREAD)
-                    os.unlink(lsrc)
                 except OSError as e2:
-                    errorlog.record(e2, f"pcmigrate place: 읽기 전용 원본 삭제 실패 {src}")
+                    errorlog.record(e2, f"pcmigrate place: 읽기 전용 속성 해제 실패 {src}")
                     return self._leftover(src, logical, SRC_READONLY, failure.classify(e2, str(src)).label)
+                try:
+                    os.unlink(lsrc)
+                except OSError as e3:  # 속성은 풀었는데 지우지 못함(보통 다른 프로그램이 잠금): 원래 속성을 되돌리고 원인을 알린다
+                    _restore_attrs(lsrc, st)
+                    errorlog.record(e3, f"pcmigrate place: 받기 폴더 파일 삭제 실패(속성 복원) {src}")
+                    return self._leftover(src, logical, LEFTOVER, failure.classify(e3, str(src)).label)
             if len(self.rep.removed_list) < MAX_LISTED:
                 self.rep.removed_list.append(_plain(src))
             else:
@@ -1068,6 +1144,18 @@ class _Placer:
         except OSError as e:
             errorlog.record(e, f"pcmigrate place: 받기 폴더 파일 삭제 실패 {src}")
             return self._leftover(src, logical, LEFTOVER, failure.classify(e, str(src)).label)
+
+    def _preview_keeps_source(self, src: Path, logical: str) -> bool:
+        """(미리보기) 복사 뒤에도 받기 쪽 파일을 지울 수 없을 것이 미리 보이는가(ADS 가 있거나 확인 불가). 그러면 '삭제 예정'에 넣지 않고
+        남을 항목으로 표시한다. 읽기 전용 해제 불가, 복사 뒤 원본 변경 같은 것은 미리 알 수 없어 실제 실행 때 보고된다."""
+        streams = list_streams(src)
+        if streams is None:
+            self.rep.leftover.append(Row("file", _plain(logical), _plain(src), SRC_ADS_UNKNOWN))
+            return True
+        if streams:
+            self.rep.leftover.append(Row("file", _plain(logical), _plain(src), SRC_ADS, ", ".join(streams[:3])))
+            return True
+        return False
 
     def _note_overwrite(self, src: Path, logical: str, phys: Path, st_src) -> None:
         """(미리보기) 덮어쓸 파일을 경로/양쪽 크기·수정 시각/대상이 더 새로운지와 함께 기록한다."""
@@ -1086,7 +1174,7 @@ class _Placer:
         else:
             self.rep.overwrite_truncated += 1
 
-    def _after_move(self, src: Path, logical: str, phys: Path, size: int, backup: str) -> None:
+    def _after_move(self, src: Path, logical: str, phys: Path, size: int, backup: str, prior: dict | None = None) -> None:
         """이동(교체)이 끝난 뒤의 확인. 실제로 옮겨졌으면 성공으로 기록하고, 확인이 어긋나면 경고로 남긴다(실패로 세지 않는다)."""
         try:
             moved = os.stat(long_path(phys)).st_size == size
@@ -1097,7 +1185,7 @@ class _Placer:
             self._emit(src, size, "failed", failure.SIZE_MISMATCH)
             self._fail(src, logical, failure.SIZE_MISMATCH, "이동 뒤 대상 확인 실패", OSError("이동 뒤 확인(크기/존재) 실패"))
             return
-        self._record_ok(src, phys, "moved", size, MOVE, backup)
+        self._record_ok(src, phys, "moved", size, MOVE, backup, prior=prior, logical=logical)
         self._emit(src, size, "moved")
         if src_left:
             self.rep.warnings.append({"kind": "move_check", "expected": _plain(logical), "current": _plain(src),
@@ -1135,10 +1223,14 @@ class _Placer:
         if identical:
             if self.dry_run:
                 self._count("skipped_identical")
-                if mode != KEEP:
+                if mode != KEEP and not self._preview_keeps_source(src, logical):
                     self.rep.delete_planned += 1
                     self.rep.delete_planned_bytes += size
             else:
+                if mode != MOVE:  # 앞 실행이 속성을 옮기기 전에 멈췄을 수 있으니 보정한다(이미 같은 내용이면 비트만 더한다)
+                    err = _copy_attrs(src, phys)
+                    if err:
+                        self.rep.warnings.append({"kind": "file_attrs", "expected": _plain(logical), "current": _plain(src), "text": err})
                 removed = mode != KEEP and self._delete_source(src, size, logical, mt0)
                 self._record_ok(src, phys, copier.SKIPPED_SAME, size, mode, removed=removed)
             self._emit(src, size, "skipped_identical")
@@ -1155,13 +1247,20 @@ class _Placer:
                 self._count("would_overwrite" if exists else "would_move")
             else:
                 self._count("would_overwrite" if exists else "would_copy")
-                if mode == COPY_DELETE:
+                if mode == COPY_DELETE and not self._preview_keeps_source(src, logical):
                     self.rep.delete_planned += 1
                     self.rep.delete_planned_bytes += size
             self.rep.modes[mode] = self.rep.modes.get(mode, 0) + 1
             self.rep.placed_bytes += size
             self._emit(src, size, "would_copy")
             return
+        prior = None
+        if exists:
+            try:
+                sd = os.stat(long_path(phys))
+                prior = {"dest_size": sd.st_size, "dest_mtime_ns": sd.st_mtime_ns, "recv_mtime_ns": mt0}
+            except OSError:
+                prior = None
         if mode == MOVE:
             res = copier.FileResult(str(src), str(phys), copier.FAILED, size=size)
             if not self._chain_ok(src):  # 이동 직전 한 번 더
@@ -1171,7 +1270,7 @@ class _Placer:
             try:
                 os.makedirs(long_path(phys.parent), exist_ok=True)
                 copier._install(src, phys, res, long_path)  # 기존 파일은 .bak, 실패하면 되돌림
-                self._after_move(src, logical, phys, size, res.backup)
+                self._after_move(src, logical, phys, size, res.backup, prior)
                 return
             except OSError as e:
                 if not _is_exdev(e):
@@ -1189,7 +1288,7 @@ class _Placer:
                 if err:
                     self.rep.warnings.append({"kind": "file_attrs", "expected": _plain(logical), "current": _plain(src), "text": err})
             removed = mode == COPY_DELETE and self._delete_source(src, size, logical, mt0)
-            self._record_ok(src, phys, r.status, size, mode, r.backup, removed)
+            self._record_ok(src, phys, r.status, size, mode, r.backup, removed, prior=prior, logical=logical)
             self._emit(src, size, r.status)
         else:
             if r.reason == failure.DISCONNECTED and not self.alive(root):
@@ -1214,8 +1313,15 @@ def _remaining(recv: Path, limit: int = 50) -> dict:
 
     def onerr(e: OSError) -> None:
         errs.append(f"{type(e).__name__}: {_plain(getattr(e, 'filename', '') or recv)}")
+    system_items: list[str] = []
+    first = True
     for root, dirs, fl in os.walk(long_path(recv), onerror=onerr):
         dirs[:] = [d for d in dirs if not fs.is_reparse(os.path.join(root, d))]
+        if first:  # 드라이브 루트 모양의 받기 폴더: 시스템 폴더/파일은 남은 파일로 세지 않고 정보로만 알린다
+            system_items = [d for d in dirs if d.lower() in _SYSTEM_ROOT_DIRS] + [f for f in fl if f.lower() in _SYSTEM_FILES]
+            dirs[:] = [d for d in dirs if d.lower() not in _SYSTEM_ROOT_DIRS]
+            fl = [f for f in fl if f.lower() not in _SYSTEM_FILES]
+            first = False
         own = [f for f in fl if f.startswith(OWN_PREFIX)]
         real = [f for f in fl if not f.startswith(OWN_PREFIX)]
         for f in real:
@@ -1235,7 +1341,8 @@ def _remaining(recv: Path, limit: int = 50) -> dict:
     if errs:
         errorlog.record(OSError(errs[0]), f"pcmigrate place: 받기 폴더를 끝까지 읽지 못함 (읽지 못한 곳 {len(errs)}개)")
     return {"files": files, "bytes": size, "empty_folders": n_empty, "empty_folder_examples": empty,
-            "records": records, "record_examples": rec_examples, "unreadable": len(errs), "unreadable_examples": errs[:limit]}
+            "records": records, "record_examples": rec_examples, "unreadable": len(errs), "unreadable_examples": errs[:limit],
+            "system_items_ignored": system_items}
 
 
 def place(recv: str | os.PathLike, *, apply: bool = False, maps: dict[str, str] | None = None, keep: bool = False,
@@ -1256,8 +1363,8 @@ def place(recv: str | os.PathLike, *, apply: bool = False, maps: dict[str, str] 
     t0 = time.monotonic()
     gather_opts = (gather, desktop_fn, env, protected_fn)
     try:
-        if not recv.is_dir():
-            raise TransferError(f"받기 폴더가 없습니다: {recv}")
+        if not _isdir(recv):
+            raise TransferError(f"받기 폴더가 아니라 파일입니다: {recv}" if os.path.isfile(long_path(recv)) else f"받기 폴더가 없습니다: {recv}")
         _place_impl(rep, recv, apply, keep, no_overwrite, include_unverified, drive_root_fn, same_volume_fn, dest_info_fn,
                     progress_info, cancel, warn, gather_opts)
     except (Cancelled, KeyboardInterrupt) as e:
@@ -1320,11 +1427,11 @@ def _place_impl(rep: PlaceReport, recv: Path, apply: bool, keep: bool, no_overwr
     rep.meta.update(meta)
     rep.skipped.extend(rows)
     if not units and not rows:
-        if _has_files(recv):
+        if _has_files(recv, root_level=True):
             raise TransferError("받기 폴더에서 놓을 폴더를 찾지 못했습니다(<드라이브 문자>\\... 구조나 .pcmigrate-multi.json 저널이 필요합니다)")
         warn("받기 폴더에 옮길 파일이 없습니다(이미 모두 처리됐거나 빈 폴더 뼈대만 남았습니다).")
         rep.meta["nothing_to_do"] = True
-    if not meta["journal"]:
+    if meta["journal_state"] == "none":
         warn("저널이 없어 받기가 끝까지 검증됐는지 알 수 없습니다. 먼저 받기 검사(verify)를 마쳤는지 확인하세요.")
     if groot is not None:  # 모으는 폴더가 이번 배치의 도착 폴더와 겹치면 섞이므로 거부(드라이브 전체 배치와는 경고)
         for u in units:
@@ -1385,7 +1492,8 @@ def _place_impl(rep: PlaceReport, recv: Path, apply: bool, keep: bool, no_overwr
         ginfo["probed"] = True
     p.phase = "apply"
     p._real_cache.clear()  # 훑기 단계의 판정 캐시를 버린다(그 사이 폴더가 바뀌었을 수 있다)
-    p.tracker = ProgressTracker("copy", total_bytes, total_files)
+    moving = not keep and bool(p._vol_cache) and all(p._vol_cache.values())  # 전부 같은 볼륨 이동이면 진행 표시를 '이동'으로
+    p.tracker = ProgressTracker("move" if moving else "copy", total_bytes, total_files)
     try:
         for u, root, key in ready2:
             p.unit_counts = {}
@@ -1530,9 +1638,21 @@ def _account_gather_row(rep: PlaceReport, gat: PlaceReport, gp: _Placer, r: Row,
                           "status": status, "files": done, "summary": dict(gp.unit_counts), "leftover_count": len(gat.leftover) - n0[1]})
 
 
-def _guide_entries(rep: PlaceReport, groot: Path) -> dict[str, str]:
-    """이번 실행에서 모은 것의 안내 줄(모은 위치 상대 경로 -> 한 줄)."""
+_BAK_NAME = re.compile(r"\.bak(\.\d+)?$", re.I)
+_BAK_SECTION = "[보관본]"
+_GUIDE_FIRST = "이전 안내:"
+_GUIDE_MARK = "[pcmigrate-place-guide v1]"  # 두 번째 줄의 도구 고유 표식: 첫 줄만 흉내 낸 사용자 파일을 우리 것으로 오인하지 않게 한다
+
+
+def _is_bak_of_existing(full: str) -> bool:
+    m = _BAK_NAME.search(full)
+    return bool(m) and os.path.isfile(long_path(full[:m.start()]))
+
+
+def _guide_entries(rep: PlaceReport, groot: Path) -> tuple[dict[str, str], dict[str, str]]:
+    """이번 실행에서 모은 것의 안내 줄(모은 위치 상대 경로 -> 한 줄)과, 같은 이름 충돌로 밀려난 보관본(.bak) 줄. 보관본은 원위치 목록에 넣지 않는다."""
     out: dict[str, str] = {}
+    baks: dict[str, str] = {}
     for g in rep.gathered:
         if g["status"] == "preview":
             continue
@@ -1545,27 +1665,30 @@ def _guide_entries(rep: PlaceReport, groot: Path) -> dict[str, str]:
                 root = _plain(root)
                 dirs.sort()
                 for f in sorted(files):
+                    full = os.path.join(root, f)
+                    key = os.path.relpath(full, groot)
+                    if _is_bak_of_existing(full):
+                        baks[key] = key
+                        continue
                     n += 1
                     if n > GUIDE_FILES_PER_ROW:
                         break
-                    full = os.path.join(root, f)
                     sub = os.path.relpath(full, g["gathered"])
-                    out[os.path.relpath(full, groot)] = f"{os.path.relpath(full, groot)} | {(exp.rstrip(chr(92)) + chr(92) + sub) if exp else '(알 수 없음)'} | {reason}"
+                    out[key] = f"{key} | {(exp.rstrip(chr(92)) + chr(92) + sub) if exp else '(알 수 없음)'} | {reason}"
                 if n > GUIDE_FILES_PER_ROW:
                     out[rel] = f"{rel} | {exp or '(알 수 없음)'} | 파일이 많아 {GUIDE_FILES_PER_ROW}개까지만 나열했습니다 ({reason})"
                     break
         else:
             out[rel] = f"{rel} | {exp or '(알 수 없음)'} | {reason}"
-    return out
-
-
-_GUIDE_FIRST = "이전 안내:"
+    return out, baks
 
 
 def _is_our_guide(path: Path) -> bool:
+    """첫 줄과 두 번째 줄의 고유 표식이 모두 있어야 우리 안내 파일이다(첫 줄만 같은 사용자 파일은 우리 것이 아니다)."""
     try:
         with open(long_path(path), "r", encoding="utf-8-sig", errors="replace") as h:
-            return h.readline().startswith(_GUIDE_FIRST)
+            first, second = h.readline(), h.readline()
+        return first.startswith(_GUIDE_FIRST) and second.rstrip().endswith(_GUIDE_MARK)
     except OSError:
         return False
 
@@ -1582,13 +1705,24 @@ def _guide_path(groot: Path) -> Path:
 
 def _write_guide(rep: PlaceReport, groot: Path, warn) -> None:
     """모은 폴더에 이전 안내.txt 를 쓴다(구조/예상 원위치/사유만, 받기 폴더·사용자 경로 없음). 이전 실행의 줄은 지금도 있는 파일이면 합쳐 둔다.
+    같은 이름 충돌로 밀려난 .bak 은 '보관본' 구역에만 적고 원위치 줄로 올리지 않는다. 기존 안내 파일을 바꿀 때는 .bak 으로 보관한다.
     실패해도 중단하지 않고 보고한다."""
     path = _guide_path(groot)
     try:
-        entries = _guide_entries(rep, groot)
-        if path.is_file():
+        entries, baks = _guide_entries(rep, groot)
+        old_text = ""
+        if _exists(path):
             try:
-                for line in path.read_text(encoding="utf-8-sig", errors="replace").splitlines():
+                old_text = path.read_text(encoding="utf-8-sig", errors="replace")
+                in_bak = False
+                for line in old_text.splitlines():
+                    if line.startswith(_BAK_SECTION):
+                        in_bak = True
+                        continue
+                    if in_bak:
+                        if line.strip() and not line.startswith("…") and _exists(groot / line.strip()):
+                            baks.setdefault(line.strip(), line.strip())
+                        continue
                     parts = line.split(" | ")
                     if len(parts) >= 3 and line != _GUIDE_HEADER and not line.startswith("==="):
                         key = parts[0]
@@ -1597,7 +1731,7 @@ def _write_guide(rep: PlaceReport, groot: Path, warn) -> None:
             except OSError as e:
                 errorlog.record(e, f"pcmigrate place: 이전 안내.txt 읽기 {path}")
         head = ["이전 안내: 원래 위치에 놓을 수 없어 이 폴더에 모은 항목입니다. 아래 '예상 원위치'로 직접 옮기세요.",
-                "(파일 내용 안의 경로는 고쳐 쓰지 않았습니다.)", "", _GUIDE_HEADER]
+                f"(파일 내용 안의 경로는 고쳐 쓰지 않았습니다.) {_GUIDE_MARK}", "", _GUIDE_HEADER]
         lines, size = list(head), sum(len(x.encode("utf-8")) + 2 for x in head)
         keys = sorted(entries, key=str.lower)
         for i, k in enumerate(keys):
@@ -1607,14 +1741,36 @@ def _write_guide(rep: PlaceReport, groot: Path, warn) -> None:
                 break
             lines.append(entries[k])
             size += n
-        tmp = path.with_name(path.name + PART_SUFFIX)
-        os.makedirs(groot, exist_ok=True)
-        tmp.write_text("\n".join(lines) + "\n", encoding="utf-8-sig")
-        os.replace(tmp, path)
+        if baks:
+            lines += ["", f"{_BAK_SECTION} 이전에 모은 같은 이름 파일의 보관본(덮어쓰기 전 .bak)입니다. 원위치 목록이 아닙니다 — 필요 없으면 지워도 됩니다."]
+            for k in sorted(baks, key=str.lower):
+                if size > GUIDE_MAX_BYTES:
+                    lines.append("… 보관본 목록은 용량 한도로 생략했습니다")
+                    break
+                lines.append(k)
+                size += len(k.encode("utf-8")) + 2
+        text = "\n".join(lines) + "\n"
         rep.gather_info["guide_file"] = str(path)
         rep.gather_info["guide_lines"] = len(entries)
+        rep.gather_info["guide_backups"] = len(baks)
+        if old_text and old_text.replace("\r\n", "\n") == text:
+            return  # 내용이 같으면 다시 쓰지 않는다(.bak 이 쌓이지 않게)
+        tmp = path.with_name(path.name + PART_SUFFIX)
+        os.makedirs(groot, exist_ok=True)
+        tmp.write_text(text, encoding="utf-8-sig")
+        bak = None
+        if _exists(path):
+            bak = path.with_name(path.name + ".bak")  # 바꾸기 전 안내 파일은 .bak 한 벌로 보관한다(실행마다 쌓이지 않게)
+            os.replace(long_path(path), long_path(bak))
+        try:
+            os.replace(tmp, path)
+        except OSError:
+            if bak is not None:
+                os.replace(long_path(bak), long_path(path))
+            raise
     except OSError as e:
         errorlog.record(e, f"pcmigrate place: 이전 안내.txt 쓰기 {path}")
+        rep.gather_info.pop("guide_file", None)
         rep.gather_info["guide_error"] = f"{type(e).__name__}: {failure.classify(e, str(path)).label}"
         warn(f"이전 안내.txt 를 쓰지 못했습니다({rep.gather_info['guide_error']}). 모은 항목 표는 리포트에 있습니다.")
 
@@ -1623,6 +1779,8 @@ def _finish(rep: PlaceReport, recv: Path, apply: bool, keep: bool, t0: float) ->
     """마무리(소요 시간, 받기 폴더에 남은 것 조사). 여기서 오류가 나도 원래 결과/예외를 덮어쓰지 않고 오류 로그와 보고서 메모로만 남긴다."""
     try:
         rep.meta["seconds"] = round(time.monotonic() - t0, 1)
+        if rep.failed:
+            rep.meta["error_log_dir"] = str(errorlog.log_dir())
         if apply:
             rep.remaining = _remaining(recv)
     except Exception as e:  # noqa: BLE001
@@ -1645,11 +1803,25 @@ def _fmt_ov(x: dict) -> str:
     return (f"  {x['expected']} | 받기 {x['recv_size']:,}B {x['recv_mtime']} → 대상 {x['dest_size']:,}B {x['dest_mtime']}{flag}")
 
 
+def _overwritten_lines(r: PlaceReport, title: str) -> list[str]:
+    """(적용 뒤) 실제로 덮어쓴 파일과 .bak 위치."""
+    if not r.overwritten_count:
+        return []
+    t = f"{title} " if title else ""
+    out = [f"- {t}덮어쓴 파일 {r.overwritten_count:,}개(기존 파일은 .bak 으로 보관" + (f", 덮어쓰기 전에 대상이 더 새로웠던 것 {r.overwritten_newer_count:,}개" if r.overwritten_newer_count else "") + "):"]
+    for x in r.overwritten[:10]:
+        out.append(f"  {x['dest']} | 보관본 {x['backup']}" + ("  [대상이 더 새로웠음]" if x["dest_newer"] else ""))
+    if r.overwritten_count > 10:
+        out.append(f"  … 외 {r.overwritten_count - 10:,}개(전체는 --report 파일의 overwritten)")
+    return out
+
+
 def _overwrite_lines(r: PlaceReport, title: str) -> list[str]:
     total = len(r.overwrites) + r.overwrite_truncated
     if not total:
         return []
-    out = [f"- {title} 덮어쓸 파일 {total:,}개(기존 파일은 .bak 으로 보관됩니다. 덮어쓰지 않으려면 --no-overwrite):"]
+    t = f"{title} " if title else ""
+    out = [f"- {t}덮어쓸 파일 {total:,}개(기존 파일은 .bak 으로 보관됩니다. 덮어쓰지 않으려면 --no-overwrite):"]
     out += [_fmt_ov(x) for x in r.overwrites[:10]]
     if total > 10:
         out.append(f"  … 외 {total - 10:,}개(전체는 --report 파일의 overwrites)")
@@ -1694,21 +1866,27 @@ def summary_lines(rep: PlaceReport) -> list[str]:
     if interrupted and not rep.dry_run:
         lines.append("- " + _count_text(c, ("moved", "copied", "skipped_identical")) + (f", 받기 폴더에서 정리한 파일 {rep.removed_sources}개" if rep.removed_sources else "")
                      + f", 실패 {rep.failed_count}개")
-    lines += _overwrite_lines(rep, "")
+    lines += _overwrite_lines(rep, "") if rep.dry_run else _overwritten_lines(rep, "")
     if rep.gather_rep is not None:
-        lines += _overwrite_lines(rep.gather_rep, "(모으기)")
+        lines += _overwrite_lines(rep.gather_rep, "(모으기)") if rep.dry_run else _overwritten_lines(rep.gather_rep, "(모으기)")
     n_gather_fail = len([f for f in rep.failed if f.via_gather])
-    lines.append(f"- 수동으로 옮길 항목 {rep.manual_count}건: 건너뜀 {len(rep.skipped)}, 모은 항목 {len(rep.gathered)}, 실패 {rep.failed_count - n_gather_fail}"
-                 f"(모으는 중 실패 {n_gather_fail}건은 건너뜀 표의 남은 항목과 같은 파일이라 따로 세지 않음), 받기 폴더 파일을 못 지운 것 {len(rep.leftover)}")
-    for title, rows in (("건너뜀", rep.skipped), ("실패", rep.failed), ("받기 폴더 쪽 삭제 못 함", rep.leftover)):
+    if rep.manual_count or rep.failed_count or rep.leftover:  # 할 일이 없으면 이 줄을 내지 않는다
+        lines.append(f"- 수동으로 옮길 항목 {rep.manual_count}건: 건너뜀 {len(rep.skipped)}, 모은 항목 {len(rep.gathered)}, 실패 {rep.failed_count - n_gather_fail}"
+                     + (f"(모으는 중 실패 {n_gather_fail}건은 건너뜀 표의 남은 항목과 같은 파일이라 따로 세지 않음)" if n_gather_fail else "")
+                     + f", 받기 폴더 파일을 못 지운 것 {len(rep.leftover)}")
+    for title, rows in (("건너뜀", rep.skipped), ("실패", rep.failed), ("받기 폴더에 남을 것(예상)" if rep.dry_run else "받기 폴더 쪽 삭제 못 함", rep.leftover)):
         if not rows:
             continue
         lines.append(f"[{title}] 파일/폴더 | 예상 위치 | 현재 위치 | 사유")
         for r in rows[:30]:
-            what = f"폴더({r.files:,}개)" if r.kind == "folder" and r.files else r.kind.replace("folder", "폴더").replace("file", "파일")
+            what = (f"조각 {r.files}개" if r.code == SPLIT_PARTS else f"폴더({r.files:,}개)" if r.kind == "folder" and r.files
+                    else r.kind.replace("folder", "폴더").replace("file", "파일"))
             lines.append(f"  {what} | {fs.plain_path_text(r.expected)} | {fs.plain_path_text(r.current)} | {fs.plain_path_text(r.reason)}")
         if len(rows) > 30:
             lines.append(f"  … 외 {len(rows) - 30}건(전체는 --report 파일)")
+    if any(r.code == SPLIT_PARTS for r in rep.skipped):
+        lines.append("- 4GB 분할 조각이 있는 폴더: 같은 폴더의 일반 파일은 이미 놓였고 조각 파일만 받기 폴더에 남았습니다. "
+                     "`pcmigrate join <조각이 있는 폴더> --output <합칠 새 폴더>` 로 합친 뒤 그 파일을 원래 위치에 놓으세요.")
     if rep.warnings:
         lines.append(f"- 확인할 경고 {len(rep.warnings)}건:")
         lines += [f"  {fs.plain_path_text(w.get('expected', ''))} | {w.get('text', '')}" for w in rep.warnings[:10]]
@@ -1742,17 +1920,24 @@ def summary_lines(rep: PlaceReport) -> list[str]:
         rm = rep.remaining
         lines.append(f"- 받기 폴더에 남은 것: 파일 {rm['files']:,}개 / {fmt_bytes(rm['bytes'])}, 빈 폴더 {rm['empty_folders']}개"
                      "(빈 폴더는 지우지 않았습니다. 확인한 뒤 직접 지우세요)")
+        if rm.get("system_items_ignored"):
+            lines.append(f"  받기 폴더 루트의 시스템 항목({', '.join(rm['system_items_ignored'][:5])})은 남은 파일로 세지 않았습니다(Windows 가 만든 항목이라 무시).")
         if rm.get("records"):
             lines.append(f"  도구의 기록 파일(.pcmigrate-*) {rm['records']}개가 남아 있습니다(받기 검증/이어받기용 기록이라 지우지 않았습니다. 확인 뒤 직접 지우세요)")
         if rm.get("unreadable"):
             lines.append(f"  끝까지 읽지 못한 곳 {rm['unreadable']}개: 남은 파일을 확인할 수 없습니다(오류 로그와 --report 의 remaining_in_receive 참고)")
     if rep.failed_count:
         lines.append("실패한 파일은 받기 폴더에 그대로 있습니다. 원인을 해결한 뒤 같은 명령을 다시 실행하면 실패한 파일부터 이어서 처리합니다(이미 놓은 파일은 건너뜁니다).")
+        if rep.meta.get("error_log_dir"):
+            lines.append(f"오류 로그: {rep.meta['error_log_dir']}")
     if interrupted:
         lines.append("같은 명령을 다시 실행하면 이어서 합니다(파일마다 원래 자리나 새 자리에 온전히 있습니다).")
     elif rep.dry_run:
-        lines.append("다음 할 일: 이상 없으면 같은 명령에 --yes 를 붙여 실행하세요. 파일 내용 안의 경로는 고쳐 쓰지 않습니다.")
-    elif rep.needs_manual:
+        if rep.total_files or rep.gathered:
+            lines.append("다음 할 일: 이상 없으면 같은 명령에 --yes 를 붙여 실행하세요. 파일 내용 안의 경로는 고쳐 쓰지 않습니다.")
+        else:
+            lines.append("놓거나 모을 파일이 없어 --yes 로 실행해도 바뀌는 것이 없습니다.")
+    elif rep.manual_count - len([f for f in rep.failed if not f.via_gather]) > 0 or rep.leftover or rep.gathered:
         lines.append("다음 할 일: " + ("모은 폴더의 안내 파일을 보고 모은 항목을 직접 놓고, " if rep.gathered else "")
-                     + "표의 항목은 사용자가 직접 옮기세요('현재 위치'/'모은 위치' 열이 지금 파일이 있는 곳입니다).")
+                     + "건너뜀/남은 항목 표의 파일은 사용자가 직접 옮기세요('현재 위치'/'모은 위치' 열이 지금 파일이 있는 곳입니다).")
     return lines

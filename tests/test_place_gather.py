@@ -203,7 +203,7 @@ def test_cancel_during_gather_keeps_report(genv, monkeypatch):
     monkeypatch.setattr(po, "_gather_one", real)
     rep = run(genv, apply=True)
     assert rep.to_dict()["gather"]["gathered_count"] == 3
-    assert len([p for p in genv.g.rglob("*") if p.is_file() and p.name != po.GUIDE_NAME]) == 4
+    assert len([p for p in genv.g.rglob("*") if p.is_file() and p.name not in (po.GUIDE_NAME, po.GUIDE_NAME + ".bak")]) == 4
 
 
 def test_unexpected_error_mid_gather_reports_and_logs(genv, monkeypatch):
