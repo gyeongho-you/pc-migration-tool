@@ -47,6 +47,10 @@ def _show_snapshot(r: rm.SnapshotResult, work: str) -> None:
         _err(f"[안내] 링크/정션 {r.links_skipped}개는 따라가지 않았습니다.")
     for w in r.warnings:
         _err(f"[주의] {w}")
+    if r.matched:
+        shown = r.matched[:15]
+        _out("이름으로 좁혀 훑은 폴더: " + ", ".join(shown) + (f" 외 {len(r.matched) - len(shown)}개" if len(r.matched) > len(shown) else ""),
+             "(엉뚱한 폴더가 섞였으면 --match/--roots 로 범위를 조정하고 start --force 로 다시 시작하세요)")
     _out(f"작업 폴더: {work}")
 
 
@@ -93,7 +97,7 @@ def _cmd_diff(args) -> int:
             print(json.dumps(rm.candidates_dict(a), ensure_ascii=False, indent=1))
         else:
             _out(*rm.render_candidates(a))
-        _out(f"후보 저장: {rm.CAND_FILE}")
+        (_err if args.json else _out)(f"후보 저장: {rm.CAND_FILE}")  # --json 이면 stdout 은 순수 JSON 만
         return 0
     return _run(go)
 
@@ -104,8 +108,7 @@ def _cmd_draft(args) -> int:
         a, rule, out = rm.write_draft(s, args.output, rm.RANK_ARG[args.min_confidence], args.id)
         _out(*rm.render_candidates(a, 15))
         if rule is None:
-            _err("규칙 초안을 만들지 않았습니다. " + ("레지스트리 저장일 가능성이 높음(파일 기반 이전 불가)." if a.registry_likely
-                                          else "조건에 맞는 후보가 없습니다(--min-confidence low 로 낮춰 보세요)."))
+            _err("규칙 초안을 만들지 않았습니다. " + rm.no_draft_message(a))
             return 0
         _out(f"규칙 초안 저장: {errorlog.tokenize_home(str(out))} (paths {len(rule['paths'])}개, exclude {len(rule['exclude'])}개)",
              "확인 후 rules 폴더에 넣고 `pcmigrate check-rules --rules <폴더>` 로 검증하세요. 초안이므로 내용을 꼭 확인하세요.")

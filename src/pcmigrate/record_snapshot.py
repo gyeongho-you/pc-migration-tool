@@ -42,6 +42,8 @@ NOISE_TOP: frozenset[str] = frozenset({
     "squirreltemp", "virtualstore", "package cache", "softwaredistribution", "usoshared", "usoprivate", "elevateddiagnostics",
     "placeholdertilelogoplate", "application data", "pcmigrate",  # pcmigrate: 이 도구 자신의 로그/기록
 })
+# 사용자 지정 루트(--roots)에서는 앱 폴더 안의 'Packages' 같은 이름이 진짜 설정일 수 있어 명백한 임시/캐시 이름만 건너뛴다.
+NOISE_TOP_CUSTOM: frozenset[str] = frozenset({"temp", "tmp", "inetcache", "crashdumps", "d3dscache", "squirreltemp", "pcmigrate"})
 # 두 단계 (상위, 하위) 이름이 일치하는 잡음 폴더(소문자): Windows 구성요소, 브라우저 프로필 등
 NOISE_PAIRS: frozenset[tuple[str, str]] = frozenset({
     ("microsoft", "windows"), ("microsoft", "edge"), ("microsoft", "teams"), ("google", "chrome"), ("microsoft", "onedrive"),
@@ -58,7 +60,8 @@ class Root:
 
 
 def _norm(p: str) -> str:
-    return os.path.normcase(os.path.normpath(p))
+    """경로 비교용 정규화. scandir 항목 경로에는 긴 경로 접두(역슬래시 2개+물음표)가 붙으므로 접두를 떼고 비교한다(자기 제외가 어긋나지 않게)."""
+    return os.path.normcase(os.path.normpath(fs.plain_path_text(p)))
 
 
 def default_roots(documents_fn: Callable[[], str | None] | None = None) -> tuple[list[Root], list[str]]:
@@ -94,19 +97,46 @@ def _known_documents() -> str | None:
 
 def custom_root(path: str) -> Root:
     """사용자가 지정한 폴더. 홈 아래면 %USERPROFILE% 표기로, 아니면 그대로(개인 이름이 없는 경로일 때만 의미 있음)."""
-    ap = os.path.abspath(path)
-    return Root(errorlog.tokenize_home(ap), ap, custom=True)
+    ap = fs.plain_path_text(os.path.abspath(path))
+    return Root(standard_token(ap), ap, custom=True)
+
+
+def standard_token(path: str) -> str:
+    """경로를 %APPDATA% / %LOCALAPPDATA% / %PROGRAMDATA% / %USERPROFILE%\\Documents / %USERPROFILE% 표준 토큰 표기로 바꾼다
+    (가장 긴 기준 폴더 우선, 같은 폴더를 가리키는 %USERPROFILE%\\AppData\\Roaming 같은 표기도 %APPDATA% 로 통일). 어디에도 안 맞으면 홈 치환만."""
+    bases: list[tuple[str, str]] = []
+    for var in ("APPDATA", "LOCALAPPDATA", "PROGRAMDATA"):
+        v = envpaths.lookup(var)
+        if v:
+            bases.append((f"%{var}%", v))
+    home = envpaths.lookup("USERPROFILE") or os.path.expanduser("~")
+    if home:
+        bases.append((DOCS_TOKEN, os.path.join(home, "Documents")))
+        bases.append((HOME_TOKEN, home))
+    n = _norm(path)
+    for tok, base in sorted(bases, key=lambda b: -len(b[1])):
+        nb = _norm(base)
+        if n == nb or n.startswith(nb + os.sep):
+            rest = os.path.normpath(fs.plain_path_text(path))[len(os.path.normpath(base)):]
+            return tok + rest
+    return errorlog.tokenize_home(path)
 
 
 _EXTRA_STOP = frozenset({"app", "apps", "pro", "the", "and", "for", "new", "lite"})  # 너무 흔해 엉뚱한 폴더(Application Data 등)가 걸림
+# 제조사 낱말: 이것만으로 폴더를 고르면 같은 제조사의 다른 프로그램까지 통째로 훑으므로 단독 매칭에 쓰지 않는다(제조사\프로그램 두 단계에서 프로그램 낱말로만 맞춘다).
+VENDOR_WORDS = frozenset({"adobe", "autodesk", "microsoft", "google", "trimble", "bentley", "graphisoft", "nemetschek", "dassault",
+                          "jetbrains", "mozilla", "apple", "oracle", "intel", "nvidia", "amd", "corel", "esri", "ptc", "siemens",
+                          "mcneel", "robert", "chaos", "chaosgroup", "maxon", "unity", "epic", "valve"})
 
 
 def match_words(program: str, extra: list[str] | None = None) -> list[str]:
     """프로그램 이름에서 폴더 이름 부분 일치에 쓸 낱말(소문자). 너무 흔한 낱말/두 글자 이하는 뺀다. 공백 없는 전체 이름도 하나로 친다."""
     words = [w for w in re.findall(r"[0-9A-Za-zㄱ-힣]+", program.lower())
              if len(w) >= 3 and w not in discover_data.TOKEN_STOPWORDS and w not in _EXTRA_STOP]
+    specific = [w for w in words if w not in VENDOR_WORDS]
+    words = specific or words  # 제조사 낱말뿐인 이름이면 그대로 쓴다(사용자가 그것을 원한 것)
     compact = re.sub(r"\s+", "", program.lower())
-    if len(compact) >= 3:
+    if len(compact) >= 3 and compact not in VENDOR_WORDS:
         words.append(compact)
     words += [w.strip().lower() for w in (extra or []) if w.strip()]
     return list(dict.fromkeys(words))
@@ -144,19 +174,20 @@ class Snapshot:
     hash_limit: int = HASH_LIMIT
     roots: list = field(default_factory=list)  # 훑은 루트의 환경변수 표기
     notes: list = field(default_factory=list)
+    matched: list = field(default_factory=list)  # 이름으로 좁혔을 때 훑은 시작 폴더(환경변수 표기)
 
     def as_dict(self) -> dict:
         return {"version": 1, "label": self.label, "taken_at": self.taken_at, "hash_limit": self.hash_limit,
                 "roots": self.roots, "truncated": self.truncated, "unreadable_count": self.unreadable_count,
                 "unreadable": self.unreadable, "cloud_skipped": self.cloud_skipped, "cloud_examples": self.cloud_examples,
                 "links_skipped": self.links_skipped, "noise_skipped": self.noise_skipped, "hashed": self.hashed,
-                "carried": self.carried, "notes": self.notes, "files": self.files}
+                "carried": self.carried, "notes": self.notes, "matched": self.matched, "files": self.files}
 
     @staticmethod
     def from_dict(d: dict) -> "Snapshot":
         s = Snapshot(str(d.get("label", "")), str(d.get("taken_at", "")))
         s.files = {k: list(v) for k, v in (d.get("files") or {}).items()}
-        for key in ("unreadable", "cloud_examples", "roots", "notes"):
+        for key in ("unreadable", "cloud_examples", "roots", "notes", "matched"):
             setattr(s, key, list(d.get(key) or []))
         for key in ("unreadable_count", "cloud_skipped", "links_skipped", "hashed", "carried"):
             setattr(s, key, int(d.get(key) or 0))
@@ -188,6 +219,7 @@ class _Walker:
         self.attr_getter, self.hash_fn, self.scrub = attr_getter, hash_fn, scrub
         self.junk = junk.make_spec()
         self.excl = [_norm(p) for p in opts.exclude_dirs if p]
+        self.custom = False  # 지금 훑는 루트가 --roots 로 직접 지정한 것인지
         self.bytes_hashed = 0
         self.logged = 0
         self.last_report = clock()
@@ -219,9 +251,9 @@ class _Walker:
         if self.o.include_caches:
             return None
         low = tuple(p.lower() for p in parts)
-        if len(low) == 1 and low[0] in NOISE_TOP:
+        if len(low) == 1 and low[0] in (NOISE_TOP_CUSTOM if self.custom else NOISE_TOP):
             return "시스템/설치 폴더"
-        if len(low) == 2 and low in NOISE_PAIRS:
+        if len(low) == 2 and low in NOISE_PAIRS and not self.custom:
             return "Windows/브라우저 구성요소"
         if discover_data.is_regenerable(parts):
             return "캐시/로그 폴더"
@@ -318,6 +350,8 @@ class _Walker:
                 return
             subdirs.append((full, etok, parts))
             return
+        if self.excl and self._excluded(full):
+            return
         why = self._skip_file(e.name)
         if why:
             self._noise(why)
@@ -351,6 +385,10 @@ def take_snapshot(label: str, roots: list[Root], opts: SnapshotOptions | None = 
         seen.add(key)
         if cancel is not None and cancel():
             raise Cancelled()
+        if w._excluded(root.path):  # 작업 폴더 자체(또는 그 안)를 루트로 준 경우: 자기 기록 파일을 훑지 않는다
+            snap.notes.append("작업 폴더 안의 루트는 자기 기록 파일이 섞이지 않게 건너뛰었습니다")
+            continue
+        w.custom = root.custom
         narrow = bool(opts.narrow_words) and not root.custom
         try:
             with os.scandir(fs.long_path(root.path)) as it:
@@ -369,6 +407,8 @@ def take_snapshot(label: str, roots: list[Root], opts: SnapshotOptions | None = 
             tok = root.token + "\\" + e.name
             try:
                 if not narrow or _name_matches(e.name, opts.narrow_words):
+                    if narrow and len(snap.matched) < MAX_LISTED:
+                        snap.matched.append(tok)
                     w.start_entry(root, e, (e.name,), tok)
                     continue
                 # 이름이 맞지 않는 폴더는 한 단계 아래(예: Autodesk\Revit)만 이름으로 찾는다
@@ -382,6 +422,8 @@ def take_snapshot(label: str, roots: list[Root], opts: SnapshotOptions | None = 
                     if snap.truncated:
                         break
                     if _name_matches(kid.name, opts.narrow_words):
+                        if len(snap.matched) < MAX_LISTED:
+                            snap.matched.append(tok + "\\" + kid.name)
                         w.start_entry(root, kid, (e.name, kid.name), tok + "\\" + kid.name)
             except Cancelled:
                 raise

@@ -71,6 +71,8 @@ def _home_forms() -> list[str]:
     for h in homes:
         if h and "%" not in h and len(h) > 3:
             forms.update({h, h.replace("\\", "/"), "\\\\?\\" + h})
+            # 예외 메시지는 경로를 repr 로 찍어 백슬래시가 두 배로 보인다(PermissionError 의 '\\\\?\\C:\\Users\\이름\\...')
+            forms.update({f.replace("\\", "\\\\") for f in (h, "\\\\?\\" + h)})
     return sorted(forms, key=len, reverse=True)
 
 
