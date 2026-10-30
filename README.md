@@ -5,6 +5,47 @@
 (자세한 방식은 아래 "덮어쓰기와 .bak" 참고). 규칙 폴더(`rules/`)가 없거나 비어 있으면 조용히 넘어가지 않고 오류로 멈춥니다.
 설계 방침과 요구사항은 [CLAUDE.md](CLAUDE.md)를 보세요.
 
+[![tests](https://github.com/gyeongho-you/pc-migration-tool/actions/workflows/tests.yml/badge.svg)](https://github.com/gyeongho-you/pc-migration-tool/actions/workflows/tests.yml)
+(배지는 GitHub Actions 의 자동 시험 결과입니다. 설정은 [`.github/workflows/tests.yml`](.github/workflows/tests.yml), 설명은 아래 "테스트".)
+
+## 빠른 시작
+
+**누구를 위한 도구인가**: 쓰던 Windows PC 에서 새로 설치한 Windows 11 PC 로 업무용(건축 CAD/BIM) 환경과 파일을 옮기는 사람. 프로그램 목록, 설정·템플릿·단축키·플러그인은 **설정 묶음(.zip) 한 개**로, 도면·사진·프로젝트 같은 큰 파일은 **직접 연결 또는 외장 드라이브**로 옮깁니다. 프로그램 자체와 라이선스는 옮기지 않습니다(새 PC 에서 설치·로그인).
+Windows 11 에서만 개발·시험했고 **Windows 10 은 검증하지 않았습니다**([확인표](docs/windows10-check.md)).
+
+흐름은 3단계입니다. GUI 는 `python -m pcmigrate gui`(exe 는 `pcmigrate-gui.exe` 더블클릭)로 열고 시작 화면의 큰 버튼 ①②③ 을 차례로 누르면 됩니다. 명령줄은 아래와 같습니다.
+
+**① 구 PC: 설정 묶음 내보내기**
+- GUI: ① 쓰던 PC에서 준비하기 → 프로그램 조사 → 해야 할 일 목록 → 설정 묶음 파일 만들기(`추천대로 한 번에 ▸` 도 됩니다).
+- 명령줄: 실행 중인 프로그램을 모두 닫고
+  ```
+  pcmigrate scan                                  # 설치된 프로그램과 적용될 규칙 확인(읽기만)
+  pcmigrate checklist --format md --output 폴더\checklist.md
+  pcmigrate export --output 폴더\settings.zip
+  ```
+
+**② 양쪽 PC: 내 파일 옮기기(직접 연결 / 외장 드라이브)**
+- GUI: ② 내 파일 옮기기 → 내 파일 찾기(폴더를 직접 체크) → 방법 선택(두 PC 직접 연결 추천 / 외장 드라이브) → 미리보기 → 복사 → 결과가 "실패 0" 인지 확인.
+- 명령줄(직접 연결): 새 PC 에서 `pcmigrate receive`(6자리 코드가 나옴), 구 PC 에서 `pcmigrate send 자동 --code 123456 원본폴더`. 외장 드라이브(NTFS)는 `pcmigrate transfer 원본폴더 E:\이전 --dry-run` 으로 미리보기 한 뒤 `--dry-run` 을 빼고 실행하고, 새 PC 에서 `pcmigrate verify --manifest 목록.jsonl --target 폴더` 로 확인합니다([1TB 이전 가이드](#1tb-이전-가이드-외장-드라이브--랜선)).
+- 여러 폴더를 `<드라이브>\<경로>` 구조로 받았다면 새 PC 에서 `pcmigrate place 받기폴더`(미리보기) → `--yes`(적용) 로 원래 위치에 놓습니다. 중요한 것은 복사만 하는 `--keep` 을 먼저 쓰세요.
+
+**③ 새 PC: 설치 확인과 복원**
+- GUI: ③ 새 PC에서 설치하고 가져오기 → 설정 묶음 선택 → 프로그램 설치 확인 → 미리보기 → 두 개 체크 후 복원.
+- 명령줄: 필요한 프로그램을 먼저 설치하고(`pcmigrate install-check 설정묶음.zip` 으로 구 PC 프로그램이 있는지 확인), 모든 프로그램을 닫고
+  ```
+  pcmigrate import 설정묶음.zip --dry-run         # 무엇이 만들어지고 덮어써질지 미리보기(쓰기 없음)
+  pcmigrate import 설정묶음.zip --yes             # 실제 복원(덮어쓸 파일은 .bak 으로 보관)
+  ```
+
+**꼭 지켜 주세요**
+- 구 PC 의 **원본은 읽기만** 합니다. 새 PC 의 검사가 "실패 0" 이고 프로그램·데이터를 직접 확인하기 전에는 구 PC 를 지우거나 포맷하지 마세요.
+- **미리보기부터**: `--dry-run`(복원, 복사)과 GUI 의 미리보기 단계를 건너뛰지 마세요. 덮어쓴 파일은 `.bak` 으로 남습니다.
+- **라이선스는 복원되지 않습니다.** Autodesk 로그인, Rhino/V-Ray/Enscape 재활성화, 동글, 브라우저 저장 비밀번호·쿠키, 카카오톡 대화, 공인인증서 등은 체크리스트를 보고 직접 하세요.
+- 되돌리기 어려운 이동(`place`)은 중요한 자료일수록 `--keep`(복사만)으로 먼저 하세요.
+- **공용망(사무실 공유망·공용 와이파이)에서 LAN 직접 전송을 쓰지 마세요.** 내용이 암호화되지 않습니다. 두 PC 를 랜선으로 직접 잇거나 믿을 수 있는 개인 공유기만 쓰세요.
+
+자세한 설명: [그래픽 화면(GUI)](#그래픽-화면gui) · [전체 이전 순서](#전체-이전-순서) · [권장 사용 순서(명령줄)](#권장-사용-순서) · [1TB 이전 가이드](#1tb-이전-가이드-외장-드라이브--랜선) · [덮어쓰기와 .bak](#덮어쓰기와-bak-규칙별-복원-범위-프로그램-설치) · [현장 안내](docs/field-guide.md) · [Windows 10 확인표](docs/windows10-check.md)
+
 ## 내려받기 (Python 없이 쓰려면)
 
 Python 이 없는 PC 에서는 [릴리스 페이지](https://github.com/gyeongho-you/pc-migration-tool/releases)에서 받으세요.
@@ -792,6 +833,8 @@ winget 에 없는 프로그램은 "수동 설치" 목록으로 안내합니다. 
 python -m pip install pytest
 python -m pytest -q
 ```
+
+전체 시험은 15분 이상 걸립니다. GitHub Actions(`.github/workflows/tests.yml`)는 `windows-latest` 에서 Python 3.13 으로 push/pull request 마다 돌리며, 시간 제한이 있는 성능 시험 3개는 부하에서 간헐 실패하므로 별도 job(실패해도 전체를 막지 않음)으로 나눕니다. 병렬 실행용 `pytest-xdist` 는 CI 에서만 설치합니다(로컬은 위 명령 그대로). 이 워크플로는 작성만 했고 실제 GitHub 에서 실행해 확인하지는 않았습니다.
 
 테스트는 임시 폴더(`tmp_path`)와 mock 을 주로 쓰며 실제 레지스트리, winget, 사용자 폴더는 건드리지 않습니다. 다만 일부 시험은 실제 도구를 씁니다(GUI 스모크 시험은 숨긴 실제 tkinter 창을 만들고, 통합 시험은 임시 폴더 안에서 실제 robocopy 를 실행합니다).
 
