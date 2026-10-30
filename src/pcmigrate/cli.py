@@ -1271,6 +1271,8 @@ def build_parser() -> argparse.ArgumentParser:
     lg.set_defaults(func=_cmd_logs)
     from . import lan_cli
     lan_cli.add_parsers(sub, _path_arg)
+    from . import record_cli
+    record_cli.add_parsers(sub, _path_arg)
     return p
 
 
