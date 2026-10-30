@@ -5,6 +5,8 @@
 #   xdist 는 dev 의존성이 아니라 CI 에서만 설치합니다(pyproject.toml 은 바꾸지 않음).
 #   --dist loadfile: 같은 파일의 시험은 한 프로세스에서 순서대로 돌아 모듈 단위 공유 상태가 섞이지 않습니다.
 #   시험은 tmp_path/tmp_path_factory 와 포트 0(임의 포트)만 써서 프로세스 간 충돌 요소가 없습니다(docs/test-layout.md 참고).
+# - 실제 robocopy 로 전송하는 시험(이름에 real_robocopy)은 병렬 실행 중 다른 시험과 디스크를 같이 쓰면 간헐 실패해서(실제 Actions 실행에서 확인)
+#   병렬 job 에서 빼고 robocopy job 에서 순차로 돌립니다.(CI 첫 실행에서 병렬 시 1개 실패, 단독 실행은 통과를 진단으로 확인)
 # - 시간 제한이 있는 성능 시험 3개는 부하에서 간헐 실패하므로 병렬 job 에서 빼고 별도 job(perf)에서
 #   혼자 돌리며 continue-on-error 로 전체 결과를 막지 않습니다.
 # - build job 은 시간이 길어 수동 실행(workflow_dispatch)에서만 돕니다.
@@ -44,10 +46,26 @@ jobs:
         run: python -m pip install -e ".[dev]" pytest-xdist
       - name: Run tests (성능 시험 3개 제외, 병렬)
         run: >
-          python -m pytest -q -n auto --dist loadfile
+          python -m pytest -q -n auto --dist loadfile -k "not real_robocopy"
           --deselect tests/test_settings_filter_excluded_report.py::test_perf_20k_files_small_overhead
           --deselect tests/test_settings_filter_excluded_report.py::test_gate_judge_micro_cost
           --deselect tests/test_gui_candidates_coverage.py::test_screen_switch_is_fast_with_fake_controller
+
+  robocopy:
+    name: robocopy 실제 전송 시험(병렬 없이 순차)
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+      - name: Run real robocopy tests (병렬 시험과 간섭하지 않도록 따로)
+        run: python -m pytest -q -k real_robocopy
 
   perf:
     name: perf (시간 제한 시험, 실패해도 무시)
