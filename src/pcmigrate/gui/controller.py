@@ -83,12 +83,14 @@ from .controller_transfer import TransferMixin  # stage43
 from .controller_auto import AutoMixin  # stage43
 from .controller_config import ConfigMixin  # stage43
 from .controller_undo import UndoMixin  # stage43
+from .controller_place import PlaceMixin  # stage50: 받은 파일 원래 위치에 놓기
+from .place_flow import PlaceState  # stage50
 
 _WRITING_TASKS = (T.TASK_EXPORT, T.TASK_EXPORT_RETRY, T.TASK_TRANSFER, T.TASK_APPLY, T.TASK_RETRY)  # 파일을 쓰는 작업
 FORCE_STOP_AFTER = 15.0  # '중지' 요청 후 이 시간(초)이 지나도 못 멈추면 force_stop_ready() 가 True
 
 
-class Controller(FilesMixin, NetMixin, PackageFindMixin, ScanMixin, ExportMixin, InstallMixin, ImportMixin, TransferMixin, AutoMixin, ConfigMixin, UndoMixin):
+class Controller(FilesMixin, NetMixin, PackageFindMixin, ScanMixin, ExportMixin, InstallMixin, ImportMixin, TransferMixin, AutoMixin, ConfigMixin, UndoMixin, PlaceMixin):
     """화면과 api 사이의 중간층. 이벤트는 listener(kind, payload) 로 전달된다."""
 
     def __init__(self, api_mod: Any = None, deps: Any = None, runner: Runner | None = None,
@@ -117,6 +119,7 @@ class Controller(FilesMixin, NetMixin, PackageFindMixin, ScanMixin, ExportMixin,
         self.roadmap_marks: set[str] = set()  # 전체 이전 순서에서 체크한 항목(창을 닫았다 열어도 유지)
         self._in_listener_error = False
         self.auto: AutoRun | None = None  # '추천대로 한 번에' 진행 상태(없으면 None)
+        self.place_state = PlaceState()  # stage50: 받은 파일 원래 위치에 놓기 화면의 상태
         self.drive_lister: Callable[[], list] | None = None  # 시험에서 가짜 드라이브 목록을 넣는 자리
         if hasattr(self.runner, "on_callback_error"):
             self.runner.on_callback_error = self._callback_failed
@@ -305,8 +308,14 @@ class Controller(FilesMixin, NetMixin, PackageFindMixin, ScanMixin, ExportMixin,
             return T.STOP_DONE_APPLY
         if task == T.TASK_UNDO:
             return T.STOP_DONE_UNDO
+        if task == T.TASK_PLACE:  # stage50
+            return T.STOP_DONE_PLACE
+        if task == T.TASK_PLACE_PREVIEW:
+            return T.STOP_DONE_PLACE_PREVIEW
         return T.STOP_DONE_READONLY
 
 
 # stage30b: '되돌리기'는 파일을 쓰는 작업이라 강제로 버린 옛 쓰기 작업이 남아 있으면 시작하지 않는다
 _WRITING_TASKS = _WRITING_TASKS + (T.TASK_UNDO,)
+# stage50: 받은 파일 놓기는 받은 폴더와 원래 위치에 쓰는 작업이다(미리보기도 강제로 버린 옛 놓기가 아직 파일을 옮기는 중이면 어긋난 결과를 내므로 함께 막는다)
+_WRITING_TASKS = _WRITING_TASKS + (T.TASK_PLACE, T.TASK_PLACE_PREVIEW)

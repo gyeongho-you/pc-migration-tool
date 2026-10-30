@@ -13,6 +13,7 @@ NEW_PACKAGE, NEW_PREVIEW, NEW_CONFIRM, NEW_RESULT = "new_package", "new_preview"
 NEW_INSTALL = "new_install"  # 프로그램 설치 확인(건너뛰기 가능)
 TRANSFER = "transfer"
 AUTO = "auto_run"  # 추천대로 한 번에(진행 화면 하나)
+PLACE = "place_files"  # stage50: 받은 파일 원래 위치에 놓기(② 내 파일 옮기기에서 들어간다. 맨 위 '전체 단계 n/4' 는 표시하지 않는다)
 
 OLD_FLOW = (OLD_SCAN, OLD_DISCOVER, OLD_CHECKLIST, OLD_EXPORT)
 NEW_FLOW = (NEW_PACKAGE, NEW_INSTALL, NEW_PREVIEW, NEW_CONFIRM, NEW_RESULT)

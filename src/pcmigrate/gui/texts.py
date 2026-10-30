@@ -889,6 +889,8 @@ from .texts_files import install as _install_files_texts  # noqa: E402
 _install_files_texts(globals())
 from .texts_net import install as _install_net_texts  # noqa: E402  (stage39: 이더넷 주소 자동 맞추기 문구)
 _install_net_texts(globals())
+from .texts_place import install as _install_place_texts  # noqa: E402  (stage50: 받은 파일 원래 위치에 놓기 화면 문구)
+_install_place_texts(globals())
 START_CHOICES = (START_CHOICES[0], START_CARD3, START_CHOICES[2])  # noqa: F821  (② 카드만 새 문구로)
 
 # --------------------------------------------------------------------------- 전체 이전 순서(? 도움말에서 열림, README 와 같은 원본)
@@ -923,6 +925,8 @@ ROADMAP_NEW = (
      "도구의 해야 할 일 목록이 설치할 프로그램을 알려 줍니다. 설치, 로그인·인증(동글 드라이버 포함)은 직접 하셔야 하며, 가능하면 각 프로그램을 한 번 실행했다가 종료해 주세요."),
     ("new3", "데이터를 복사하고 검사합니다", WHO_TOOL,
      "'② 내 파일 옮기기'의 받는 쪽(새 PC)에서 데이터를 받고, 랜선이면 2단계 '검사 시작'으로 목록 파일과 비교합니다. 결과가 '실패 0'인지 확인해 주세요."),
+    ("new3b", "받은 파일을 원래 위치로 놓습니다", WHO_BOTH,
+     "'② 내 파일 옮기기'의 '받은 파일 원래 위치에 놓기' 화면에서 받은 폴더의 파일을 구 PC와 같은 드라이브·같은 경로로 놓습니다. 미리보기로 확인한 뒤 놓고, 시스템 폴더처럼 자동으로 놓지 않은 것은 직접 옮겨 주세요."),
     ("new4", "모든 프로그램을 종료하고 설정 묶음 파일을 미리보기로 확인한 뒤 복원합니다", WHO_TOOL,
      "'③ 새 PC에서 설치하고 가져오기'에서 (②로 받은) 설정 묶음 파일을 고르고 미리보기(실제로 바꾸지 않음)를 확인한 뒤 복원합니다. 덮어쓰는 파일은 백업 파일(.bak)로 남습니다."),
     ("new5", "각 프로그램을 열어 설정·템플릿·글꼴·플로터·참조 경로를 점검합니다", WHO_HUMAN,

@@ -10,7 +10,7 @@ from tkinter import ttk
 from .. import state as S
 from .. import texts as T
 from ...progress import fmt_bytes
-from .common import BODY_FONT, INFO_BORDER, INFO_FG, MUTED_FG, SUB_FONT, BaseView, ScrollBody, autowrap, FoldTLabel
+from .common import BODY_FONT, INFO_BORDER, INFO_FG, MUTED_FG, SUB_FONT, ActionButton, BaseView, ScrollBody, autowrap, FoldTLabel
 
 
 class MethodView(BaseView):
@@ -59,6 +59,8 @@ class MethodView(BaseView):
         note = tk.Label(self.role_frame, text=T.MV_ROLE_NOTE, justify="left", anchor="w", fg=INFO_FG)
         note.pack(anchor="w", fill="x", padx=(12, 0), pady=(6, 0))
         autowrap(note, 90)
+        ActionButton(body, text=T.BTN_PL_ENTER_LINK, kind="link",  # stage50: 나중에 따로 시작할 때(이미 받은 폴더)
+                     command=lambda: self.guarded(self.c.place_open, S.METHOD)).pack(anchor="w", pady=(8, 0))
         self.finish()
         self._sync()
 
