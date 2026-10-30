@@ -59,6 +59,7 @@ NO_SPACE, NO_OVERWRITE, BLOCKED, UNKNOWN_LOC, UNC, UNVERIFIED, READONLY_DRIVE, B
     "bad_journal", "receive_unreadable")
 LEFTOVER = "source_not_removed"
 MAP_CONFLICT = "map_conflict"
+MTIME_TOLERANCE_NS = 2_000_000_000  # FAT(2초)/exFAT 의 수정 시각 해상도: 크기가 같고 시각 차이가 이 안이면 같은 파일로 본다
 GATHER_DIR_NAME = "이전 파일"
 GUIDE_NAME = "이전 안내.txt"
 GUIDE_FILES_PER_ROW = 500
@@ -143,7 +144,10 @@ def protected_reason(logical: str, *, is_dir: bool = True) -> str | None:
     if _SHORT83.search(ntpath.splitdrive(logical)[1]):
         longer = expand_short_names(logical)
         if longer is None:
-            return "8.3 짧은 이름 경로(긴 이름을 확인할 수 없어 보호 위치로 취급)"
+            drive = ntpath.splitdrive(logical)[0]
+            if drive and not drive.startswith("\\\\") and not os.path.isdir(drive + "\\"):
+                return None  # 드라이브가 없으면 '대상 드라이브 없음'으로 먼저 보고된다
+            return "8.3 짧은 이름이 들어 있어 긴 이름을 확인할 수 없는 경로(보호 위치일 수 있어 건너뜀)"
         logical = longer
     return _protected_reason(logical, is_dir=is_dir)
 
@@ -342,7 +346,7 @@ def resolve_gather(arg: str | None, recv: Path, *, desktop_fn=None, env: dict | 
         if '"' in arg:
             raise TransferError(f"모으는 폴더 경로에 따옴표(\")가 들어 있습니다: {arg!r}. 경로 끝이 역슬래시(\\)인 채 따옴표로 닫으면 cmd 가 따옴표를 경로의 일부로 넘깁니다. "
                                 "끝의 역슬래시를 빼고 다시 지정하세요(--gather 폴더).")
-        if arg.startswith("~"):
+        if arg == "~" or arg.startswith(("~\\", "~/")):  # '~backup' 같은 이름은 사용자 이름 확장으로 보지 않고 상대 폴더 이름으로 둔다
             arg = os.path.expanduser(arg)
     g = Path(os.path.abspath(default_gather_folder(desktop_fn) if default else arg))
     real = Path(os.path.realpath(g))
@@ -663,6 +667,11 @@ class _Placer:
             ok = self._real_cache[key] = _is_within(Path(fs.plain_path_text(str(d))), self.recv)  # scandir 경로의 긴 경로 접두를 뗀다
         return ok and not os.path.islink(long_path(src))
 
+    def _chain_ok(self, src: Path) -> bool:
+        """(캐시 없이) 지금 받기 폴더~원본 사이에 링크/정션이 없는지. 이동/삭제 직전에 다시 확인한다(검사 뒤 폴더가 링크로 바뀌는 경우 방어)."""
+        d = Path(fs.plain_path_text(str(src.parent)))
+        return fs.reparse_in_chain(self.recv, d) is None and not os.path.islink(long_path(src))
+
     def _mode(self, same_vol: bool) -> str:
         return KEEP if self.keep else (MOVE if same_vol else COPY_DELETE)
 
@@ -776,7 +785,7 @@ class _Placer:
                 try:
                     st = os.stat(long_path(phys))
                     # 같은 크기라도 수정 시각이 다르면 다른 파일일 수 있다(덮어쓰면 기존 파일은 .bak 으로 남아 공간이 더 필요)
-                    same = st.st_size == size and st.st_mtime_ns == st_src.st_mtime_ns
+                    same = st.st_size == size and abs(st.st_mtime_ns - st_src.st_mtime_ns) <= MTIME_TOLERANCE_NS
                 except OSError:
                     same = False
                 if not same:
@@ -828,7 +837,7 @@ class _Placer:
         try:
             st = os.stat(long_path(src))
             if (os.path.islink(long_path(src)) or st.st_size != size or (mtime_ns is not None and st.st_mtime_ns != mtime_ns)
-                    or not self._src_safe(src)):
+                    or not self._src_safe(src) or not self._chain_ok(src)):
                 raise OSError("받기 폴더의 파일이 바뀌었거나 링크라 지우지 않았습니다")
             os.unlink(long_path(src))
             if len(self.rep.removed_list) < MAX_LISTED:
@@ -872,6 +881,10 @@ class _Placer:
             self._fail(src, logical, failure.OTHER, type(e).__name__, e)
 
     def _apply_file_inner(self, src: Path, logical: str, phys: Path, root: Path, size: int, mode: str) -> None:
+        if not self._chain_ok(src):  # 훑은 뒤 폴더가 링크로 바뀌었으면 건드리지 않는다
+            self._emit(src, size, "failed", LINK)
+            self._fail(src, logical, LINK, "받기 폴더 안의 링크를 거침(훑은 뒤 바뀜)")
+            return
         mt0 = os.stat(long_path(src)).st_mtime_ns
         exists = os.path.lexists(long_path(phys))
         if exists and os.path.isdir(long_path(phys)):
@@ -912,6 +925,10 @@ class _Placer:
             return
         if mode == MOVE:
             res = copier.FileResult(str(src), str(phys), copier.FAILED, size=size)
+            if not self._chain_ok(src):  # 이동 직전 한 번 더
+                self._emit(src, size, "failed", LINK)
+                self._fail(src, logical, LINK, "받기 폴더 안의 링크를 거침(이동 직전 확인)")
+                return
             try:
                 os.makedirs(long_path(phys.parent), exist_ok=True)
                 copier._install(src, phys, res, long_path)  # 기존 파일은 .bak, 실패하면 되돌림
@@ -1117,6 +1134,7 @@ def _place_impl(rep: PlaceReport, recv: Path, apply: bool, keep: bool, no_overwr
     rep.total_files, rep.total_bytes = total_files, total_bytes
     # ---- 2) 실행(또는 미리보기)
     p.phase = "apply"
+    p._real_cache.clear()  # 훑기 단계의 판정 캐시를 버린다(그 사이 폴더가 바뀌었을 수 있다)
     p.tracker = ProgressTracker("copy", total_bytes, total_files)
     try:
         for u, root, key in ready2:
@@ -1205,46 +1223,59 @@ def _gather_leftovers(rep: PlaceReport, recv: Path, groot: Path, apply: bool, ke
         return
     total_files = sum(t.files for t in gp.totals.values())
     gp.phase = "apply"
+    gp._real_cache.clear()
     gp.tracker = ProgressTracker("copy", sum(t.bytes for t in gp.totals.values()), total_files)
     try:
         for i, (r, rel) in enumerate(rows):
             gp.unit_counts = {}
             n0 = (len(gat.failed), len(gat.leftover), len(gat.skipped))
             base = str(groot.joinpath(*rel))
+            aborted = True
             try:
                 _gather_one(gp, r, rel, groot)
-            finally:  # 취소/중단으로 빠져나가도 지금까지의 실패/남은 것은 원래 놓으려던 위치 기준으로 보고서에 반영한다
-                for grp in (gat.failed[n0[0]:], gat.leftover[n0[1]:], gat.skipped[n0[2]:]):
-                    for x in grp:
-                        _restore_expected(x, base, r.expected)
-                for x in gat.failed[n0[0]:]:
-                    x.via_gather = True
-                rep.failed.extend(gat.failed[n0[0]:])
-                rep.leftover.extend(gat.leftover[n0[1]:])
-                rep.skipped.extend(gat.skipped[n0[2]:])
-            done = sum(gp.unit_counts.get(k, 0) for k in _PLACED_KEYS)
-            bad = (len(gat.failed) - n0[0]) or (len(gat.skipped) - n0[2])
-            if not bad:
-                rep.skipped.remove(r)
-            elif apply:  # 일부만 모았다: 원본 행은 받기 폴더에 남은 만큼으로 갱신(없으면 뺀다)
-                left_files, left_bytes = _count_tree(Path(r.current)) if os.path.isdir(r.current) else (1 if os.path.lexists(r.current) else 0, 0)
-                if left_files:
-                    r.files, r.bytes = left_files, left_bytes
-                else:
-                    rep.skipped.remove(r)
-            if done or not bad:
-                status = ("preview" if not apply else "gathered") if not bad else "partial"
-                where = fs.plain_path_text(base)
-                rep.gathered.append({"kind": r.kind, "expected": fs.plain_path_text(r.expected), "current": where, "gathered": where,
-                                     "received_from": fs.plain_path_text(r.current), "reason_code": r.code,
-                                     "reason": fs.plain_path_text(r.reason), "files": done, "status": status})
-                rep.items.append({"current": fs.plain_path_text(r.current), "expected": fs.plain_path_text(r.expected), "origin": "gather",
-                                  "status": status, "files": done, "summary": dict(gp.unit_counts), "leftover_count": len(gat.leftover) - n0[1]})
+                aborted = False
+            finally:  # 정상 반환뿐 아니라 취소/공간 부족/예외로 빠져나갈 때도 이미 옮긴 부분을 보고서에 반영한다
+                try:
+                    _account_gather_row(rep, gat, gp, r, rel, base, n0, aborted, apply)
+                except Exception as ex:  # noqa: BLE001 - 집계 오류가 원래 예외를 가리지 않게 한다
+                    errorlog.record(ex, f"pcmigrate place: 모으기 집계 {r.current}")
     finally:
         if gp.progress_info is not None and gp.tracker is not None:
             gp.progress_info(gp.tracker.snapshot("모으기 마침"))
         if apply and rep.gathered:  # 중단/예외/공간 부족으로 끝나도 안내 파일은 남긴다
             _write_guide(rep, groot, warn)
+
+
+def _account_gather_row(rep: PlaceReport, gat: PlaceReport, gp: _Placer, r: Row, rel: tuple[str, ...], base: str,
+                        n0: tuple[int, int, int], aborted: bool, apply: bool) -> None:
+    """모으기 항목 하나의 결과를 보고서에 반영한다(실패/남은 것의 예상 위치 복원, 건너뜀 행 갱신, 모은 항목 표, items)."""
+    for grp in (gat.failed[n0[0]:], gat.leftover[n0[1]:], gat.skipped[n0[2]:]):
+        for x in grp:
+            _restore_expected(x, base, r.expected)
+    for x in gat.failed[n0[0]:]:
+        x.via_gather = True
+    rep.failed.extend(gat.failed[n0[0]:])
+    rep.leftover.extend(gat.leftover[n0[1]:])
+    rep.skipped.extend(gat.skipped[n0[2]:])
+    done = sum(gp.unit_counts.get(k, 0) for k in _PLACED_KEYS)
+    bad = bool((len(gat.failed) - n0[0]) or (len(gat.skipped) - n0[2]) or aborted)
+    if not bad:
+        if r in rep.skipped:
+            rep.skipped.remove(r)
+    elif apply:  # 일부만 모았다: 원본 행은 받기 폴더에 남은 만큼으로 갱신(없으면 뺀다)
+        left_files, left_bytes = _count_tree(Path(r.current)) if os.path.isdir(r.current) else (1 if os.path.lexists(r.current) else 0, 0)
+        if left_files:
+            r.files, r.bytes = left_files, left_bytes
+        elif r in rep.skipped:
+            rep.skipped.remove(r)
+    if done or not bad:
+        status = ("preview" if not apply else "gathered") if not bad else "partial"
+        where = fs.plain_path_text(base)
+        rep.gathered.append({"kind": r.kind, "expected": fs.plain_path_text(r.expected), "current": where, "gathered": where,
+                             "received_from": fs.plain_path_text(r.current), "reason_code": r.code,
+                             "reason": fs.plain_path_text(r.reason), "files": done, "status": status})
+        rep.items.append({"current": fs.plain_path_text(r.current), "expected": fs.plain_path_text(r.expected), "origin": "gather",
+                          "status": status, "files": done, "summary": dict(gp.unit_counts), "leftover_count": len(gat.leftover) - n0[1]})
 
 
 def _guide_entries(rep: PlaceReport, groot: Path) -> dict[str, str]:

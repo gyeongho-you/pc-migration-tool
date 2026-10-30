@@ -866,7 +866,9 @@ def _gather_arg(text: str) -> str:
         raise argparse.ArgumentTypeError(
             f"경로 끝에 따옴표(\")가 붙었습니다: {text!r}. 경로 끝이 역슬래시(\\)인 채 따옴표로 닫으면 cmd 가 따옴표를 경로의 일부로 넘깁니다. 끝의 역슬래시를 빼세요.")
     v = _path_arg(text) if text else text
-    return os.path.expanduser(v) if v.startswith("~") else v
+    if v == "~" or v.startswith(("~\\", "~/")):  # '~backup' 같은 이름은 확장하지 않는다(상대 폴더 이름)
+        v = os.path.expanduser(v)
+    return os.path.normpath(v) if v else v  # 슬래시 혼합 정규화
 
 
 def _cmd_place(args: argparse.Namespace) -> int:

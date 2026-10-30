@@ -201,6 +201,8 @@ def test_space_precheck_counts_same_size_overwrite(tmp_path):
     e = Env(tmp_path, letters="D")
     put(e.recv / "D" / "P" / "x.bin", b"A" * 1000)
     put(e.drives / "D" / "P" / "x.bin", b"B" * 1000)  # 크기는 같고 내용은 다르다
+    old = os.stat(e.drives / "D" / "P" / "x.bin").st_mtime_ns - 60_000_000_000
+    os.utime(e.drives / "D" / "P" / "x.bin", ns=(old, old))  # 수정 시각도 다르다(FAT 해상도 2초를 넘는 차이)
     small = DestInfo("x", "fixed", "NTFS", 500, 1, "D:")
     rep = e.run(same_volume_fn=lambda a, b: False, dest_info_fn=lambda p: small)
     assert [r.code for r in rep.skipped] == [po.NO_SPACE] and rep.meta["space"]["D"]["required_bytes"] >= 1000
