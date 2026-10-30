@@ -335,7 +335,12 @@ def test_force_stop_still_saves_report_from_worker_thread(tmp_path):
         time.sleep(0.02)
     c.runner.join(2)
     assert report.is_file(), "강제로 멈춘 뒤에도 작업 스레드가 리포트를 저장해야 한다"
-    assert c.place_state.saved_path == str(report)
+    assert c.place_state.saved_path == ""  # 작업 스레드는 화면 상태를 직접 쓰지 않는다
+    seen = []
+    c.listener = lambda kind, payload=None: seen.append(kind)
+    assert c.pump() >= 1  # UI 스레드의 pump 가 늦게 끝난 결과와 저장 위치를 올린다
+    assert c.place_state.saved_path == str(report) and "place_done" in seen and c.place_state.report is partial
+    assert c.pump() == 0 and c.place_state.stopped == "cancelled"
 
 
 # --------------------------------------------------------------------------- 10) 받은 폴더 자동 찾기: 읽기만
@@ -361,7 +366,7 @@ def test_place_choices_find_received_folders_read_only(pc, monkeypatch):
 def test_place_texts_are_clean():
     names = [n for n in dir(T) if n.startswith(("PL_", "BTN_PL_", "WHY_PL_", "G_PL_", "STOP_DONE_PLACE", "TASK_PLACE"))]
     assert len(names) > 100
-    banned = ["해시", "규칙", "패키지", "저널", "볼륨", "엄격 검사", "dry-run", "manifest", "SHA-256", "robocopy", "UNC", "--"]
+    banned = ["해시", "규칙", "패키지", "저널", "볼륨", "엄격 검사", "dry-run", "manifest", "SHA-256", "robocopy", "UNC", "--", "pcmigrate", "명령 창", "명령줄"]
     bad = []
     for n in names:
         v = getattr(T, n)
@@ -388,7 +393,7 @@ def test_friendly_reason_hides_command_line_words():
     codes = list(po.REASONS) + list(po._PLACE_FAILURE_TEXT) + ["in_use", "locked_by_other", "weird_code"]
     for code in codes:
         t = pf.friendly_reason(code, "상세 --map D=E")
-        assert "--" not in t and "pcmigrate" not in t.replace("'pcmigrate join'", ""), (code, t)
+        assert "--" not in t and "pcmigrate" not in t and "명령 창" not in t, (code, t)
     assert pf.plain_cli("--gather=폴더 로 지정하세요(--gather=폴더). --yes 로 적용") == "모으기 로 지정하세요. 놓기 로 적용"
     assert "'놓기'" in pf.plain_cli("같은 명령을 다시 실행하세요")
 
@@ -506,6 +511,9 @@ def test_docs_mention_place_screen_and_stay_synced():
     readme = (root / "README.md").read_text(encoding="utf-8")
     for needle in ("받은 파일을 원래 위치에 놓기", "pcmigrate place"):
         assert needle in md and needle in ht and needle in readme, needle
+    assert "받은 파일을 원래 위치에 놓기 ▶" in readme and "이미 받은 폴더를 원래 위치에 놓기" in readme and "n/13" in readme and "13단계" in readme
+    assert "4. [도구] [직접] 받은 파일을 원래 위치에 놓기" in md and "5. [도구] ③ 새 PC에서 설치하고 가져오기에서" in md
+    assert '<span class="num">4</span><div class="txt"><span class="tag t-tool">도구</span><span class="tag t-you">직접</span>받은 파일을 원래 위치에 놓기' in ht
     assert "받은 파일을 원래 위치로 놓습니다" in readme  # 전체 이전 순서 표(texts.py 의 ROADMAP_NEW 에서 만든 것)
     assert "## v0.3.4" in (root / "CHANGELOG.md").read_text(encoding="utf-8")  # 릴리스 전에는 Unreleased, 릴리스 뒤에는 버전 제목
     assert "받은 파일 원래 위치에 놓기" in (root / "CHANGELOG.md").read_text(encoding="utf-8").split("## v0.3.3")[0]
@@ -515,8 +523,9 @@ def test_roadmap_has_place_item_after_data_copy(pc):
     keys = [k for k, *_ in T.ROADMAP_NEW]
     assert keys == ["new1", "new2", "new3", "new3b", "new4", "new5", "new6"]
     assert pc.c.toggle_roadmap("new3b") is True and "new3b" in pc.c.roadmap_marks
-    md = T.roadmap_markdown()
-    assert md.count("☐") + md.count("[ ]") == 13 or md.count(T.UNCHECKED) == 13
+    md = T.roadmap_markdown(markdown=True) if False else T.roadmap_markdown()
+    assert md.count(T.UNCHECKED) == 13  # 구 PC 6 + 새 PC 7
+    assert "4. " + T.UNCHECKED + " **받은 파일을 원래 위치로 놓습니다** — _도구가 도와주고 직접 확인_" in md
 
 
 def test_backend_warnings_reach_the_todo_list_in_plain_words(real):
@@ -524,3 +533,199 @@ def test_backend_warnings_reach_the_todo_list_in_plain_words(real):
     r = real.c.place_result()
     text = "\n".join(r["todo"])
     assert T.PL_NOTES_TITLE in text and "받기 기록" in text and "저널" not in text and "--" not in text
+
+
+# --------------------------------------------------------------------------- stage54: 같은 드라이브 이동 안내(A안), 리뷰 수정
+class VolApi(FakeApi):
+    """실제 place_original 을 쓰되 '같은 드라이브' 판정만 바꿔 끼운다(같은 볼륨 이동 / 다른 볼륨 복사 후 삭제 / 섞임)."""
+
+    def __init__(self, drives: Path, same_volume):
+        super().__init__()
+        self.drives, self.same_volume = drives, same_volume
+
+    def run_place(self, recv, **kw):
+        return po.place(recv, drive_root_fn=lambda letter: (self.drives / letter) if (self.drives / letter).is_dir() else None,
+                        dest_info_fn=lambda p: BIG, same_volume_fn=self.same_volume, **kw)
+
+
+def vol_env(tmp_path, same_volume):
+    drives = tmp_path / "drives"
+    for letter in "DE":
+        (drives / letter).mkdir(parents=True)
+    recv = tmp_path / "recv"
+    put(recv / "D" / "프로젝트" / "a.dwg", b"a1")
+    put(recv / "E" / "사진" / "b.jpg", b"b1")
+    c = Controller(api_mod=VolApi(drives, same_volume), runner=Runner(sync=True), rules_dir=tmp_path)
+    c.default_desktop = lambda: str(tmp_path / "Desktop")
+    c.listener = lambda *a: None
+    c.place_protected_fn = lambda path, is_dir=True: None
+    c.place_set(recv=str(recv), report_path=str(tmp_path / "out" / "r.json"))
+    return c
+
+
+def _dest_is_d(a, b):
+    return "D" in Path(b).parts
+
+
+def test_same_volume_move_preview_shows_move_line_and_asks_no_ack(tmp_path):
+    c = vol_env(tmp_path, lambda a, b: True)
+    c.start_place(apply=False)
+    sm = pf.place_summary(c.place_state.report)
+    assert sm["move_n"] == 2 and sm["delete_n"] == 0 and not sm["keep"]
+    msg = c.place_confirm_message()
+    assert T.PL_CONFIRM_MOVE.format(n=2) in msg and T.PL_CONFIRM_DELETE_NONE not in msg and "지우는 파일" not in msg
+    assert "받은 폴더에서 원래 위치로 이동: 2개" in msg and "저장 공간은 늘지 않고, 받은 폴더에서는 사라집니다" in msg
+    assert c.place_ack_needed() is False and c.place_reasons() == ("", "")  # 이동만이면 확인 체크를 새로 요구하지 않는다
+    r = c.place_result()
+    assert T.PL_MOVE_NOTE.format(n=2) in r["notes"] and r["sm"]["delete_n"] == 0
+    assert "받은 폴더에서 원래 위치로 이동합니다(같은 드라이브라 저장 공간은 늘지 않고, 받은 폴더에서는 사라집니다): 2개" in r["notes"]
+    text = " ".join([msg, *r["notes"]])
+    assert "--" not in text and "pcmigrate" not in text
+    c.start_place(apply=True, write_confirmed=True)  # 체크 없이 놓을 수 있다
+    assert (tmp_path / "drives" / "D" / "프로젝트" / "a.dwg").read_bytes() == b"a1" and not (tmp_path / "recv" / "D" / "프로젝트" / "a.dwg").exists()
+    assert T.PL_MOVE_NOTE.format(n=2) not in c.place_result()["notes"]  # 놓은 뒤에는 미리보기 안내를 반복하지 않는다
+
+
+def test_cross_volume_copy_delete_keeps_delete_box_rules(tmp_path):
+    c = vol_env(tmp_path, lambda a, b: False)
+    c.start_place(apply=False)
+    sm = pf.place_summary(c.place_state.report)
+    assert sm["move_n"] == 0 and sm["delete_n"] == 2
+    msg = c.place_confirm_message()
+    assert T.PL_CONFIRM_DELETE.format(n=2, size=pf.size_text(sm["delete_bytes"])) in msg and "이동:" not in msg
+    assert c.place_ack_needed() is True and c.place_reasons()[1] == T.WHY_PL_ACK
+    assert not [n for n in c.place_result()["notes"] if n.startswith("받은 폴더에서 원래 위치로 이동합니다")]
+
+
+def test_keep_mode_keeps_old_wording_even_on_same_volume(tmp_path):
+    c = vol_env(tmp_path, lambda a, b: True)
+    c.place_set(keep=True)
+    c.start_place(apply=False)
+    sm = pf.place_summary(c.place_state.report)
+    assert sm["keep"] and sm["move_n"] == 0
+    assert T.PL_CONFIRM_KEEP in c.place_confirm_message() and "이동:" not in c.place_confirm_message()
+    assert c.place_ack_needed() is False
+    assert all("이동합니다" not in n for n in c.place_result()["notes"])
+
+
+def test_mixed_volumes_show_move_and_delete_lines_and_need_ack(tmp_path):
+    c = vol_env(tmp_path, _dest_is_d)  # D 는 같은 드라이브(이동), E 는 다른 드라이브(복사 후 삭제)
+    c.start_place(apply=False)
+    sm = pf.place_summary(c.place_state.report)
+    assert (sm["move_n"], sm["delete_n"]) == (1, 1)
+    msg = c.place_confirm_message()
+    assert T.PL_CONFIRM_MOVE.format(n=1) in msg and T.PL_CONFIRM_DELETE.format(n=1, size=pf.size_text(sm["delete_bytes"])) in msg
+    assert msg.index("이동:") < msg.index("지우는 파일")
+    assert c.place_ack_needed() is True and c.place_reasons()[1] == T.WHY_PL_ACK
+    assert T.PL_MOVE_NOTE.format(n=1) in c.place_result()["notes"]
+
+
+def test_help_and_readme_explain_move_vs_delete():
+    readme = (Path(__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8")
+    assert "같은 드라이브 이동은 삭제가 아니라서 확인 체크는 요구하지 않지만" in readme
+    assert "같은 드라이브에서는 파일을 이동하므로 받은 폴더에서 사라지고" in T.HELP[S.PLACE]
+
+
+# --- P2: 기본 리포트 경로
+def test_default_report_is_not_stored_and_second_apply_does_not_overwrite(pc):
+    pc.c.place_set(report_path="")
+    assert pc.c.place_state.report_path == ""
+    first = pc.c.place_default_report()
+    assert pc.c.place_default_report() == first  # 화면 표시·확인창·실행이 같은 값을 본다
+    preview(pc)
+    go(pc, ack=True)
+    assert Path(first).is_file() and pc.c.place_state.saved_path == first
+    second = pc.c.place_default_report()
+    assert second != first and not Path(second).exists()  # 쓴 이름은 다시 쓰지 않는다(같은 초여도)
+    preview(pc)
+    go(pc, ack=True)
+    assert Path(second).is_file() and Path(first).is_file() and pc.c.place_state.saved_path == second
+    assert json.loads(Path(first).read_text(encoding="utf-8"))["dry_run"] is False
+    assert not list(Path(first).parent.glob("*.bak"))  # 첫 리포트를 번호 .bak 으로 밀어내지도 않았다
+
+
+# --- P3: 리포트 없는 오류
+@pytest.mark.parametrize("apply", [False, True])
+def test_error_without_report_saves_minimal_report_and_honest_note(pc, apply):
+    preview(pc)
+    pc.api.place_error, pc.api.place_error_report = RuntimeError("비밀 경로 모음"), None
+    if apply:
+        go(pc, ack=True)
+    else:
+        pc.c.place_set(keep=True)
+        preview(pc)
+    s = pc.c.place_state
+    assert s.stopped == "error" and s.report is not None and s.report.meta.get("minimal") is True
+    assert s.stopped_note == T.PL_ERR_MINIMAL and "오류 로그" in s.stopped_note and "자세한 결과는 만들지 못해" in s.stopped_note
+    assert pc.errors and "error" in kinds(pc)
+    assert "중간에 멈췄습니다" in pc.c.place_result()["head"]
+    if apply:
+        data = json.loads(pc.report.read_text(encoding="utf-8"))
+        assert data["interrupted"] == "error" and data["error"] == "RuntimeError" and data["options"]["keep"] is False and data["finished"]
+        assert "비밀" not in pc.report.read_text(encoding="utf-8")  # 예외 문구(개인정보 가능성)는 담지 않는다
+    else:
+        assert not pc.report.exists() and s.preview_key is None
+
+
+# --- P5: 이전 결과 표시
+def test_changing_recv_or_options_marks_old_result_stale_but_report_path_does_not(pc):
+    preview(pc)
+    assert pc.c.place_result()["stale"] is False
+    pc.c.place_set(report_path=str(pc.tmp / "other.json"))
+    assert pc.c.place_state.report_stale is False
+    pc.c.place_set(keep=True)
+    assert pc.c.place_state.report_stale is True and pc.c.place_result()["stale"] is True
+    preview(pc)
+    assert pc.c.place_state.report_stale is False
+    other = pc.tmp / "recv9"
+    put(other / "E" / "k.txt")
+    pc.c.place_open(S.METHOD, str(other))
+    assert pc.c.place_result()["stale"] is True
+
+
+# --- P6: 미리보기에서 '리포트 파일에 있습니다' 모순 없음
+def test_preview_texts_do_not_point_to_a_report_file_that_is_not_saved(pc):
+    rep = make_report(pc.recv, warnings=[{"expected": "D:/a", "text": "확인 필요"}])
+    lines = pf.place_todo_lines(rep)
+    assert T.PL_TODO_WARNINGS_PREVIEW.format(n=1) in lines and T.PL_TODO_WARNINGS.format(n=1) not in lines
+    assert "결과 리포트 파일에 있습니다" not in T.PL_TABLE_MORE_PREVIEW and "저장하지 않으며" in T.PL_TABLE_MORE_PREVIEW
+    done = make_report(pc.recv, dry_run=False, warnings=[{"expected": "D:/a", "text": "확인 필요"}])
+    assert T.PL_TODO_WARNINGS.format(n=1) in pf.place_todo_lines(done)
+
+
+# --- P7: 입력 점검 한 번
+def test_input_check_is_computed_once_and_reused(pc, monkeypatch):
+    calls = []
+    real_scan = Controller._scan_recv_top
+
+    def counting(recv):
+        calls.append(recv)
+        return real_scan(recv)
+    monkeypatch.setattr(Controller, "_scan_recv_top", staticmethod(counting))
+    pc.c.place_recheck()
+    for _ in range(3):
+        pc.c.place_check_state()
+        pc.c.place_reasons()
+        pc.c.place_step()
+    assert len(calls) == 1
+    other = pc.tmp / "r5"
+    put(other / "D" / "a.txt")
+    pc.c.place_set(recv=str(other))
+    pc.c.place_reasons()
+    pc.c.place_step()
+    assert len(calls) == 2
+    pc.c.place_recheck()
+    pc.c.place_reasons()
+    assert len(calls) == 3
+
+
+# --- P8: 중간에 멈춘 미리보기는 이전 유효 미리보기를 무효로 한다
+def test_cancelled_preview_invalidates_previous_valid_preview(pc):
+    preview(pc)
+    assert pc.c.place_reasons()[1] in ("", T.WHY_PL_ACK) and pc.c.place_state.preview_key is not None
+    pc.api.place_error, pc.api.place_error_report = Cancelled(), make_report(pc.recv, meta={"interrupted": "cancelled"})
+    preview(pc)
+    assert pc.c.place_state.preview_key is None and pc.c.place_reasons()[1] == T.WHY_PL_PREVIEW_FIRST
+    pc.api.place_error = None
+    with pytest.raises(GuardError, match=re.escape(T.G_PL_NEED_PREVIEW)):
+        go(pc, ack=True)
