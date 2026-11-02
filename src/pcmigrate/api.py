@@ -144,14 +144,24 @@ def check_path_forms(**paths: str | None) -> tuple[list[str], list[str]]:
     return errors, notes
 
 
+_LAST_RULE_SKIPS: list[str] = []
+
+
+def rule_skip_line() -> str:
+    """가장 최근 load_rules_checked 에서 건너뛴 규칙 파일이 있으면 기존 경고 목록에 넣을 한 줄(없으면 빈 문자열). 창 모드에서는 stderr 가 안 보이므로 결과의 경고/안내로 전한다."""
+    return f"읽을 수 없는 규칙 파일 {len(_LAST_RULE_SKIPS)}개를 건너뛰었습니다(나머지 규칙만 사용, 사유는 오류 로그나 check-rules 로 확인)." if _LAST_RULE_SKIPS else ""
+
+
 def load_rules_checked(rules_dir: str | Path, errors: list[str] | None = None) -> list[Rule]:
     """규칙 폴더를 읽는다. 규칙 파일 하나가 잘못돼도 그 규칙만 건너뛰고 나머지는 쓴다(건너뛴 사유는 errors 에 덧붙이고, 오류 로그와 표준 오류에도 남긴다).
     폴더가 없거나 읽을 수 있는 규칙이 하나도 없으면 ApiError. check-rules 는 errors 를 받아 오류로 보고한다."""
     bad: list[str] = []
+    _LAST_RULE_SKIPS.clear()
     try:
         rules = load_rules(Path(rules_dir), errors=bad)
     except RuleError as e:
         raise ApiError(f"규칙 오류: {e}") from e
+    _LAST_RULE_SKIPS.extend(bad)
     if bad:
         from . import errorlog
         for msg in bad:
@@ -458,6 +468,8 @@ def run_checklist(rules_dir: str | Path, *, package: str | Path | None = None, s
     _phase(progress_info, "match", "해야 할 일 목록을 정리하는 중입니다…")
     cl = build_checklist(pairs, registry, winget, list_text, rule_ids=rule_ids, show_all=show_all,
                          discovery=disc)
+    if rule_skip_line():  # 건너뛴 규칙 파일 안내를 기존 체크 목록(데이터/기타)에 한 줄로
+        cl.data.append(rule_skip_line())
     return ChecklistResult(render_checklist(cl, fmt), cl, disc)
 
 
@@ -719,6 +731,8 @@ def run_export(rules_dir: str | Path, output: str | Path, *, extra: str | Path |
     winget = parse_winget_export(winget_text) if winget_text else []
     matched = match_rules(rules, registry + winget)
     notes = []
+    if rule_skip_line():
+        notes.append(rule_skip_line())
     notes += self_transfer_notes(extras.items, registry)  # 막지 않고 알리기만(선택은 사용자 판단). 각 항목에 표시를 붙여 확인표/manifest 에도 남긴다
     if not matched:
         notes.append("감지된 프로그램 규칙이 없어 프로그램 목록만 내보냅니다.")
@@ -865,7 +879,8 @@ class ImportResult:
 
     @property
     def written(self) -> bool:
-        return self.mode == "applied"
+        """파일을 썼는가: 적용 완료 또는 중간에 멈춘 복원(여기까지는 썼다). 미리보기의 dry_run 표시가 중단된 복원에서 true 로 나오지 않게 한다(N6)."""
+        return self.mode in ("applied", "interrupted")
 
     @property
     def denied(self) -> list[dict]:
@@ -930,6 +945,8 @@ def run_import(package: str | Path, rules_dir: str | Path, *, dry_run: bool = Fa
     except PackageError as e:
         raise ApiError(str(e) if str(e).startswith("패키지 검증 실패") else f"패키지 검증 실패: {e}") from e
     n_extra = sum(1 for it in plan.items if it.get("extra") and it.get("status") != NOT_SELECTED)
+    if rule_skip_line() and hasattr(plan, "extra_warnings"):  # 건너뛴 규칙 파일 안내를 기존 경고 목록(plan.warnings)에 한 줄로
+        plan.extra_warnings.append({"rule": "rules", "name": "규칙 파일", "items": [rule_skip_line()]})
     if plan.problems:
         return ImportResult(plan, "blocked", n_extra, only=only, skip=skip)
     if plan.unknown_programs:
@@ -964,6 +981,8 @@ def _save_partial_import(e: BaseException, package, plan, only, skip, n_extra, r
         return
     partial.meta["programs"] = plan.programs
     partial.meta["interrupted"] = type(e).__name__
+    if not isinstance(e, (Cancelled, KeyboardInterrupt)):
+        partial.meta["interrupted_error"] = str(e)[:300]  # 결과 화면/JSON 에서 중단 이유를 보이기 위해(오류 로그는 아래에서 남긴다)
     res = ImportResult(plan, "interrupted", n_extra, partial, only=only, skip=skip)
     try:
         rec = import_record.build_record(package, plan, partial)
