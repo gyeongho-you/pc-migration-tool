@@ -27,8 +27,8 @@ def test_new_extensions_denied_without_rule_naming_them(ext):
 
 def test_rule_that_names_extension_still_allows_it():
     rule = _rule("%APPDATA%\\Acme\\Plugins\\*.rb", kind="file")
-    assert restore_denied("Plugins/a.rb", Path("C:/x/Plugins/a.rb"), rule, "%APPDATA%\\Acme\\Plugins") is None
-    assert restore_denied("Plugins/a.lsp", Path("C:/x/Plugins/a.lsp"), rule, "%APPDATA%\\Acme\\Plugins")  # 다른 확장자는 그대로 거부
+    assert restore_denied("a.rb", Path("C:/x/Plugins/a.rb"), rule, "%APPDATA%\\Acme\\Plugins") is None
+    assert restore_denied("a.lsp", Path("C:/x/Plugins/a.lsp"), rule, "%APPDATA%\\Acme\\Plugins")  # 다른 확장자는 그대로 거부
 
 
 def test_allow_extensions_field_allows_only_listed():
@@ -102,3 +102,32 @@ def test_place_protects_same_list_as_restore(p, is_dir):
 ])
 def test_place_does_not_overblock_user_data(p, is_dir):
     assert po.protected_reason(p, is_dir=is_dir) is None, p
+
+
+# ----------------------------------------------------------------------------- Z4: allow_extensions 가 다른 path 로 새지 않는다
+def test_z4_autocad_support_lsp_allowed_but_plotters_denied():
+    ac = {r.id: r for r in load_rules(default_rules_dir())}["autocad"]
+    base = "%APPDATA%\Autodesk"
+    assert restore_denied("AutoCAD 2024/R24.3/enu/Support/a.lsp", Path("C:/a.lsp"), ac, base) is None
+    assert restore_denied("AutoCAD 2024/R24.3/enu/Support/sub/a.vlx", Path("C:/a.vlx"), ac, base) is None
+    assert restore_denied("AutoCAD 2024/R24.3/enu/Plotters/p.lsp", Path("C:/p.lsp"), ac, base)
+    assert restore_denied("AutoCAD 2024/R24.3/enu/Plotters/Plot Styles/p.arx", Path("C:/p.arx"), ac, base)
+    assert restore_denied("Revit/2024/Addins/a.lsp", Path("C:/a.lsp"), ac, base)  # 이 규칙 path 밖
+
+
+def test_z4_sketchup_and_revit_same_scope():
+    rules = {r.id: r for r in load_rules(default_rules_dir())}
+    sk, rv = rules["sketchup"], rules["revit"]
+    assert restore_denied("SketchUp 2024/SketchUp/Plugins/a.rb", Path("C:/a.rb"), sk, "%APPDATA%\SketchUp") is None
+    assert restore_denied("SketchUp 2024/SketchUp/Templates/a.rb", Path("C:/a.rb"), sk, "%APPDATA%\SketchUp")
+    assert restore_denied("Revit/2024/Addins/a.addin", Path("C:/a.addin"), rv, "%APPDATA%\Autodesk") is None
+
+
+def test_z4_last_pattern_extension_is_also_scoped_to_its_path():
+    rule = parse_rule({"id": "t", "name": "T", "detect": {"display_name_patterns": ["T"]}, "paths": [
+        {"path": "%APPDATA%\Acme\*.rb", "dest": "p", "kind": "file"},
+        {"path": "%APPDATA%\Acme\Other", "dest": "o", "kind": "dir"}]}, "<t>")
+    base = "%APPDATA%\Acme"
+    assert restore_denied("a.rb", Path("C:/a.rb"), rule, base) is None
+    assert restore_denied("Other/a.rb", Path("C:/a.rb"), rule, base)  # 마지막 패턴이 .rb 인 같은 base 의 다른 path 로 허용이 새지 않는다
+    assert restore_denied("sub/a.rb", Path("C:/a.rb"), rule, base)  # file 종류는 그 패턴의 파일 자신만

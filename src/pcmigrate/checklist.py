@@ -259,7 +259,10 @@ def find_manual_installs(registry: list[Program], winget: list[Program],
 
 
 def describe_manual(p: Program, m: Match | None) -> str:
-    head = f"{p.display} [{old_version_text(p)}]"
+    if p.version and p.version.lower() in p.display.lower():  # 이름 옆에 구 PC 버전이 이미 보이면 대괄호에 버전을 또 쓰지 않는다
+        head = f"{p.display} [구 PC 게시자 {p.publisher}]" if p.publisher else p.display
+    else:
+        head = f"{p.display} [{old_version_text(p)}]"
     if m is None:
         return f"{head} — 매칭 근거: {NONE}"
     return f"{head} — 매칭 근거: {m.grade}({m.reason}: {m.winget_id}) → 실제 설치 여부 확인"

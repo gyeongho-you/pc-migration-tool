@@ -76,3 +76,63 @@ def test_dir_still_bundled_without_secrets(fake):
     s = _rounds(fake, [fake.put(d / "a.ini", "1"), fake.put(d / "b.ini", "1")])
     rule = rm.write_draft(s)[1]
     assert [p["kind"] for p in rule["paths"]] == ["dir"]
+
+
+# ----------------------------------------------------------------------------- Z2: 이름 기반 판정의 빈틈(확장자/낱말/설정 형식 허용 목록)
+Z2_FILES = ["server.pem", "id.pfx", "x.p12", "private.key", ".env", "api_key.txt", "apikey.json", "session.dat", "refresh.txt",
+            "bearer.cfg", "sso.ini", "key.json", "wallet.dat", "cert.crt", "user.cer", "profile.ovpn", "serial.txt", "activation.xml",
+            "hasp.dat", "machine.lic2", "Local State"]
+
+
+def test_z2_listed_secret_like_files_never_in_paths(fake):
+    d = fake.app / "Acme"
+    files = [fake.put(d / "settings.ini", "1"), fake.put(d / "author.ini", "1")] + [fake.put(d / n, "1") for n in Z2_FILES]
+    s = _rounds(fake, files)
+    a, rule, _ = rm.write_draft(s, min_conf=rm.LOW)
+    got = {p["path"].rsplit("\\", 1)[-1] for p in rule["paths"]}
+    assert got == {"settings.ini", "author.ini"}  # author 는 auth 낱말이 아니므로 제외하지 않는다
+    assert all(p["kind"] == "file" for p in rule["paths"])  # 비밀이 든 폴더는 폴더째 담지 않는다
+    byname = {c.path.rsplit("\\", 1)[-1]: c for c in a.candidates}
+    for n in Z2_FILES:
+        assert byname[n].secret or byname[n].nonconfig, n  # 후보 표에는 제외 사유와 함께 남는다
+    for n in ("server.pem", "id.pfx", "api_key.txt", "sso.ini", "key.json", "activation.xml", "bearer.cfg", "Local State"):
+        assert byname[n].secret, n
+    assert "형식" in byname["wallet.dat"].reason or "로그인" in byname["wallet.dat"].reason
+    ex = [e.lower() for e in rule["exclude"]]
+    for pat in ("*.pem", "*.pfx", "*apikey*", "*session*", "*bearer*", "*refresh*", "local state", "*.ovpn", ".env", "hasp*"):
+        assert pat in ex, pat
+
+
+PFX = "%APPDATA%" + chr(92) + "Acme" + chr(92)
+
+
+def test_z2_secret_word_logic():
+    for n in ("auth.json", "oauth.json", "auth_x.ini", "x_auth.ini", "my-auth.ini", "sso.ini", "key.json"):
+        assert rm.secret_reason(PFX + n), n
+    for n in ("author.ini", "authors.xml", "keys.ini", "keybindings.json", "lesson.ini", "associations.json", "settings.ini"):
+        assert rm.secret_reason(PFX + n) is None, n
+
+
+def test_z2_non_config_formats_are_excluded_but_listed(fake):
+    d = fake.app / "Acme"
+    files = [fake.put(d / "a.ini", "1"), fake.put(d / "blob.dat", "1"), fake.put(d / "noext", "1"), fake.put(d / "m.db", "1")]
+    s = _rounds(fake, files)
+    a, rule, _ = rm.write_draft(s, min_conf=rm.LOW)
+    assert {p["path"].rsplit("\\", 1)[-1] for p in rule["paths"]} == {"a.ini"}
+    nc = {c.path.rsplit("\\", 1)[-1] for c in a.candidates if c.nonconfig}
+    assert nc == {"blob.dat", "noext", "m.db"}
+    assert any("설정 형식이 아니라" in c.reason for c in a.candidates if c.nonconfig)
+
+
+def test_z2_only_non_config_gives_no_draft_with_reason(fake):
+    d = fake.app / "Acme"
+    s = _rounds(fake, [fake.put(d / "blob.dat", "1")])
+    a, rule, _ = rm.write_draft(s, min_conf=rm.LOW)
+    assert rule is None and "설정 형식" in rm.no_draft_message(a)
+
+
+def test_z2_dir_not_bundled_when_clue_extension_inside(fake):
+    d = fake.app / "Acme"
+    s = _rounds(fake, [fake.put(d / "a.ini", "1"), fake.put(d / "b.ini", "1"), fake.put(d / "server.pem", "1")])
+    rule = rm.write_draft(s)[1]
+    assert all(p["kind"] == "file" for p in rule["paths"])

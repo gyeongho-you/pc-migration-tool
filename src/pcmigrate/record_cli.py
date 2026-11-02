@@ -120,13 +120,14 @@ def _cmd_reset(args) -> int:
     def go() -> int:
         r = rm.reset(args.work)
         if r.status == "nothing":
-            _out("보관할 이전 기록이 없었습니다.")
+            _out("보관할 이전 기록이 없었습니다." + ("" if r.reported else " 이 폴더에는 설정 기록 파일이 없어 아무것도 만들거나 바꾸지 않았습니다(작업 폴더가 맞는지 확인하세요)."))
         else:
             _out(f"이전 기록 {len(r.moved)}개를 삭제하지 않고 보관했습니다: " + ", ".join(f"{a} -> {b}" for a, b in r.moved),
                  "처음부터 하려면 `pcmigrate record start ...` 를 다시 실행하세요.")
         if r.kept_foreign:
             _err("[안내] 기록 도구의 파일이 아니라 그대로 둔 파일: " + ", ".join(r.kept_foreign))
-        _out(f"결과 보고: {rm.REPORT_FILE}")
+        if r.reported:
+            _out(f"결과 보고: {rm.REPORT_FILE}")
         return 0
     return _run(go)
 

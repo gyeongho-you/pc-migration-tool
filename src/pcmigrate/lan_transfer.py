@@ -38,7 +38,11 @@ from .manifest import ManifestWriter
 from .progress import FAILED_KIND, OK, SKIPPED, UNREADABLE, ProgressInfo, ProgressTracker, fmt_bytes
 from .scan import scan_source_info
 
-MAX_CONNECTIONS = 8  # 동시에 열어 둘 연결 수 상한(초과 연결은 바로 닫는다: 스레드/소켓 고갈 방지)
+MAX_CONNECTIONS = 8  # 동시에 열어 둘 연결 수 상한(스레드/소켓 고갈 방지)
+RESERVED_AUTHED = 2  # 상한 중 '인증을 마친 연결' 용으로 비워 두는 자리. 인증 안 한 연결은 상한-예약(=6)개까지만 둔다
+MAX_UNAUTH_PER_IP = 3  # 한 IP 가 동시에 붙들 수 있는 인증 전 연결 수. 가득 차면 그 IP 의 가장 오래된 인증 전 연결을 끊는다
+BUSY_TEXT = ("수신 쪽이 연결을 너무 많이 받아 바쁘거나 케이블 문제일 수 있습니다. 몇 번 자동으로 다시 시도했지만 연결되지 않았습니다. "
+             "잠시 뒤 같은 명령을 다시 실행하고, 계속되면 수신 쪽을 다시 시작하거나 케이블/공유기 연결을 확인하세요.")
 PREAUTH_TEXT = "인증이 제한시간(%d초) 안에 끝나지 않아 연결을 닫았습니다."
 PREAUTH_TIMEOUT = 30.0  # 연결마다 '인증이 끝날 때까지' 총 제한시간(초). 글자를 아주 천천히 보내며 붙들고 있는 연결을 끊는다.
 MAX_FILES = 20_000_000
@@ -101,6 +105,24 @@ class _Cur:
     reason: str = ""
 
 
+class _ConnInfo:
+    """수락한 연결 하나의 기록(IP, 인증 여부, 우리가 끊었는지)."""
+
+    def __init__(self, conn: socket.socket, ip: str) -> None:
+        self.conn, self.ip = conn, ip
+        self.authed = threading.Event()
+        self.dropped = threading.Event()
+        self.thread: threading.Thread | None = None
+
+    def drop(self) -> None:
+        self.dropped.set()
+        for fn in (lambda: self.conn.shutdown(socket.SHUT_RDWR), self.conn.close):
+            try:
+                fn()
+            except OSError:
+                pass
+
+
 class Receiver:
     """수신 대기 서버. start() 후 코드/주소를 사용자에게 보여 주고, 송신이 끝나면(done) 스스로 멈춘다. stop() 으로 언제든 멈춘다."""
 
@@ -135,6 +157,7 @@ class Receiver:
         self._stop = threading.Event()
         self._done = threading.Event()
         self._threads: list[threading.Thread] = []
+        self._conns: list[_ConnInfo] = []  # 열려 있는 연결 기록(수락 스레드만 읽고 쓴다)
         self._cur: _Active | None = None
         self._cur_lock = threading.Lock()
         self._resp: DiscoveryResponder | None = None
@@ -157,7 +180,7 @@ class Receiver:
             if sys.platform != "win32":
                 s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             s.bind((self.bind, self.port))
-            s.listen(8)
+            s.listen(64)  # 붙들기 연결이 몰려도 정상 접속이 backlog 에서 거절되지 않게 넉넉히
         except OSError as e:
             s.close()
             raise LanError(f"포트 {self.port} 를 열 수 없습니다(이미 다른 프로그램이나 이전 수신이 쓰고 있을 수 있습니다). "
@@ -259,17 +282,38 @@ class Receiver:
             except OSError:
                 return
             self._threads = [x for x in self._threads if x.is_alive()]
-            if len(self._threads) >= self.max_connections:  # 동시 연결 상한: 초과 연결은 바로 닫는다(프로토콜은 그대로, 송신 쪽은 연결 끊김으로 본다)
-                try:
-                    conn.close()
-                except OSError:
-                    pass
+            self._conns = [c for c in self._conns if c.thread is None or c.thread.is_alive()]
+            info = _ConnInfo(conn, addr[0])
+            if not self._admit(info):  # 자리가 없으면 바로 닫는다(프로토콜은 그대로, 송신 쪽은 '연결 직후 종료'로 보고 잠시 뒤 다시 시도한다)
+                info.drop()
                 continue
             conn.settimeout(15)
             _keepalive(conn)
-            t = threading.Thread(target=self._handle, args=(conn, addr), name="pcmigrate-lan-conn", daemon=True)
+            t = threading.Thread(target=self._handle, args=(conn, addr, info), name="pcmigrate-lan-conn", daemon=True)
+            info.thread = t
+            self._conns.append(info)
             t.start()
             self._threads.append(t)
+
+    def _admit(self, new: "_ConnInfo") -> bool:
+        """새 연결을 받을지 정한다. 인증 전 연결은 IP 당 MAX_UNAUTH_PER_IP 개, 전체 (상한-예약) 개까지만 허용하고,
+        가득 차면 가장 오래된 인증 전 연결을 끊어 자리를 만든다(붙들기 공격이 정상 송신을 막지 못하게). 인증 끝난 연결 자리는 예약해 둔다."""
+        unauth = [c for c in self._conns if not c.authed.is_set() and not c.dropped.is_set()]
+        same = [c for c in unauth if c.ip == new.ip]
+        if len(same) >= MAX_UNAUTH_PER_IP:
+            same[0].drop()  # 이 IP 의 가장 오래된 인증 전 연결(목록은 도착 순서)
+            unauth.remove(same[0])
+        cap = max(1, self.max_connections - min(RESERVED_AUTHED, self.max_connections - 1))
+        while len(unauth) >= cap:
+            counts: dict[str, int] = {}
+            for c in unauth:
+                counts[c.ip] = counts.get(c.ip, 0) + 1
+            heaviest = max(counts.values())
+            victim = next(c for c in unauth if counts[c.ip] == heaviest)  # 가장 많이 붙든 IP 의 가장 오래된 연결
+            victim.drop()
+            unauth.remove(victim)
+        live = [c for c in self._conns if not c.dropped.is_set()]
+        return len(live) < self.max_connections
 
     def _gate(self, ch: Channel):
         with self._cur_lock:
@@ -281,11 +325,12 @@ class Receiver:
             self._cur = _Active(ch)
         return None
 
-    def _handle(self, conn: socket.socket, addr) -> None:
+    def _handle(self, conn: socket.socket, addr, info: "_ConnInfo | None" = None) -> None:
         ch = Channel(conn)
         mine = None
-        authed = threading.Event()
+        authed = info.authed if info is not None else threading.Event()
         timed_out = threading.Event()
+        dropped = info.dropped if info is not None else threading.Event()
 
         def _preauth_expired() -> None:  # 인증이 제한시간 안에 끝나지 않으면 연결을 닫는다(받기 중인 연결에는 영향 없음)
             if not authed.is_set():
@@ -305,12 +350,16 @@ class Receiver:
                 if timer is not None:
                     timer.cancel()
             except AuthError as e:
+                if dropped.is_set():
+                    return  # 자리를 비우려고 우리가 끊은 연결: 화면에 오류로 알리지 않는다
                 if timed_out.is_set():
                     self._emit("protocol_error", message=PREAUTH_TEXT % int(self.preauth_timeout), peer=addr[0])
                     return
                 self._emit("auth_failed", message=str(e), peer=addr[0], code=e.code, remaining=e.remaining)
                 return
             except LanError as e:
+                if dropped.is_set():
+                    return
                 if timed_out.is_set():
                     self._emit("protocol_error", message=PREAUTH_TEXT % int(self.preauth_timeout), peer=addr[0])
                     return
@@ -804,6 +853,8 @@ class SendOptions:
     layout: str = "auto"  # auto(폴더 하나면 내용 그대로, 여러 개/선택 파일이면 <드라이브>\<경로>) | flat | drive
     retries: int = 2
     connect_timeout: float = 10.0
+    busy_retries: int = 3  # 연결 직후 수신 쪽이 닫으면(수신 쪽이 연결을 너무 많이 받아 바쁜 경우) 다시 시도하는 횟수
+    busy_wait: float = 0.5  # 첫 대기(초). 이후 2배씩(0.5, 1, 2)
     ack_timeout: float = 900.0
     empty_dirs: bool = True
     name: str = ""
@@ -1041,8 +1092,39 @@ class _Sender:
             raise LanError(f"{self.host} 주소를 찾을 수 없습니다. 수신 PC 화면의 숫자 주소를 입력하세요.", "bad_target") from e
         if classify_ip(ip) == _PUB and not self.opts.allow_public:
             raise LanError(public_warning(ip), "public_address")
+        wait = self.opts.busy_wait
+        for attempt in range(max(0, self.opts.busy_retries) + 1):
+            self._check_cancel()
+            sock = self._open_socket(ip)
+            sock.settimeout(30)
+            _keepalive(sock)
+            self.ch = Channel(sock)
+            try:
+                info = client_handshake(self.ch, self.code, name=self.opts.name or socket.gethostname())
+            except Disconnected as e:
+                self.ch.close()
+                if str(e) != DISCONNECT_TEXT:  # 시간 초과 등 다른 끊김은 다시 시도하지 않고 그대로 알린다
+                    raise
+                # 연결 직후 수신 쪽이 닫았다: 수신 쪽이 연결을 너무 많이 받아 바쁘거나 케이블 문제일 수 있다(구분할 방법은 없음).
+                if attempt >= self.opts.busy_retries:
+                    raise LanError(BUSY_TEXT, "receiver_busy") from e
+                self._event("retry", message=f"수신 쪽이 바쁘거나 연결이 바로 끊겼습니다. {wait:g}초 뒤 다시 시도합니다({attempt + 1}/{self.opts.busy_retries}).")
+                end = time.monotonic() + wait
+                while time.monotonic() < end:  # 취소할 수 있게 짧게 나눠 기다린다
+                    self._check_cancel()
+                    time.sleep(min(0.1, max(0.0, end - time.monotonic())))
+                wait *= 2
+                continue
+            except BaseException:
+                self.ch.close()
+                raise
+            self.receiver_info = info
+            sock.settimeout(None)
+            return
+
+    def _open_socket(self, ip: str) -> socket.socket:
         try:
-            sock = socket.create_connection((ip, self.port), timeout=self.opts.connect_timeout)
+            return socket.create_connection((ip, self.port), timeout=self.opts.connect_timeout)
         except ConnectionRefusedError as e:
             raise LanError(f"{ip}:{self.port} 에서 받는 프로그램이 응답하지 않습니다. 새 PC 에서 `pcmigrate receive` 가 켜져 있는지, "
                            "주소/포트가 같은지 확인하세요. 원인을 보려면 `pcmigrate send --diagnose` 를 실행하세요.", "refused") from e
@@ -1051,12 +1133,6 @@ class _Sender:
                            "개인 네트워크를 허용했는지 확인하세요. `pcmigrate send --diagnose` 로 원인을 알아볼 수 있습니다.", "timeout") from e
         except OSError as e:
             raise LanError(f"{ip}:{self.port} 에 연결하지 못했습니다({e.strerror or type(e).__name__}). 케이블/주소를 확인하세요.", "unreachable") from e
-        sock.settimeout(30)
-        _keepalive(sock)
-        self.ch = Channel(sock)
-        info = client_handshake(self.ch, self.code, name=self.opts.name or socket.gethostname())
-        self.receiver_info = info
-        sock.settimeout(None)
 
     def _event(self, type_: str, **kw) -> None:
         if self.on_event:

@@ -44,6 +44,7 @@ class ResetResult:
     status: str = "failed"  # ok | nothing | failed
     moved: list = field(default_factory=list)  # [(원래 이름, 보관 이름)]
     kept_foreign: list = field(default_factory=list)  # 이 도구의 파일이 아니라 건드리지 않은 파일 이름
+    reported: bool = True  # 결과 보고서(record-last-report.json)를 썼는지(기록이 없는 폴더에는 쓰지 않음)
 
 
 def _is_tool_file(name: str) -> bool:
@@ -96,6 +97,13 @@ def reset(work: str | Path, keep_backup: bool = True, now: Callable[[], datetime
     if not wd.is_dir():
         raise RecordError(f"작업 폴더를 찾지 못했습니다: {errorlog.tokenize_home(str(wd))}")
     res = ResetResult(errorlog.tokenize_home(str(wd)))
+    try:
+        has_tool = any((f.is_file() or f.is_symlink()) and _is_tool_file(f.name) for f in wd.iterdir())
+    except OSError as e:
+        raise RecordError(f"작업 폴더를 읽지 못했습니다({type(e).__name__})") from e
+    if not has_tool:  # 이 도구의 기록이 하나도 없는 폴더(홈, 문서 폴더 등 엉뚱한 폴더 포함)에는 보고서도 새로 만들지 않는다
+        res.status, res.reported = "nothing", False
+        return res
     try:
         res.moved, res.kept_foreign = _archive_previous(wd)
         res.status = "ok" if res.moved else "nothing"
