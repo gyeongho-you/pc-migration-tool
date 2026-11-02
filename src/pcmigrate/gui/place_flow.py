@@ -159,6 +159,8 @@ def place_head(sm: dict) -> str:
     """결과 머리말(미리보기 / 놓았음 / 중간에 멈춤)."""
     if sm["interrupted"]:
         return (T.PL_PREVIEW_STOPPED_HEAD if sm["preview"] else T.PL_STOPPED_HEAD).format(why=sm["why"])
+    if not sm["preview"] and sm["failed_n"]:
+        return T.PL_DONE_PARTIAL_HEAD.format(n=sm["failed_n"])
     return T.PL_PREVIEW_HEAD if sm["preview"] else T.PL_DONE_HEAD
 
 

@@ -308,7 +308,7 @@ def test_reset_moves_everything_to_numbered_bak_and_reports(fake):
 def test_reset_nothing_missing_dir_and_keep_backup_false(fake):
     fake.work.mkdir()
     r = rm.reset(fake.work)
-    assert r.status == "nothing" and json.loads((fake.work / rm.REPORT_FILE).read_text("utf-8"))["status"] == "nothing"
+    assert r.status == "nothing" and not (fake.work / rm.REPORT_FILE).exists()  # 기록이 없는 폴더에는 보고서도 만들지 않는다(Z3)
     with pytest.raises(rm.RecordError):
         rm.reset(fake.work / "nope")
     with pytest.raises(rm.RecordError):
@@ -338,3 +338,22 @@ def test_start_force_shares_reset_and_cli_reset(fake, capsys):
     assert "삭제하지 않고 보관" in out and not (fake.work / rm.STATE_FILE).exists()
     assert cli.main(["record", "reset", "--work", str(fake.work / "none")]) == 1
     assert cli.main(["record", "reset", "--work", str(fake.work)]) == 0 and "이전 기록이 없었습니다" in capsys.readouterr().out
+
+
+def test_z3_reset_on_unrelated_folder_creates_nothing(fake, capsys):
+    other = fake.home / "Documents" / "mine"
+    other.mkdir(parents=True)
+    (other / "notes.txt").write_text("x", encoding="utf-8")
+    before = sorted(p.name for p in other.iterdir())
+    r = rm.reset(other)
+    assert r.status == "nothing" and r.reported is False and sorted(p.name for p in other.iterdir()) == before
+    assert cli.main(["record", "reset", "--work", str(fake.home / "Documents")]) == 0
+    out = capsys.readouterr().out
+    assert "아무것도 만들거나 바꾸지 않았습니다" in out and not (fake.home / "Documents" / rm.REPORT_FILE).exists()
+    assert cli.main(["record", "reset", "--work", str(fake.home)]) == 0 and not (fake.home / rm.REPORT_FILE).exists()
+
+
+def test_z3_reset_still_reports_when_tool_files_exist(fake):
+    _session(fake)
+    r = rm.reset(fake.work)
+    assert r.status == "ok" and r.reported and (fake.work / rm.REPORT_FILE).exists()

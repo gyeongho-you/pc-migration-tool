@@ -12,29 +12,38 @@ from .rules import Rule
 from .package_base import DENY_DIR_NAMES, DENY_EXTENSIONS, DENY_FILE_NAMES, HOME_DENY_DIRS, HOME_DENY_FILES, HOME_DENY_SUBFILES, SSH_DENY_FILES, split_rule_path
 
 
+def _path_covers(pr, base: str, parts: list[str]) -> bool:
+    """규칙 path 하나(pr)가 base 기준 rel(parts)을 포함하는지. dir 은 패턴에 맞는 폴더 아래 모든 파일, file 은 패턴에 맞는 파일 자신만."""
+    sp = split_rule_path(pr.path)
+    if sp is None or sp[0] != base:
+        return False
+    pat = sp[1].split("/")
+    if len(parts) < len(pat) or (pr.kind == "file" and len(parts) != len(pat)):
+        return False
+    return all(fnmatch.fnmatch(a.lower(), b.lower()) for a, b in zip(parts, pat))
+
+
 def rel_matches_rule(rule: Rule, base: str, rel: str) -> bool:
     """복원하려는 rel(base 기준 posix 경로)이 규칙에 선언된 path 패턴 안에 드는지(B-1).
 
     규칙 path 는 base + 패턴(요소별 glob). dir 은 패턴에 맞는 폴더 아래의 모든 파일, file 은 패턴에 맞는 파일 자신만 허용한다.
     """
     parts = rel.split("/")
-    for pr in rule.paths:
-        sp = split_rule_path(pr.path)
-        if sp is None or sp[0] != base:
-            continue
-        pat = sp[1].split("/")
-        if len(parts) < len(pat) or (pr.kind == "file" and len(parts) != len(pat)):
-            continue
-        if all(fnmatch.fnmatch(a.lower(), b.lower()) for a, b in zip(parts, pat)):
-            return True
-    return False
+    return any(_path_covers(pr, base, parts) for pr in rule.paths)
 
 
-def _rule_names_extension(rule: Rule | None, base: str, ext: str) -> bool:
-    """규칙 path 의 마지막 패턴이 그 확장자를 직접 적어 둔 경우(예: '*.exe') 또는 그 path 의 allow_extensions 에 적은 경우."""
+def _rule_names_extension(rule: Rule | None, base: str, ext: str, rel: str | None = None) -> bool:
+    """규칙이 그 확장자를 '이 rel 에 대해' 허용했는지(Z4): rel 을 포함하는 규칙 path 의 마지막 패턴이 그 확장자를 직접 적었거나(예: '*.exe')
+    그 path 의 allow_extensions 에 적은 경우. 같은 규칙의 다른 path(예: AutoCAD Support 의 .lsp 허용과 Plotters)로는 새지 않는다.
+    rel 이 None 이면(옛 호출) 같은 base 의 어느 path 든 따진다."""
+    parts = rel.split("/") if rel is not None else None
     for pr in (rule.paths if rule is not None else ()):
         sp = split_rule_path(pr.path)
-        if sp and sp[0] == base and (sp[1].split("/")[-1].lower().endswith(ext) or ext in pr.allow_extensions):
+        if not sp or sp[0] != base:
+            continue
+        if parts is not None and not _path_covers(pr, base, parts):
+            continue
+        if sp[1].split("/")[-1].lower().endswith(ext) or ext in pr.allow_extensions:
             return True
     return False
 
@@ -55,6 +64,6 @@ def restore_denied(rel: str, target: Path, rule: Rule | None, base: str) -> str 
     if parts[-1] in DENY_FILE_NAMES or (len(parts) >= 2 and parts[-2] == ".ssh" and parts[-1] in SSH_DENY_FILES):
         return "복원이 금지된 설정 파일(쉘 시작 파일/SSH 설정)"
     ext = os.path.splitext(parts[-1])[1]
-    if ext in DENY_EXTENSIONS and not _rule_names_extension(rule, base, ext):
+    if ext in DENY_EXTENSIONS and not _rule_names_extension(rule, base, ext, rel):
         return f"실행/스크립트 파일({ext})은 복원하지 않음(PowerShell 프로필 등)"
     return None

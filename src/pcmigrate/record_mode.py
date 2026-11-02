@@ -319,11 +319,12 @@ class Candidate:
     removed: bool = False  # 마지막 변화가 삭제(참고로만 표시)
     promoted: bool = False  # 기준선에서 처음 생성됐지만 이후 라운드에서 또 바뀌어 후보로 올림
     secret: bool = False  # 로그인/라이선스/자격 증명으로 보이는 파일: 규칙 초안에 넣지 않음
+    nonconfig: bool = False  # 알려진 설정 형식이 아닌 파일(확장자 없음 포함): 규칙 초안에 넣지 않음
 
     def as_dict(self) -> dict:
         return {"path": self.path, "confidence": self.confidence, "size": self.size, "ext": self.ext,
                 "changed_rounds": f"{self.hits}/{self.rounds}", "change": self.change, "reason": self.reason,
-                "baseline_masked": self.masked, "promoted_from_baseline": self.promoted, "secret_excluded": self.secret}
+                "baseline_masked": self.masked, "promoted_from_baseline": self.promoted, "secret_excluded": self.secret, "format_excluded": self.nonconfig}
 
 
 @dataclass
@@ -348,23 +349,48 @@ class Analysis:
 
 CHANGE_TEXT = {"added": "추가", "removed": "삭제", "modified": "수정"}
 
-# 로그인/라이선스/자격 증명 파일 판정(S1): discover.py 가 쓰는 비밀 패턴을 재사용하고, 이름에 아래 낱말이 들어 있어도 비밀로 본다.
-SECRET_WORDS = ("token", "cookie", "credential", "license", "auth", "secret", "password")
+# 로그인/라이선스/자격 증명 파일 판정(S1/Z2): discover.py 가 쓰는 비밀 패턴을 재사용하고, 이름 낱말·확장자 단서를 더한다.
+# 이름 기반 판정은 완전하지 않으므로 규칙 초안에는 '알려진 설정 형식'(settings_filter)만 담는 허용 방식을 함께 쓴다(Z2).
+SECRET_WORDS = ("token", "cookie", "credential", "license", "licence", "secret", "password", "passwd", "apikey", "api_key", "api-key",
+                "session", "bearer", "refresh", "serial", "activation", "hasp", "dongle", "wallet", "authentication")
+SECRET_EXTS = frozenset({".pem", ".pfx", ".p12", ".key", ".crt", ".cer", ".ovpn", ".env", ".kdbx", ".jks", ".keystore", ".p7b", ".gpg"})
+SECRET_NAMES = frozenset({"local state", "key", "wallet.dat"})  # 마지막 값은 확장자 뗀 이름(key.json 등)과 전체 이름 모두 비교
+_AUTH_WORD = re.compile(r"(?<![a-z])(?:o?auth|authn|authz)(?![a-z])")  # author 같은 낱말은 걸리지 않게 낱말 경계로 판정
+_SSO_WORD = re.compile(r"(?<![a-z])sso(?![a-z])")
 SECRET_REASON = "로그인/라이선스 파일이라 제외했습니다"
+NONCONFIG_REASON = "설정 형식이 아니라 제외했습니다"
 # 규칙의 exclude(파일 이름 glob)에 넣는 안전망: 폴더 묶기 안에 스냅샷에 안 보인 비밀 파일이 있어도 복원 대상에서 빠지게 한다.
-SECRET_EXCLUDES = ("*.lic", "*.license", "*token*", "*cookie*", "*credential*", "*secret*", "*password*", "*license*",
-                   "*.kdbx", "logins.json", "key4.db", "login data", "id_rsa*", "id_ed25519*", ".netrc", ".git-credentials")
+SECRET_EXCLUDES = ("*.lic*", "*.license", "*token*", "*cookie*", "*credential*", "*secret*", "*password*", "*passwd*", "*license*", "*licence*",
+                   "*apikey*", "*api_key*", "*api-key*", "*session*", "*bearer*", "*refresh*", "*serial*", "*activation*", "*dongle*", "*wallet*",
+                   "sso.*", "sso_*", "sso-*", "*_sso.*", "*-sso.*", "hasp*", "local state", "*.pem", "*.pfx", "*.p12", "*.key", "*.crt", "*.cer",
+                   "*.ovpn", ".env", ".env.*", "*.env", "*.kdbx", "*.jks", "*.keystore", "*.p7b", "*.gpg", "logins.json", "key4.db", "login data",
+                   "id_rsa*", "id_ed25519*", ".netrc", ".git-credentials")
+
+
+def _secret_part(part: str) -> bool:
+    """경로 요소(소문자) 하나가 비밀/라이선스 단서인지."""
+    stem, ext = os.path.splitext(part)
+    if ext in SECRET_EXTS or ext.startswith(".lic") or part == ".env" or part.startswith(".env."):
+        return True
+    if part in SECRET_NAMES or stem in SECRET_NAMES:
+        return True
+    if any(w in part for w in SECRET_WORDS) or any(pat in part for pat in discover_data.SECRET_PATTERNS):
+        return True
+    return bool(_AUTH_WORD.search(part) or _SSO_WORD.search(part))
 
 
 def secret_reason(tok: str) -> str | None:
-    """환경변수 표기 경로의 (루트 토큰 아래) 어느 요소라도 비밀/라이선스 이름이면 사유 문장, 아니면 None."""
-    parts = [x.lower() for x in tok.split("\\")[1:]]
-    for part in parts:
-        if part.endswith((".lic", ".license")):
-            return SECRET_REASON
-        if any(w in part for w in SECRET_WORDS) or any(pat in part for pat in discover_data.SECRET_PATTERNS):
+    """환경변수 표기 경로의 (루트 토큰 아래) 어느 요소라도 비밀/라이선스 단서이면 사유 문장, 아니면 None."""
+    for part in (x.lower() for x in tok.split("\\")[1:]):
+        if _secret_part(part):
             return SECRET_REASON
     return None
+
+
+def nonconfig_reason(tok: str) -> str | None:
+    """파일 이름이 알려진 설정 형식(settings_filter 의 확장자/점 파일 이름 허용 목록)이 아니면 사유, 맞으면 None."""
+    name = tok.rsplit("\\", 1)[-1]
+    return None if settings_filter.is_config_name(name) else NONCONFIG_REASON
 
 
 def _confidence(hits: int, rounds: int, config_like: bool, noise_like: bool, big: bool, no_baseline: bool) -> tuple[str, str]:
@@ -467,10 +493,17 @@ def analyze(s: Session, scrub: Callable[[str], str] | None = None) -> Analysis:
         secret = secret_reason(k) is not None
         if secret:
             why += "; " + SECRET_REASON + "(규칙 초안에 넣지 않음)"
+        nonconfig = not secret and nonconfig_reason(k) is not None
+        if nonconfig:
+            why += "; " + NONCONFIG_REASON + "(규칙 초안에 넣지 않음)"
         a.candidates.append(Candidate(k, conf, size, ext, len(kinds), len(rounds), CHANGE_TEXT.get(last, last), why, masked, noise_like, unk,
-                                      removed=last == "removed", promoted=promoted, secret=secret))
+                                      removed=last == "removed", promoted=promoted, secret=secret, nonconfig=nonconfig))
     a.candidates.sort(key=lambda c: (-RANK[c.confidence], c.masked, c.path.lower()))
     n_secret = sum(1 for c in a.candidates if c.secret)
+    n_nonconfig = sum(1 for c in a.candidates if c.nonconfig and not c.removed and not c.masked)
+    if n_nonconfig:
+        a.warnings.append(f"설정 형식(.ini .json .xml 등)이 아닌 파일 {n_nonconfig}개는 {NONCONFIG_REASON}(후보 목록에 '형식 제외' 표시로 남습니다). "
+                          "암호화/로그인 정보가 들어 있을 수 있어 규칙 초안에는 알려진 설정 형식만 담습니다. 필요하면 직접 확인해 규칙에 추가하세요")
     if n_secret:
         a.warnings.append(f"로그인/라이선스/토큰으로 보이는 파일 {n_secret}개는 {SECRET_REASON}(후보 목록에는 '제외' 표시로 남습니다). "
                           "이런 파일은 복원하지 않으니 신 PC 에서 다시 로그인/활성화하세요")
@@ -563,6 +596,8 @@ def no_draft_message(a: Analysis) -> str:
         return OUTSIDE_MSG
     if a.candidates and any(c.secret for c in a.candidates) and all(c.secret or c.removed for c in a.candidates if not c.masked):
         return f"바뀐 파일이 로그인/라이선스 파일뿐이라 {SECRET_REASON}. 규칙 초안에 담을 설정 파일이 없습니다."
+    if a.candidates and any(c.nonconfig for c in a.candidates) and all(c.secret or c.nonconfig or c.removed for c in a.candidates if not c.masked):
+        return f"바뀐 파일이 설정 형식이 아니거나 로그인/라이선스 파일뿐이라 규칙 초안에 담을 파일이 없습니다({NONCONFIG_REASON})."
     if a.candidates and all(c.removed for c in a.candidates if not c.masked):
         return "바뀐 파일이 삭제뿐이라 규칙 초안에 담을 파일이 없습니다(삭제는 참고로만 표시합니다)."
     return "조건에 맞는 후보가 없습니다(--min-confidence low 로 낮춰 보세요)."
@@ -572,7 +607,7 @@ def build_rule(a: Analysis, min_conf: str = LOW, rule_id: str | None = None, tod
     """분석 결과로 규칙 JSON 초안(dict). 후보가 없으면 None. 규칙 스키마(rules.parse_rule)를 따른다."""
     today = today or datetime.now().strftime("%Y-%m-%d")
     ok = [c for c in a.candidates if not c.masked and not c.noise_like and not c.removed and c.size <= BIG_CANDIDATE
-          and not c.secret and RANK[c.confidence] >= RANK[min_conf] and "*" not in c.path and "?" not in c.path]
+          and not c.secret and not c.nonconfig and RANK[c.confidence] >= RANK[min_conf] and "*" not in c.path and "?" not in c.path]
     a.outside = [c.path for c in ok if not c.path.startswith("%")]  # 규칙 경로가 될 수 없는 위치(다른 드라이브 등)
     pick = [c for c in ok if c.path.startswith("%")]
     left = [c for c in a.candidates if c not in pick]
@@ -627,7 +662,10 @@ def build_rule(a: Analysis, min_conf: str = LOW, rule_id: str | None = None, tod
     if n_secret:
         notes += f" 로그인/라이선스/토큰으로 보이는 파일 {n_secret}개는 담지 않았고, 그런 파일이 든 폴더는 폴더째 담지 않고 파일 단위로 담았습니다."
     notes += " exclude 에 로그인/라이선스 이름 패턴을 넣었지만 이름만으로 모두 걸러내지는 못하니 복원 전에 직접 확인하세요."
-    skipped = [c for c in left if not c.masked and not c.removed and not c.secret]
+    n_nc = sum(1 for c in left if c.nonconfig and not c.removed and not c.masked)
+    if n_nc:
+        notes += f" 설정 형식이 아닌 파일 {n_nc}개는 담지 않았습니다(알려진 설정 확장자만 담음)."
+    skipped = [c for c in left if not c.masked and not c.removed and not c.secret and not c.nonconfig]
     if skipped:
         notes += f" 확신도/형식/크기 때문에 담지 않은 후보 {len(skipped)}개는 record-candidates.json 에서 확인하세요."
     if any(c.masked for c in left):
