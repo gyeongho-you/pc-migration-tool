@@ -39,7 +39,7 @@ from .copier import FAIL_STATUSES, PART_SUFFIX
 from .discover_data import RESTORE_DENY_SUBSTRINGS
 from .fs import long_path
 from .multi_transfer import JOURNAL_NAME, JOURNAL_VERSION, dest_rel
-from .package_base import (DENY_DIR_NAMES, DENY_FILE_NAMES, HOME_DENY_FILES, HOME_DENY_SUBFILES, SSH_DENY_FILES,
+from .package_base import (DENY_DIR_NAMES, DENY_FILE_NAMES, HOME_DENY_DIRS, HOME_DENY_FILES, HOME_DENY_SUBFILES, SSH_DENY_FILES,
                            unsafe_name)
 from .progress import ProgressInfo, ProgressTracker, categorize, fmt_bytes
 from .transfer_base import DISCONNECTED_MESSAGE, SPACE_MARGIN, DriveDisconnected, TransferError, _is_within
@@ -134,6 +134,9 @@ ROOT_PROTECTED = frozenset({"windows", "windows.old", "program files", "program 
                             "config.msi", "$windows.~bt", "$windows.~ws", "$sysreset", "msocache", "$getcurrent"})
 
 
+DEFAULT_PROFILES = frozenset({"default", "default user", "all users"})
+
+
 def _env_roots() -> list[str]:
     out = []
     for name in ("SystemRoot", "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432", "ProgramData"):
@@ -209,11 +212,23 @@ def _protected_reason(logical: str, *, is_dir: bool = True) -> str | None:
         return "시작 프로그램/authorized_keys 위치"
     if any(x in DENY_DIR_NAMES for x in low):
         return "Excel 시작 폴더(XLSTART)"
+    if low[0] == "users" and len(low) >= 2 and low[1] in DEFAULT_PROFILES:
+        return "기본 사용자 프로필(새 사용자 계정에 그대로 복사됨)"
     if low[0] == "users" and len(low) >= 3:
-        if len(low) == 3 and (low[2] in HOME_DENY_FILES or low[2] in DENY_FILE_NAMES):
+        # 복원의 거부 목록(package_base 의 HOME_DENY_*/DENY_*/SSH_DENY_FILES)과 같은 목록으로 판정한다(S3). 홈 바로 아래 경로에만 적용하므로
+        # 홈 밖/하위 프로젝트 폴더(D:\proj\.vscode, C:\Users\u\proj\.vscode)는 막지 않는다.
+        sub = tuple(low[2:])
+        if len(sub) == 1 and (sub[0] in HOME_DENY_FILES or sub[0] in DENY_FILE_NAMES):
             return "홈 설정 파일(명령/토큰이 들어갈 수 있음)"
-        if len(low) == 4 and ((low[2], low[3]) in HOME_DENY_SUBFILES or (low[2] == ".ssh" and low[3] in SSH_DENY_FILES)):
+        if len(sub) == 2 and sub in HOME_DENY_SUBFILES:
             return "홈 설정 파일(명령/토큰이 들어갈 수 있음)"
+        if sub[0] == ".ssh":
+            return "SSH 설정 폴더(.ssh: 키/접속 설정/known_hosts)"
+        for d in HOME_DENY_DIRS:
+            if sub[:len(d)] == d:
+                return "홈의 시작/확장 설정 폴더(Git, 편집기, VS Code 확장, Gradle 초기화 스크립트)"
+            if is_dir and len(sub) < len(d) and d[:len(sub)] == sub:  # 그 폴더를 품은 상위 폴더(.config, .vscode, .gradle)를 통째로 놓는 경우
+                return "홈의 시작/확장 설정 폴더를 품은 폴더(Git, 편집기, VS Code 확장, Gradle 초기화 스크립트)"
     return None
 
 

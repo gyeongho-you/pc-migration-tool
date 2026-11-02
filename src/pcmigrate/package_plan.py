@@ -26,13 +26,15 @@ GIT_CONFIG_WARNING = ("Git 설정 파일은 명령 실행 설정(core.sshCommand
 
 
 def is_git_config_name(name: str) -> bool:
-    """.gitconfig 와 .gitconfig 로 시작하는 이름(.gitconfig-work 등). Git 이 읽어 명령을 실행할 수 있는 설정 파일이다."""
-    return name.casefold().startswith(".gitconfig")
+    """.gitconfig 와 .gitconfig 로 시작하는 이름(.gitconfig-work 등). Git 이 읽어 명령을 실행할 수 있는 설정 파일이다.
+    (.config/git/config 는 복원 거부 목록이라 이 경고 대상이 되기 전에 거부되지만, 이름 판정에는 포함한다.)"""
+    low = name.casefold().replace("\\", "/")
+    return low.rsplit("/", 1)[-1].startswith(".gitconfig") or low.endswith(".config/git/config")
 
 
 def git_config_targets(items: list[dict]) -> list[str]:
     """복원 계획에서 실제로 복원될(거부/링크 거부가 아닌) Git 설정 파일의 대상 경로."""
-    return [it["target"] for it in items if it.get("status") not in (DENIED, REJECTED, NOT_SELECTED) and is_git_config_name(Path(it["target"]).name)]
+    return [it["target"] for it in items if it.get("status") not in (DENIED, REJECTED, NOT_SELECTED) and is_git_config_name(str(it["target"]))]
 
 
 INSTALL_KEY_PREFIX = INSTALL_ID + ":"

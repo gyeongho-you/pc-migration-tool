@@ -20,7 +20,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
-from . import copier, envpaths, errorlog, fs, settings_filter
+from . import copier, discover_data, envpaths, errorlog, fs, settings_filter
 from .cancel import Cancelled
 from .progress import ProgressInfo, fmt_bytes
 from .record_snapshot import (HASH_LIMIT, MAX_FILES, Root, Snapshot, SnapshotOptions, custom_root, default_roots, match_words,
@@ -69,8 +69,14 @@ def _read_json(path: Path):
         raise RecordError(f"{path.name} 을(를) 읽지 못했습니다({type(e).__name__}). 작업 폴더를 확인하세요") from e
 
 
+MAX_PROGRAM_CHARS = 100  # 프로그램 이름 길이 상한: 기본 작업 폴더 이름이 되므로 Windows 경로 길이 한도를 넘지 않게 한다
+_RESERVED = frozenset({"con", "prn", "aux", "nul", *(f"com{i}" for i in range(10)), *(f"lpt{i}" for i in range(10))})
+
+
 def slug(text: str) -> str:
     s = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+    if s in _RESERVED:  # CON/NUL/COM1 같은 Windows 장치 이름은 폴더 이름으로 쓸 수 없어 접미사를 붙인다
+        s += "-record"
     return s or "recorded-" + hashlib.sha1(text.encode("utf-8")).hexdigest()[:8]
 
 
@@ -218,6 +224,8 @@ def start(program: str, work: str | None = None, roots: list[str] | None = None,
     program = program.strip()
     if not program:
         raise RecordError("--program 에 프로그램 이름이 필요합니다")
+    if len(program) > MAX_PROGRAM_CHARS:
+        raise RecordError(f"--program 이름이 너무 깁니다({len(program)}자). {MAX_PROGRAM_CHARS}자 이하의 짧은 프로그램 이름을 쓰세요")
     wd = Path(envpaths.expand_env(work or default_work_dir(program)))
     missing = [r for r in (roots or []) if not os.path.isdir(fs.long_path(os.path.abspath(r)))]
     if missing:
@@ -302,11 +310,12 @@ class Candidate:
     hash_unknown: bool = False
     removed: bool = False  # 마지막 변화가 삭제(참고로만 표시)
     promoted: bool = False  # 기준선에서 처음 생성됐지만 이후 라운드에서 또 바뀌어 후보로 올림
+    secret: bool = False  # 로그인/라이선스/자격 증명으로 보이는 파일: 규칙 초안에 넣지 않음
 
     def as_dict(self) -> dict:
         return {"path": self.path, "confidence": self.confidence, "size": self.size, "ext": self.ext,
                 "changed_rounds": f"{self.hits}/{self.rounds}", "change": self.change, "reason": self.reason,
-                "baseline_masked": self.masked, "promoted_from_baseline": self.promoted}
+                "baseline_masked": self.masked, "promoted_from_baseline": self.promoted, "secret_excluded": self.secret}
 
 
 @dataclass
@@ -330,6 +339,24 @@ class Analysis:
 
 
 CHANGE_TEXT = {"added": "추가", "removed": "삭제", "modified": "수정"}
+
+# 로그인/라이선스/자격 증명 파일 판정(S1): discover.py 가 쓰는 비밀 패턴을 재사용하고, 이름에 아래 낱말이 들어 있어도 비밀로 본다.
+SECRET_WORDS = ("token", "cookie", "credential", "license", "auth", "secret", "password")
+SECRET_REASON = "로그인/라이선스 파일이라 제외했습니다"
+# 규칙의 exclude(파일 이름 glob)에 넣는 안전망: 폴더 묶기 안에 스냅샷에 안 보인 비밀 파일이 있어도 복원 대상에서 빠지게 한다.
+SECRET_EXCLUDES = ("*.lic", "*.license", "*token*", "*cookie*", "*credential*", "*secret*", "*password*", "*license*",
+                   "*.kdbx", "logins.json", "key4.db", "login data", "id_rsa*", "id_ed25519*", ".netrc", ".git-credentials")
+
+
+def secret_reason(tok: str) -> str | None:
+    """환경변수 표기 경로의 (루트 토큰 아래) 어느 요소라도 비밀/라이선스 이름이면 사유 문장, 아니면 None."""
+    parts = [x.lower() for x in tok.split("\\")[1:]]
+    for part in parts:
+        if part.endswith((".lic", ".license")):
+            return SECRET_REASON
+        if any(w in part for w in SECRET_WORDS) or any(pat in part for pat in discover_data.SECRET_PATTERNS):
+            return SECRET_REASON
+    return None
 
 
 def _confidence(hits: int, rounds: int, config_like: bool, noise_like: bool, big: bool, no_baseline: bool) -> tuple[str, str]:
@@ -429,9 +456,16 @@ def analyze(s: Session, scrub: Callable[[str], str] | None = None) -> Analysis:
         last = kinds[-1].rstrip("?")
         if last == "removed":
             why += "; 삭제된 파일은 참고로만 표시(규칙 초안에는 넣지 않음)"
+        secret = secret_reason(k) is not None
+        if secret:
+            why += "; " + SECRET_REASON + "(규칙 초안에 넣지 않음)"
         a.candidates.append(Candidate(k, conf, size, ext, len(kinds), len(rounds), CHANGE_TEXT.get(last, last), why, masked, noise_like, unk,
-                                      removed=last == "removed", promoted=promoted))
+                                      removed=last == "removed", promoted=promoted, secret=secret))
     a.candidates.sort(key=lambda c: (-RANK[c.confidence], c.masked, c.path.lower()))
+    n_secret = sum(1 for c in a.candidates if c.secret)
+    if n_secret:
+        a.warnings.append(f"로그인/라이선스/토큰으로 보이는 파일 {n_secret}개는 {SECRET_REASON}(후보 목록에는 '제외' 표시로 남습니다). "
+                          "이런 파일은 복원하지 않으니 신 PC 에서 다시 로그인/활성화하세요")
     if any(not c.masked for c in a.candidates):
         pass
     elif not hits:
@@ -519,6 +553,8 @@ def no_draft_message(a: Analysis) -> str:
         return BASELINE_ONLY_MSG
     if a.outside:
         return OUTSIDE_MSG
+    if a.candidates and any(c.secret for c in a.candidates) and all(c.secret or c.removed for c in a.candidates if not c.masked):
+        return f"바뀐 파일이 로그인/라이선스 파일뿐이라 {SECRET_REASON}. 규칙 초안에 담을 설정 파일이 없습니다."
     if a.candidates and all(c.removed for c in a.candidates if not c.masked):
         return "바뀐 파일이 삭제뿐이라 규칙 초안에 담을 파일이 없습니다(삭제는 참고로만 표시합니다)."
     return "조건에 맞는 후보가 없습니다(--min-confidence low 로 낮춰 보세요)."
@@ -528,7 +564,7 @@ def build_rule(a: Analysis, min_conf: str = LOW, rule_id: str | None = None, tod
     """분석 결과로 규칙 JSON 초안(dict). 후보가 없으면 None. 규칙 스키마(rules.parse_rule)를 따른다."""
     today = today or datetime.now().strftime("%Y-%m-%d")
     ok = [c for c in a.candidates if not c.masked and not c.noise_like and not c.removed and c.size <= BIG_CANDIDATE
-          and RANK[c.confidence] >= RANK[min_conf] and "*" not in c.path and "?" not in c.path]
+          and not c.secret and RANK[c.confidence] >= RANK[min_conf] and "*" not in c.path and "?" not in c.path]
     a.outside = [c.path for c in ok if not c.path.startswith("%")]  # 규칙 경로가 될 수 없는 위치(다른 드라이브 등)
     pick = [c for c in ok if c.path.startswith("%")]
     left = [c for c in a.candidates if c not in pick]
@@ -538,10 +574,18 @@ def build_rule(a: Analysis, min_conf: str = LOW, rule_id: str | None = None, tod
     by_dir: dict[str, list[Candidate]] = {}
     for c in pick:
         by_dir.setdefault(_parent(c.path), []).append(c)
+    secret_dirs: set[str] = set()  # 스냅샷에 비밀 파일/폴더가 들어 있는 폴더(조상 전부): 이런 폴더는 dir 로 묶지 않고 파일 단위로 담는다
+    for k in a.last_files:
+        if secret_reason(k):
+            d = k
+            while "\\" in d:
+                d = d.rsplit("\\", 1)[0]
+                secret_dirs.add(d.lower())
     entries: list[tuple[str, str, str]] = []  # (경로, kind, 설명)
     for d, cs in sorted(by_dir.items()):
         # 폴더 묶기: 2개 이상, 루트(또는 그 상위)가 아니고, 폴더의 재귀 합계(하위 폴더 포함)가 상한 이하일 때만
-        folder_ok = len(cs) >= 2 and not _is_root_dir(d, a.root_tokens) and a.folder_bytes.get(d, 0) <= BIG_FOLDER
+        folder_ok = (len(cs) >= 2 and not _is_root_dir(d, a.root_tokens) and a.folder_bytes.get(d, 0) <= BIG_FOLDER
+                     and d.lower() not in secret_dirs)
         if folder_ok:
             entries.append((d, "dir", f"바뀐 설정 파일 {len(cs)}개가 있는 폴더(설정 기록 모드)"))
         else:
@@ -554,7 +598,7 @@ def build_rule(a: Analysis, min_conf: str = LOW, rule_id: str | None = None, tod
     used: set[str] = set()
     paths = [{"path": p, "dest": _dest(sid, p, used), "kind": k, "description": desc} for p, k, desc in entries]
     cand_names = {c.path.rsplit("\\", 1)[-1].lower() for c in pick}
-    excl = ["*.lic", "*.license"]
+    excl = list(SECRET_EXCLUDES)
     for p in a.noise_paths:  # 기준선에서 바뀐 파일: 로그/임시 형식은 확장자 패턴으로, 나머지는 폴더 안에 있을 때만 이름으로
         name = p.rsplit("\\", 1)[-1]
         ext = os.path.splitext(name)[1].lower()
@@ -571,7 +615,11 @@ def build_rule(a: Analysis, min_conf: str = LOW, rule_id: str | None = None, tod
             excl.append(f"*{c.ext}")
     notes = (f"설정 기록 모드로 생성, 확인 필요. 라운드 {a.rounds}회(기준선 {a.baselines}회), 생성일 {today}. "
              f"후보 {len(pick)}개를 paths 에 담았고 기준선에서 바뀐 파일 {a.noise_files}개는 제외했습니다.")
-    skipped = [c for c in left if not c.masked and not c.removed]
+    n_secret = sum(1 for c in left if c.secret and not c.removed)
+    if n_secret:
+        notes += f" 로그인/라이선스/토큰으로 보이는 파일 {n_secret}개는 담지 않았고, 그런 파일이 든 폴더는 폴더째 담지 않고 파일 단위로 담았습니다."
+    notes += " exclude 에 로그인/라이선스 이름 패턴을 넣었지만 이름만으로 모두 걸러내지는 못하니 복원 전에 직접 확인하세요."
+    skipped = [c for c in left if not c.masked and not c.removed and not c.secret]
     if skipped:
         notes += f" 확신도/형식/크기 때문에 담지 않은 후보 {len(skipped)}개는 record-candidates.json 에서 확인하세요."
     if any(c.masked for c in left):
