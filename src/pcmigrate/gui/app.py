@@ -17,7 +17,7 @@ from .. import errorlog
 from . import icons
 from . import state as S
 from . import texts as T
-from .controller import Controller, FriendlyError, anonymize_paths
+from .controller import Controller, FriendlyError, GuardError, anonymize_paths
 from .views import common as C
 from .views.common import (CHIP_DONE_BG, CHIP_TODO_BG, FONT_DELTA_RANGE, INFO_BG, INFO_FG, MUTED_FG, OK_FG, SUB_FONT, TITLE_FONT, WARN_FG,
                            ActionButton, BaseView, TextDialog, add_tooltip, autowrap, install_wheel, open_location, setup_fonts)
@@ -464,6 +464,12 @@ class App(tk.Tk):
 
     def report_callback_exception(self, exc, val, tb) -> None:
         """tkinter 콜백 안에서 처리되지 않은 오류도 로그에 남기고 같은 대화상자로 보여 준다(창 모드 exe 에서는 콘솔이 없다)."""
+        if isinstance(val, GuardError):  # 안전 안내(예: 작업 중에는 화면을 옮길 수 없음)는 오류가 아니라 같은 안내 대화상자로 보여 준다
+            try:
+                messagebox.showwarning(T.GUARD_TITLE, str(val), parent=self)
+            except tk.TclError:
+                pass
+            return
         text = "".join(traceback.format_exception(exc, val, tb))
         try:
             self.show_error(self.c.report_error(val, T.TASK_UI, text))

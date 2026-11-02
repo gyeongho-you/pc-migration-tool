@@ -3,6 +3,8 @@
 방법: 받을 위젯(과 그 안의 위젯들)의 창 핸들에 DragAcceptFiles 를 켜고, 창 프로시저를 바꿔 끼워 WM_DROPFILES 만 처리한다
 (나머지 메시지는 원래 프로시저로 그대로 넘긴다). 경로 목록은 DragQueryFileW 로 읽고 DragFinish 로 마무리한다.
 
+알려진 한계: 설치한 뒤에 새로 만든 위젯(창 핸들)에는 끌어다 놓기가 걸리지 않는다. 화면이 상자를 다시 그릴 때는 install() 을 다시 부른다.
+
 안전 원칙: 어떤 이유로든 설치에 실패하면(Windows 가 아님, 관리자 권한으로 실행 중, ctypes 오류 등) **끌어다 놓기만 조용히 끄고**
 reason 에 이유를 남긴다. 화면의 '파일 추가'/'폴더 추가' 버튼은 항상 동작한다. 관리자 권한으로 실행 중이면 Windows(UIPI)가 일반 권한 탐색기의
 끌어놓기를 막으므로 설치하지 않는다(우회용 메시지 필터는 시도하지 않는다).
@@ -13,6 +15,8 @@ from __future__ import annotations
 
 import os
 from typing import Callable
+
+from .. import errorlog
 
 WM_DROPFILES = 0x0233
 GWLP_WNDPROC = -4
@@ -97,7 +101,8 @@ class DropHook:
                 paths = self._api["query"](wparam)
                 self.widget.after(0, self.deliver, paths)  # 창 프로시저 안에서는 목록만 읽고, 처리는 Tk 이벤트 루프로 넘긴다
                 return 0
-        except Exception:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001 - 창 프로시저 밖으로 예외를 내보내지 않지만 삼키지도 않는다(오류 로그에 남긴다)
+            errorlog.record(e, "끌어다 놓기: 창 프로시저")
             return 0
         orig = self._orig.get(int(hwnd), 0)
         if not orig:
@@ -113,8 +118,8 @@ class DropHook:
         """받은 경로 목록을 화면에 전달한다(시험은 이 함수를 직접 부른다). 빈 목록(실제 파일이 없는 항목)도 전달한다."""
         try:
             self.on_drop([str(p) for p in paths])
-        except Exception:  # noqa: BLE001 - 화면 쪽 오류가 창 프로시저를 깨뜨리지 않게
-            pass
+        except Exception as e:  # noqa: BLE001 - 화면 쪽 오류가 창 프로시저를 깨뜨리지 않게(오류 로그에는 남긴다)
+            errorlog.record(e, "끌어다 놓기: 받은 경로 처리")
 
 
 def _walk(widget):

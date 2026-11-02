@@ -109,6 +109,11 @@ ANY_LEVEL_SKIP: dict[str, str] = {
 }
 for _n in REGENERABLE_DIRS:
     ANY_LEVEL_SKIP.setdefault(_n, "재생성")
+# 이름만으로는 사용자 자료 폴더일 수 있는 것(토목 현장의 Logs\*.las 등): 안에 '자료 형식'(등급 A/B 확장자, 사용자 추가 포함) 파일이 있으면 제외하지 않는다.
+# 정말 캐시/로그 파일뿐인 폴더만 제외한다(제외 목록에는 같은 이유가 표시된다).
+SOFT_SKIP_NAMES = frozenset({"logs", "cache"})
+SOFT_SKIP_BUDGET = 2000  # 이름이 걸린 폴더 하나에서 자료 파일을 찾느라 살펴보는 항목 수의 상한
+USER_FOLDER_TIME_SHARE = 0.4  # 시간 상한이 있을 때 사용자 기본 폴더를 먼저 훑는 몫(이 시간 안에 못 끝나면 '일부만 훑음'으로 알린다)
 USERS_LEVEL_SKIP = frozenset({"default", "default user", "all users", "defaultuser0"})  # <루트>\Users 바로 아래
 
 USER_FOLDER_KEYS: tuple[str, ...] = ("documents", "desktop", "pictures", "videos", "downloads", "music")
@@ -231,12 +236,15 @@ class FindResult:
     excluded_examples: list = field(default_factory=list)  # [{"path","reason"}]
     errors: list = field(default_factory=list)  # [{"path","code","text"}] 앞 MAX_ERRORS_LISTED 개
     error_count: int = 0
+    user_folders_incomplete: list = field(default_factory=list)  # 시간이 부족해 훑지 못했거나 일부만 훑은 사용자 기본 폴더 키(없으면 결과에 나타나지 않음)
     ext_notes: list = field(default_factory=list)  # 찾을 파일 형식 설정 적용/경고 문구(없으면 결과에 나타나지 않음)
 
     def to_dict(self) -> dict:
         d = self._base_dict()
         if self.ext_notes:
             d["ext_notes"] = list(self.ext_notes)
+        if self.user_folders_incomplete:
+            d["user_folders_incomplete"] = list(self.user_folders_incomplete)
         return d
 
     def _base_dict(self) -> dict:
@@ -325,6 +333,18 @@ def _norm(p: str) -> str:
     return os.path.normcase(os.path.abspath(p)).rstrip("\\/") or os.path.normcase(p)
 
 
+def _prune_nested_roots(roots: list[str]) -> list[str]:
+    """같은 폴더이거나 다른 root 안에 든 root 를 뺀다(대소문자·후행 구분자 무시). 순서는 그대로."""
+    norms = [_norm(r) for r in roots]
+    out: list[str] = []
+    for i, (r, n) in enumerate(zip(roots, norms)):
+        inside = any(m != n and n.startswith(m.rstrip("\\/") + os.sep) for m in norms)
+        dup = n in norms[:i]
+        if not inside and not dup:
+            out.append(r)
+    return out
+
+
 def _drive_of(path: str) -> str:
     d = ntpath.splitdrive(os.path.abspath(path))[0]
     return d.upper() if d else path
@@ -394,9 +414,36 @@ class _Finder:
         if len(self.res.excluded_examples) < MAX_EXCLUDED_EXAMPLES:
             self.res.excluded_examples.append({"path": path, "reason": reason})
 
+    def _has_data_files(self, path: str) -> bool:
+        """폴더(하위 포함, 상한 SOFT_SKIP_BUDGET 항목) 안에 자료 형식(등급 A/B 확장자, 사용자 추가 포함) 파일이 있는가. 읽기만 한다."""
+        table = self.table if self.table is not None else EXT_TABLE
+        stack, seen = [path], 0
+        while stack and seen < SOFT_SKIP_BUDGET:
+            d = stack.pop()
+            try:
+                with os.scandir(long_path(d)) as it:
+                    for e in it:
+                        seen += 1
+                        if seen > SOFT_SKIP_BUDGET:
+                            break
+                        try:
+                            if e.is_symlink():
+                                continue
+                            if e.is_dir(follow_symlinks=False):
+                                stack.append(os.path.join(d, e.name))
+                                continue
+                        except OSError:
+                            continue
+                        hit = table.get(os.path.splitext(e.name)[1].lower())
+                        if hit and (hit[1] != "C" or os.path.splitext(e.name)[1].lower() in self.user_exts):
+                            return True
+            except OSError:
+                continue
+        return False
+
     def _skip_reason(self, name: str, parts: tuple[str, ...], full: str) -> str | None:
         low = name.lower()
-        if low in ANY_LEVEL_SKIP:
+        if low in ANY_LEVEL_SKIP and not (low in SOFT_SKIP_NAMES and self._has_data_files(full)):
             return ANY_LEVEL_SKIP[low]
         if len(parts) == 0 and low in ROOT_LEVEL_SKIP:  # parts = 부모까지의 상대 이름들. 비어 있으면 루트 직속
             return ROOT_LEVEL_SKIP[low]
@@ -531,6 +578,7 @@ def find_data(roots: Iterable[str | os.PathLike] | None = None, *, user_folders:
         root_list = [r for r, _k in (drives_fn or (lambda: list_drives(include_removable)))()]
     else:
         root_list = [os.fspath(r) for r in roots]
+    root_list = _prune_nested_roots(root_list)  # 다른 root 안에 든 root 는 이미 훑으므로 뺀다(같은 폴더를 두 번 세지 않게)
     if user_folders is None:  # 훑을 곳을 직접 지정(--roots)했으면 그곳만 훑는다: 사용자 기본 폴더는 기본(전체 드라이브) 모드에서만 따로 조사
         user_folders = default_user_folders() if roots is None else {}
     ufs = {k: str(v) for k, v in user_folders.items()}
@@ -542,30 +590,55 @@ def find_data(roots: Iterable[str | os.PathLike] | None = None, *, user_folders:
     res.ext_notes = list(ext_notes)
     res.roots = list(root_list)
     drive_aggs: dict[str, list] = {}  # 드라이브 -> [루트 목록, _Agg]
-    for root in root_list:
+
+    def scan_roots() -> None:
+        for root in root_list:
+            if f.stopped:
+                break
+            if not os.path.isdir(long_path(root)):
+                f._err(root, FileNotFoundError(root))
+                continue
+            is_dr = os.path.dirname(os.path.abspath(root)) == os.path.abspath(root)  # 드라이브 루트는 통째로 후보로 만들지 않는다
+            agg, units = f.scan_dir(os.path.abspath(root), (), 0, is_drive_root=is_dr)
+            res.projects += units
+            d = drive_aggs.setdefault(_drive_of(root), [[], _Agg()])
+            d[0].append(root)
+            d[1].merge(agg)
+
+    def scan_user_folders() -> None:
+        for key in USER_FOLDER_KEYS:  # 사용자 기본 폴더: 폴더 하나당 항목 하나
+            hit = next(((n, v) for n, v in upaths.items() if v[0] == key), None)
+            if hit is None:
+                continue
+            if f._check():  # 시간이 다 됐다: 이 폴더는 훑지 못했다
+                res.user_folders_incomplete.append(key)
+                continue
+            agg, units = f.scan_dir(hit[1][1], ("~user",), 0, force_unit=True)  # parts 를 비우지 않아 루트 직속 제외 이름(temp 등)이 적용되지 않는다
+            if f.stopped:
+                res.user_folders_incomplete.append(key)  # 훑다가 시간이 다 됨: 일부만 훑었다
+            for u in units:
+                u.label = key
+                res.user_folders.append(u)
+            d = drive_aggs.setdefault(_drive_of(hit[1][1]), [[], _Agg()])
+            d[1].merge(agg)
+
+    if time_limit and upaths:
+        # 시간 상한이 있으면 사용자 기본 폴더(문서·바탕화면 등)를 먼저, 전체 시간의 일부(USER_FOLDER_TIME_SHARE) 안에서 훑는다.
+        # 루트 훑기가 시간을 다 써도 사용자 폴더는 최소한 이만큼은 훑는다. 끝나지 못한 폴더는 결과에 표시한다.
+        f.deadline = f.start + time_limit * USER_FOLDER_TIME_SHARE
+        scan_user_folders()
         if f.stopped:
-            break
-        if not os.path.isdir(long_path(root)):
-            f._err(root, FileNotFoundError(root))
-            continue
-        is_dr = os.path.dirname(os.path.abspath(root)) == os.path.abspath(root)  # 드라이브 루트는 통째로 후보로 만들지 않는다
-        agg, units = f.scan_dir(os.path.abspath(root), (), 0, is_drive_root=is_dr)
-        res.projects += units
-        d = drive_aggs.setdefault(_drive_of(root), [[], _Agg()])
-        d[0].append(root)
-        d[1].merge(agg)
-    for key in USER_FOLDER_KEYS:  # 사용자 기본 폴더: 폴더 하나당 항목 하나
-        if f.stopped:
-            break
-        hit = next(((n, v) for n, v in upaths.items() if v[0] == key), None)
-        if hit is None:
-            continue
-        agg, units = f.scan_dir(hit[1][1], ("~user",), 0, force_unit=True)  # parts 를 비우지 않아 루트 직속 제외 이름(temp 등)이 적용되지 않는다
-        for u in units:
-            u.label = key
-            res.user_folders.append(u)
-        d = drive_aggs.setdefault(_drive_of(hit[1][1]), [[], _Agg()])
-        d[1].merge(agg)
+            f.stopped, res.complete, res.stop_reason = False, True, ""
+        f.deadline = f.start + time_limit
+        scan_roots()
+        if res.user_folders_incomplete:
+            res.complete, res.stop_reason = False, "time"
+    else:
+        scan_roots()
+        scan_user_folders()
+    if res.user_folders_incomplete:
+        names = ", ".join(USER_FOLDER_LABELS.get(k, k) for k in res.user_folders_incomplete)
+        res.ext_notes.append(f"사용자 기본 폴더({names})는 시간이 부족해 일부만 훑었거나 훑지 못했습니다. 시간을 늘려 다시 찾아 주세요.")
     res.projects.sort(key=lambda p: -p.total_bytes)
     for drive, (rs, a) in sorted(drive_aggs.items()):
         res.drives.append({"drive": drive, "roots": rs, "files": a.files, "bytes": a.bytes,
@@ -583,7 +656,7 @@ def summary_lines(res: FindResult, limit: int = 30) -> list[str]:
     if not res.complete:
         lines.append("- 시간 상한에 닿아 일부만 훑었습니다. 아래 합계는 일부입니다(--time-limit 을 늘려 다시 실행하세요).")
     for d in res.drives:
-        lines.append(f"- 드라이브 {d['drive']}: 파일 {d['files']:,}개 / {fmt_bytes(d['bytes'])}"
+        lines.append(f"- 드라이브 {d['drive'].rstrip(':')}: 파일 {d['files']:,}개 / {fmt_bytes(d['bytes'])}"
                      + "".join(f", {CATEGORY_LABELS[c]} {v['files']:,}개" for c, v in d["categories"].items() if c != "other"))
     if res.user_folders:
         lines.append("사용자 기본 폴더:")

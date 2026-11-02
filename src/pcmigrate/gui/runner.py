@@ -60,7 +60,13 @@ class Runner:
         else:
             self._thread = threading.Thread(target=work, daemon=True, name=f"pcmigrate-task-{tid}")
             self._threads[tid] = self._thread
-            self._thread.start()
+            try:
+                self._thread.start()
+            except BaseException:  # 스레드를 만들지 못함(RuntimeError: can't start new thread 등): 등록한 콜백/스레드를 되돌려 busy 가 남지 않게 한다
+                self._callbacks.pop(tid, None)
+                self._threads.pop(tid, None)
+                self._thread = None
+                raise
         return tid
 
     def pump(self) -> int:

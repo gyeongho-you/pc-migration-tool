@@ -525,8 +525,8 @@ def test_busy_status_card_shows_stage_message_note_and_cancel(ctx):
     assert app.stop_btn.winfo_manager() == "" and app.stage.cget("text") == T.READY and app.note.cget("text") == ""
     app.on_event("cancelled", T.TASK_DISCOVER)
     assert app.status.cget("text") == T.CANCELLED.format(task=T.TASK_DISCOVER)
+    c.go(S.TRANSFER)  # 작업 중에는 화면 이동이 막히므로(stage79) 먼저 이동한 뒤 작업 중 상태로 바꾼다
     c.state.busy = True
-    c.go(S.TRANSFER)
     app.go_home()
     assert ctx.shown[-1][0] == "info" and c.state.screen == S.TRANSFER  # 작업 중에는 처음으로 돌아가지 않음
     c.state.busy = False

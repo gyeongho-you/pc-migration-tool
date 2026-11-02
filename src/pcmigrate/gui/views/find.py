@@ -113,7 +113,7 @@ class FindView(BaseView):
 
         # ---- 정크 파일 제외
         self.junk_var = tk.BooleanVar(value=self.c.files.junk)
-        self.junk_cb = ttk.Checkbutton(body, text=T.FD_JUNK, variable=self.junk_var, command=lambda: self.c.set_data_junk(self.junk_var.get()))
+        self.junk_cb = ttk.Checkbutton(body, text=T.FD_JUNK, variable=self.junk_var, command=self._junk_changed)
         self.junk_cb.pack(anchor="w", pady=(8, 0))
         junk_note = ttk.Label(body, text=T.FD_JUNK_NOTE, justify="left", foreground=MUTED_FG)
         junk_note.pack(anchor="w", fill="x", padx=(24, 0))
@@ -428,6 +428,11 @@ class FindView(BaseView):
             extra.pack_forget()
 
     # ------------------------------------------------------------------ 동작
+    def _junk_changed(self) -> None:
+        """정크 제외 체크: 작업 중이면 안내만 하고 체크 표시를 원래대로 돌린다."""
+        if not self.guarded(self.c.set_data_junk, self.junk_var.get()):
+            self.junk_var.set(self.c.files.junk)
+
     def _open_exts(self) -> None:
         """'찾을 파일 형식 설정' 창(모달). 작업 중이면 GuardError 로 안내만 한다."""
         from .find_exts_dialog import ExtsDialog
