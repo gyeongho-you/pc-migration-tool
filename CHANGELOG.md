@@ -2,6 +2,12 @@
 
 형식은 최신순입니다. 버전은 git 태그(v0.1.0 ~ v0.3.4)와 맞춥니다.
 
+## Unreleased
+- 구 PC 프로그램 버전·언어판 안내(57단계, 실제 이전 중 피드백 반영). 화면 구조(새 위젯/배치) 변경 없음, 문구와 복사 명령만 바뀜.
+  - 버전: `winget export` 가 `--include-versions` 로 내보내 설정 묶음의 `winget.json` 에 구 PC 버전이 들어가고(구버전 winget 은 옵션 없이 재시도), 가져오기 명령은 `--ignore-unavailable` 을 유지한 채 "버전이 목록에 있으면 그 버전 설치, 못 찾으면 건너뛰거나 오류, 최신판을 받아도 되면 `--ignore-versions`" 안내를 덧붙임. 버전 없는 이전 묶음은 오류 없이 읽고 '구 PC 버전 정보가 없음' 안내.
+  - 언어: 개별 설치 명령(`install-check`, `winget-extract --only`, GUI `선택한 것만 목록 만들기`, 체크리스트)에 `--locale ko-KR`(`--locale` 옵션으로 변경, 빈 값이면 생략)과 묶음 목록에 버전이 있으면 `--version` 추가. `winget import` 는 `--locale` 이 없어 언어를 지정할 수 없음을 안내문에 명시하고, `--locale` 은 패키지가 그 언어를 제공할 때만 적용되며 설치 프로그램의 자체 언어 선택 화면에서는 안 바뀔 수 있음을 적음(적용 여부를 단정하지 않음).
+  - 수동 설치 목록: `checklist`·`install-check`·GUI 설치 확인이 항목마다 구 PC 설치 버전(레지스트리 DisplayVersion, 게시자)을 적고 "같은 버전·같은 언어판을 받으세요" 안내를 붙이며, 정보가 없으면 "버전 정보 없음 — 구 PC 의 제어판에서 확인". 새 파일 `tests/test_winget_versions_locale.py`.
+
 ## v0.3.4 (2026-10-30)
 - 규칙 추가(초안, 근거는 각 규칙 `notes`): `photoshop`(`%APPDATA%\Adobe\Adobe Photoshop <버전>\Adobe Photoshop <버전> Settings`), `illustrator`(`%APPDATA%\Adobe\Adobe Illustrator <버전> Settings`), `zwcad`(경로 근거가 없어 감지와 수동 안내만, 경로는 '확인 필요'). Adobe 는 로그인·구독·플러그인을 복원하지 않고 경고로만 안내(`selftransfer` 의 `adobe_cc` 와 역할 분리). `autocad` 규칙은 AutoCAD LT(`AutoCAD LT 2015` 등)가 같은 감지 패턴과 `AutoCAD *` 경로 패턴에 이미 포함됨을 notes/테스트로 확인(v7). 규칙 22개 → 25개. 규칙이 없는 3DF Zephyr/DJI Terra/ArchiOffice/GPU-Z 는 `docs/program-rules-todo.md` 에 확인 절차만 정리. 화면(GUI) 변경 없음.
 - `pcmigrate record` 설정 기록 모드 추가(`start`/`snapshot`/`diff`/`rule-draft`/`status`): 규칙 없는 프로그램의 설정 파일을 변경 전·기준선·변경 후 스냅샷(경로, 크기, 시각, SHA-256 만 저장, 내용은 저장 안 함) 비교로 찾고 확신도(라운드 누적)와 규칙 JSON 초안을 만든다. 기준선에서 바뀐 파일은 제외, 시각만 바뀐 파일은 후보에서 제외, 첫 스냅샷만 20MB 이하 파일을 해시하고 이후에는 바뀐 파일만 해시. 링크/정션·OneDrive 클라우드 전용 파일 건너뜀, 읽지 못한 항목 격리·보고, 긴 경로, 취소/오류 시에도 보고서 저장, 실행 중 프로그램 경고, 경로는 환경변수 표기. 파일이 안 바뀌면 레지스트리 저장 안내. 화면(GUI) 변경 없음. 리뷰 수정: 작업 폴더 자기 제외(Windows 긴 경로 접두 비교 오류), `--roots` 로 루트/앱 폴더를 줄 때 루트 통째 수집 방지와 `%APPDATA%` 토큰 일반화, 폴더 묶기 256MB 재귀 검사와 중첩 폴더 정리, 기준선에서 처음 생성된 설정 파일 승격과 '확정 못 함'/'잘려서 판단 불가' 안내 분리, 오류 로그의 사용자 이름 치환(이스케이프·긴 경로 접두 형태 포함), 홈 밖 경로 초안 쉬운 안내, `--output` 기존 파일 `.bak` 보관과 id 중복 경고, `diff --json` 순수 JSON, 제조사 낱말 단독 매칭 금지와 매칭 폴더 표시, 사용자 지정 루트의 잡음 폴더 기준 완화, 없는 `--roots` 오류, unreadable 합산 수정, 삭제 파일 참고 표시, `start --force` 이전 산출물 `.bak` 보관.

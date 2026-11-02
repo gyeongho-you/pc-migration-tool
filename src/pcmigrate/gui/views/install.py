@@ -147,6 +147,7 @@ class InstallPanel(ttk.Frame):
         lines += ["", T.INST_COPIED_CMD, info["command"]]
         if info["individual"]:
             lines += ["", T.INST_INDIVIDUAL, *info["individual"]]
+        lines += ["", T.INST_IMPORT_NOTE, T.INST_LOCALE_NOTE]
         self.copy_note.configure(text=T.INST_COPIED.split("\n", 1)[0])
         self.copy_note.pack(anchor="w", fill="x", after=self.copy_btn.master, pady=(0, 4))
         self.last_dialog = TextDialog(self, T.INST_BTN_COPY, "\n".join(lines), 90, 12)
@@ -178,6 +179,7 @@ class InstallPanel(ttk.Frame):
             lines += ["", T.INST_PICK_EACH, *info["each"]]
         if info["file"] and info["individual"]:
             lines += ["", T.INST_PICK_REST, *info["individual"]]
+        lines += ["", T.INST_IMPORT_NOTE if info["file"] else "", T.INST_LOCALE_NOTE]
         self.copy_note.configure(text=lines[0].split("\n", 1)[0])
         self.copy_note.pack(anchor="w", fill="x", after=self.copy_btn.master, pady=(0, 4))
         self.last_dialog = TextDialog(self, T.INST_BTN_PICK, "\n".join(lines), 90, 14)
@@ -227,7 +229,8 @@ class InstallPanel(ttk.Frame):
         key = "installed" if row["status"] == "installed" else row["status"]
         self.detail.configure(text=T.INST_DETAIL.format(
             name=row["name"], status=T.INST_KIND_NAMES[key], reason=row["reason"],
-            hint=T.INST_DETAIL_HINT.format(hint=row["hint"]) if row["hint"] else ""))
+            hint=T.INST_DETAIL_HINT.format(hint=row["hint"]) if row["hint"] else "",
+            old=T.INST_DETAIL_OLD.format(old=row["old_info"]) if row["old_info"] else ""))
 
 
 class InstallView(BaseView):

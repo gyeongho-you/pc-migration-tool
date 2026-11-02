@@ -102,7 +102,7 @@ def test_empty_or_missing_winget_file_notes_and_all_manual():
     assert not r.has_winget_file and not r.import_needed
     assert any("winget 목록이 없거나 비어" in n for n in r.notes) and any("winget 을 읽지 못했습니다" in n for n in r.notes)
     assert r.counts()[ic.WINGET] == 2  # 대표 앱 표(Chrome, 7-Zip)는 개별 설치 명령으로 안내
-    assert sorted(r.individual_commands) == ["winget install --id 7zip.7zip --exact", "winget install --id Google.Chrome --exact"]
+    assert sorted(r.individual_commands) == ["winget install --id 7zip.7zip --exact --locale ko-KR", "winget install --id Google.Chrome --exact --locale ko-KR"]
     assert "winget import" not in r.next_step() and "직접 설치" in r.next_step()
 
 

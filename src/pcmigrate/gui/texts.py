@@ -273,6 +273,11 @@ CL_GUIDE = (
     "pcmigrate winget-extract 설정묶음.zip --output 폴더경로",
     "그런 다음 꺼낸 winget.json 으로 아래 명령을 직접 실행해 주세요(이 도구가 대신 실행하지는 않습니다):",
     "winget import -i 폴더경로\\winget.json --ignore-unavailable --accept-package-agreements --accept-source-agreements",
+    "구 PC의 버전이 목록에 들어 있으면 이 명령은 기본으로 그 버전을 설치합니다. 저장소에서 그 버전을 찾지 못한 항목은 건너뛰거나 오류가 날 수 있습니다(winget 동작). "
+    "최신판을 받아도 괜찮다면 명령 끝에 --ignore-versions 를 붙여 주세요. 이전 버전 도구로 만든 묶음은 버전 정보가 없어 항상 최신판이 설치됩니다.",
+    "※ 이 한꺼번에 설치(winget import)는 언어(--locale)를 지정할 수 없어 프로그램의 기본 언어판이 설치될 수 있습니다. 한글판이 중요한 프로그램은 '프로그램 설치 확인' 화면에서 "
+    "골라 만든 개별 설치 명령(--locale ko-KR 포함)을 써 주세요. --locale 은 그 프로그램이 해당 언어를 제공할 때만 적용되고, 아니면 winget 이 기본값을 쓸 수 있으며, "
+    "설치 프로그램이 자체 언어 선택 화면을 쓰면 바뀌지 않을 수 있습니다. 설치 뒤 실제 언어를 직접 확인해 주세요.",
 )
 CL_SUMMARY_INSTALL = "1. 새 PC에서 먼저 설치: 직접 설치 {a}건, 설치 도구로 개별 설치 {b}건 (설치 도구로 한 번에 설치 {c}건은 별도)"
 CL_SUMMARY_LOGIN = "2. 로그인·인증: {n}건"
@@ -387,7 +392,8 @@ INST_PICK_HINT = "설치 도구(winget)로 설치 가능한 줄은 '선택' 칸�
 INST_PICK_NONE = "선택한 프로그램이 없습니다. 표에서 '선택' 칸을 눌러 설치할 프로그램을 고른 뒤 다시 눌러 주세요."
 INST_PICK_NOTHING_LEFT = "선택한 프로그램이 이미 설치되었거나 목록에서 사라졌습니다. 표에서 다시 골라 주세요."
 INST_PICKED_ONLY_EACH = "선택한 프로그램은 묶음의 목록 파일에 없어서 파일은 만들지 않았습니다. 아래 명령을 한 줄씩 직접 실행해 주세요."
-INST_PICK_EACH = "목록 파일 대신 프로그램마다 하나씩 설치하려면 다음 명령을 직접 실행해 주세요:"
+INST_PICK_EACH = ("목록 파일 대신 프로그램마다 하나씩 설치하려면(한글판 등 언어를 지정하려면 이 방법만 가능합니다. 구 PC 버전이 목록에 있으면 --version 도 들어 있습니다) "
+                  "다음 명령을 직접 실행해 주세요:")
 INST_PICK_REST = "묶음의 목록 파일에 없는 프로그램은 다음 명령을 한 줄씩 직접 실행해 주세요:"
 INST_BTN_RECHECK = "다시 확인"
 INST_BTN_FOLDER = "폴더 바꾸기"
@@ -406,7 +412,18 @@ INST_KIND_NAMES = {"installed": "설치됨", "winget": "설치 도구(winget)로
                    "not_needed": "설치 불필요"}
 INST_VERSION_DIFF = "구 {old} → 새 {new}"
 INST_SPACE_HINT = "'표시' 칸 클릭 또는 Space 키로 '설치 끝냄'을 표시해 둘 수 있습니다(기억용이며 판정에는 쓰이지 않습니다)."
-INST_DETAIL = "{name} · {status} · 근거: {reason}{hint}"
+INST_DETAIL = "{name} · {status} · 근거: {reason}{old}{hint}"
+INST_DETAIL_OLD = " · {old}"
+INST_NO_VERSION_COL = "(버전 정보 없음)"
+INST_OLD_VERSION_GUIDE = ("직접 설치하는 프로그램은 같은 버전을 받아 설치해 주세요. 구 PC의 제어판 > 프로그램 및 기능에서 확인한 값입니다(줄을 누르면 아래에 표시). "
+                          "언어판은 구 PC 에서 쓰던 것과 같은 언어판을 골라 주세요.")
+INST_NO_WINGET_VERSIONS = ("설정 묶음의 설치 도구(winget) 목록에 구 PC 버전 정보가 없습니다(버전 기록 기능이 없던 이전 도구로 만든 묶음). "
+                           "한꺼번에 설치하면 항상 최신판이 설치되니, 필요한 버전은 구 PC의 제어판에서 확인해 주세요.")
+INST_IMPORT_NOTE = ("구 PC 버전이 목록에 있으면 위 한꺼번에 설치 명령은 그 버전을 설치합니다(저장소에 없으면 건너뛰거나 오류가 날 수 있음, 최신판을 받아도 되면 명령 끝에 "
+                    "--ignore-versions 추가).")
+INST_LOCALE_NOTE = ("한꺼번에 설치(winget import)는 언어를 지정할 수 없어 기본 언어판이 설치될 수 있습니다. 한글판이 중요하면 '선택한 것만 목록 만들기'로 만든 개별 설치 명령"
+                    "(--locale ko-KR 포함)을 써 주세요. --locale 은 그 프로그램이 해당 언어를 제공할 때만 적용되고, 아니면 winget 이 기본값을 쓸 수 있으며, 설치 프로그램이 자체 "
+                    "언어 선택 화면을 쓰면 바뀌지 않을 수 있습니다. 설치 뒤 실제 언어를 직접 확인해 주세요.")
 INST_DETAIL_HINT = " · 알아 둘 점: {hint}"
 INST_AMBIGUOUS_NOTE = "'애매함'은 이름만 비슷해서 같은 프로그램인지 확신할 수 없는 것입니다. 실제로 설치돼 있는지 직접 확인해 주세요."
 INST_WINGET_MISSING = f"{ICON_WARN} 이 PC에서 설치 도구(winget)를 읽지 못했습니다. 설치 여부를 프로그램 이름만 보고 판단해서 정확도가 낮습니다."

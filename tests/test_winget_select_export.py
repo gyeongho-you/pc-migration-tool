@@ -106,7 +106,8 @@ def test_id_validation_and_command_injection_rejected():
     assert got["ids"] == ["Google.Chrome", "7zip.7zip"]
     assert got["import"] == ('winget import -i "C:\\내 폴더\\winget.json" --ignore-unavailable '
                              '--accept-package-agreements --accept-source-agreements')
-    assert got["each"][0] == "winget install --id Google.Chrome --exact --accept-package-agreements --accept-source-agreements"
+    assert got["each"][0] == ("winget install --id Google.Chrome --exact --locale ko-KR "
+                              "--accept-package-agreements --accept-source-agreements")
     assert ic.selected_commands(None, ["A.b"])["import"] is None
 
 
@@ -191,7 +192,7 @@ def test_prepare_selected_writes_filtered_file_and_commands(tmp_path):
     folder = Path(c.default_desktop()) / T.INST_FOLDER_DEFAULT_NAME
     assert seen == [("C:\\pkg.zip", str(folder), ["7zip.7zip"])]  # 목록 파일에 있는 것만 파일로
     assert info["command"] == ic.import_command(str(folder / "winget.json")) and c.state.install_command == info["command"]
-    assert info["individual"] == ["winget install --id Solo.App --exact --accept-package-agreements --accept-source-agreements"]
+    assert info["individual"] == ["winget install --id Solo.App --exact --locale ko-KR --accept-package-agreements --accept-source-agreements"]
     assert info["count"] == 2 and info["backup"] == ""
     again = c.prepare_selected_install()
     assert again["backup"].endswith("winget.json.bak")

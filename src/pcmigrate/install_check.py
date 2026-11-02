@@ -18,9 +18,10 @@ from dataclasses import asdict, dataclass, field
 from typing import Callable
 
 from .cancel import checkpoint
-from .checklist import (CERTAIN, PROBABLE, _norm_display, bundle_reason, classify_programs,
+from .checklist import (CERTAIN, NO_VERSION_TEXT, OLD_VERSION_GUIDE, PROBABLE, _norm_display, bundle_reason, classify_programs,
                         install_hint_for, known_app, match_program, parse_winget_list)
-from .detect import Program, parse_winget_export, valid_winget_id
+from .detect import (DEFAULT_LOCALE, Program, parse_winget_export, valid_locale, valid_winget_id,
+                     winget_install_command)
 
 INSTALLED, WINGET, MANUAL, AMBIGUOUS, NOT_NEEDED = "installed", "winget", "manual", "ambiguous", "not_needed"
 STATUSES = (INSTALLED, WINGET, MANUAL, AMBIGUOUS, NOT_NEEDED)
@@ -43,8 +44,19 @@ def import_command(json_path: str) -> str:
 INSTALL_FLAGS = "--accept-package-agreements --accept-source-agreements"
 
 
-def install_command(winget_id: str) -> str:
-    return f"winget install --id {winget_id} --exact"
+IMPORT_VERSION_NOTE = (
+    "구 PC 의 버전이 내보낸 목록에 들어 있으면 winget import 는 기본으로 그 버전을 설치합니다. 저장소에서 그 버전을 찾지 못하면 "
+    "그 항목은 건너뛰거나 오류가 날 수 있으니(winget 동작) 설치 확인에서 다시 확인하세요. 최신판을 받아도 괜찮다면 import 명령 끝에 "
+    "--ignore-versions 를 붙여 다시 실행하세요. 이전 버전 도구로 만든 묶음은 버전 정보가 없어 항상 최신판이 설치됩니다.")
+LOCALE_NOTE = (
+    "winget import(일괄 설치)는 언어(--locale)를 지정할 수 없어 패키지의 기본 언어판이 설치될 수 있습니다. 한글판이 중요한 프로그램은 "
+    "일괄 설치 대신 개별 설치 명령(--locale 포함)을 쓰세요. --locale 은 그 패키지가 해당 언어를 제공할 때만 적용되며, 제공하지 않으면 "
+    "winget 이 기본값을 쓸 수 있고, 설치 프로그램이 자체 언어 선택 화면을 쓰면 바뀌지 않을 수 있습니다. 설치한 뒤 실제 언어를 직접 확인하세요.")
+
+
+def install_command(winget_id: str, version: str = "", locale: str = DEFAULT_LOCALE) -> str:
+    """개별 설치 명령 한 줄(기본 --locale ko-KR, 구 PC 버전을 알면 --version). 실행하지 않는다."""
+    return winget_install_command(winget_id, version, locale)
 
 
 def safe_winget_ids(ids) -> list[str]:
@@ -58,19 +70,24 @@ def safe_winget_ids(ids) -> list[str]:
     return out
 
 
-def selected_commands(json_path: str | None, ids) -> dict:
+def selected_commands(json_path: str | None, ids, versions: dict[str, str] | None = None,
+                      locale: str = DEFAULT_LOCALE) -> dict:
     """선택한 프로그램을 설치하는 명령(이 도구는 실행하지 않는다).
 
     import: 선택한 것만 담은 json 으로 한 번에 설치하는 한 줄(json_path 가 None 이면 None).
-    each:   id 마다 'winget install --id X --exact ...' 한 줄(json 을 쓰지 않는 대안).
+    each:   id 마다 'winget install --id X --exact --locale ko-KR [--version V] ...' 한 줄(json 을 쓰지 않는 대안, 로캘 지정 가능).
+    versions: {id(대소문자 무시): 구 PC 버전} — 있으면 --version 을 붙인다.
     id 는 형식 검증을 통과한 것만 넣는다(잘못된 id 는 ValueError). 경로의 따옴표/줄바꿈은 거부한다."""
     safe = safe_winget_ids(ids)
+    if locale and not valid_locale(locale):
+        raise ValueError(f"올바르지 않은 로캘(예: ko-KR): {locale!r}")
+    vers = {k.lower(): v for k, v in (versions or {}).items()}
     cmd = None
     if json_path is not None:
         if any(ch in json_path for ch in ('"', '\r', '\n', '\0')):
             raise ValueError("경로에 쓸 수 없는 문자가 있습니다.")
         cmd = import_command(json_path)
-    return {"ids": safe, "import": cmd, "each": [f"{install_command(i)} {INSTALL_FLAGS}" for i in safe]}
+    return {"ids": safe, "import": cmd, "each": [f"{install_command(i, vers.get(i.lower(), ''), locale)} {INSTALL_FLAGS}" for i in safe]}
 
 
 @dataclass(frozen=True)
@@ -87,6 +104,19 @@ class Item:
     in_import_file: bool = False  # winget import 로 설치되는 항목(묶음의 winget 목록에 있음)
     would_be: str = ""  # 애매함 항목이 설치돼 있지 않다면 필요한 방식(winget | manual)
     hint: str = ""  # 수동 설치 시 알아 둘 점(체크리스트 문구 재사용)
+    publisher: str = ""  # 구 PC 레지스트리의 게시자(있으면)
+    winget_version: str = ""  # 묶음의 winget 목록에 적힌 구 PC 버전(winget install --version 에 쓰는 값; 없으면 빈 문자열)
+
+    @property
+    def old_info(self) -> str:
+        """구 PC 에서 설치돼 있던 버전(레지스트리 DisplayVersion, 있으면 게시자). 없으면 '버전 정보 없음 — 구 PC 의 제어판에서 확인'."""
+        v = self.old_version or self.winget_version
+        if not v:
+            return f"구 PC 버전: {NO_VERSION_TEXT}"
+        text = f"구 PC 버전: {v}" + (f"(게시자 {self.publisher})" if self.publisher else "")
+        if self.winget_version and self.winget_version != v:
+            text += f", winget 기록 버전 {self.winget_version}"
+        return text
 
     @property
     def version_text(self) -> str:
@@ -114,6 +144,8 @@ class InstallCheck:
     has_winget_file: bool = False  # 묶음에 비어 있지 않은 winget 목록이 있는가
     winget_ok: bool = True  # 새 PC 에서 winget 을 읽을 수 있었는가
     notes: list[str] = field(default_factory=list)
+    winget_has_versions: bool = True  # 묶음의 winget 목록에 구 PC 버전이 들어 있는가(옛 묶음은 False)
+    locale: str = DEFAULT_LOCALE  # 개별 설치 명령에 붙일 로캘(빈 문자열이면 --locale 생략)
 
     def by_status(self, status: str) -> list[Item]:
         return [i for i in self.items if i.status == status]
@@ -140,7 +172,7 @@ class InstallCheck:
     @property
     def individual_commands(self) -> list[str]:
         """묶음의 winget 목록에는 없지만 대표 앱 표에 id 가 있어 개별로 설치할 수 있는 항목의 명령."""
-        return [install_command(i.winget_id) for i in self.items
+        return [install_command(i.winget_id, i.winget_version, self.locale) for i in self.items
                 if i.status == WINGET and i.winget_id and not i.in_import_file]
 
     def summary(self) -> str:
@@ -163,7 +195,7 @@ class InstallCheck:
 
     def to_dict(self) -> dict:
         return {"summary": self.counts() | {"version_diff": self.version_diff_count, "remaining": self.remaining},
-                "winget_file": self.has_winget_file, "winget_readable_on_this_pc": self.winget_ok,
+                "winget_file": self.has_winget_file, "winget_has_versions": self.winget_has_versions, "winget_readable_on_this_pc": self.winget_ok,
                 "notes": list(self.notes), "next": self.next_step(),
                 "items": [asdict(i) | {"label": STATUS_LABELS[i.status]} for i in self.items]}
 
@@ -267,7 +299,8 @@ def check_install(old_registry: list[Program], old_winget: list[Program], old_li
     cls = classify_programs(old_registry, old_winget, old_list_text)
     old_ids = [w.winget_id or w.name for w in old_winget]
     newpc = _NewPc(new, old_ids + [w for _p, w in cls.winget_cmd] + [w for _p, w, _y in cls.winget_auto])
-    out = InstallCheck(has_winget_file=bool(old_winget), winget_ok=new.winget_ok)
+    out = InstallCheck(has_winget_file=bool(old_winget), winget_ok=new.winget_ok,
+                       winget_has_versions=any(w.version for w in old_winget) if old_winget else True)
     old_ver = {w.winget_id.lower(): w.version for w in old_winget if w.winget_id}
     in_file = {i.lower() for i in old_ids}
 
@@ -276,15 +309,17 @@ def check_install(old_registry: list[Program], old_winget: list[Program], old_li
         hint = install_hint_for(p.name)
         found = newpc.find(p, wid, probable_wid)
         ov = p.version or old_ver.get(wid.lower(), "") if wid else p.version
+        wv = old_ver.get((wid or probable_wid).lower(), "")
         if found is not None and found.grade == CERTAIN:
             diff = bool(ov and found.version and not _same_version(ov, found.version))
             return Item(p.name, INSTALLED, f"{found.reason}: {found.name}", ov, found.version, found.name, wid, CERTAIN,
-                        diff, hint=hint)
+                        diff, hint=hint, publisher=p.publisher, winget_version=wv)
         if found is not None:
             return Item(p.name, AMBIGUOUS, f"{found.reason}: {found.name}", ov, found.version, found.name, wid, PROBABLE,
-                        in_import_file=route == WINGET and wid.lower() in in_file, would_be=route, hint=hint)
+                        in_import_file=route == WINGET and wid.lower() in in_file, would_be=route, hint=hint,
+                        publisher=p.publisher, winget_version=wv)
         return Item(p.name, route, route_reason, ov, "", "", wid, "", in_import_file=route == WINGET and wid.lower() in in_file,
-                    hint=hint if route == MANUAL else "")
+                    hint=hint if route == MANUAL else "", publisher=p.publisher, winget_version=wv)
 
     claimed: set[str] = set()
     for p, why in cls.reference:
@@ -314,6 +349,9 @@ def check_install(old_registry: list[Program], old_winget: list[Program], old_li
         out.items.append(item)
     if not old_winget:
         out.notes.append("설정 묶음 파일에 winget 목록이 없거나 비어 있습니다. winget import 로 설치할 수 있는 항목이 없습니다.")
+    elif not out.winget_has_versions:
+        out.notes.append("설정 묶음의 winget 목록에 구 PC 버전 정보가 없습니다(버전 기록 기능이 없던 이전 도구로 만든 묶음). "
+                         "winget import 는 최신판을 설치하고 개별 설치 명령에도 --version 이 붙지 않으니, 필요한 버전은 구 PC 의 제어판에서 확인하세요.")
     if not new.winget_ok:
         out.notes.append("이 PC 에서 winget 을 읽지 못했습니다. 설치 여부는 프로그램 이름으로만 판정해 정확도가 낮습니다.")
     order = {s: n for n, s in enumerate((AMBIGUOUS, MANUAL, WINGET, INSTALLED, NOT_NEEDED))}
