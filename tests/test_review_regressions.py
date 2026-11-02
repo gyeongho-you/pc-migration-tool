@@ -98,11 +98,12 @@ def test_package_with_denied_entries_restores_rest_and_never_writes_denied(env, 
 
 
 def test_rule_that_names_extension_still_restores_it(env, tmp_path):
-    rule = make_rule(paths=[{"path": "%APPDATA%\\Vendor\\Demo\\*.dll", "dest": "demo/dll", "kind": "file"}])
-    (env.demo / "ok.dll").write_bytes(b"dll")
+    # stage78: 실행 확장자(.dll/.exe)는 path 마지막 패턴으로 규칙에서 받지 않으므로 플러그인 확장자(.lsp)로 같은 구조를 시험한다
+    rule = make_rule(paths=[{"path": "%APPDATA%\\Vendor\\Demo\\*.lsp", "dest": "demo/lsp", "kind": "file"}])
+    (env.demo / "ok.lsp").write_bytes(b"(defun)")
     (env.demo / "x.exe").write_bytes(b"MZ")
     m = export(env, rules=[rule])
-    assert [f["rel"] for f in m["files"]] == ["ok.dll"]
+    assert [f["rel"] for f in m["files"]] == ["ok.lsp"]
     plan = plan_import(env.out, [rule], env.expand_new)
     assert plan.problems == [] and [i["status"] for i in plan.items] == ["would_copy"]
 
