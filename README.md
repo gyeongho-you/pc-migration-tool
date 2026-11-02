@@ -491,7 +491,7 @@ python -m pcmigrate join <조각 폴더 또는 첫 조각(.pcm001)> --output <�
 
 ```
 pcmigrate find-data [--roots 폴더 ...] [--categories design,photo,video,doc,archive,other] [--min-size 100MB] [--max-depth 4]
-                    [--time-limit 초] [--include-removable] [--json] [--output-selection 선택.json]
+                    [--time-limit 초] [--include-removable] [--default-exts] [--json] [--output-selection 선택.json]
 pcmigrate transfer --from-selection 선택.json <대상> [--exclude-junk [--exclude-backup-copies]] [--manifest-out 목록.jsonl] [--skip-done-items] [일반 transfer 옵션]
 ```
 
@@ -501,6 +501,25 @@ pcmigrate transfer --from-selection 선택.json <대상> [--exclude-junk [--excl
 - **전송**: 항목마다 기존 `transfer` 를 한 번씩 실행하므로 해시 검사, `.bak` 보존, 파일 단위 이어받기, `--strict`, `--retry-failed`, `--split-large` 가 그대로 적용됩니다. 대상 구조는 `<대상>\<드라이브 문자>\<원본 경로>` 입니다(`D:\프로젝트\A` → `<대상>\D\프로젝트\A`, 네트워크는 `UNC\서버\공유\…`). 같은 폴더를 두 번 고르거나 부모와 자식을 함께 고르면 자식은 빼서 중복 복사를 막습니다(리포트의 `dropped`). 대상이 원본 안이면 시작하지 않고 거부하며, 시작 전에 선택 합계(선택 파일의 용량, 대상에 이미 있는 양은 뺌, 5% 여유)와 대상 여유 공간을 비교합니다. 폴더 하나가 실패해도(예: FAT32 의 4GB 초과 파일) 나머지는 계속하고 폴더별 성공/실패와 전체 합계를 요약합니다. 대상 폴더의 `.pcmigrate-multi.json` 에 폴더별 진행(pending/done/failed)이 남고, 중간에 멈춘 뒤 같은 명령을 다시 실행하면 이어받습니다(`--skip-done-items` 는 끝난 폴더를 다시 확인하지 않음). `--manifest-out` 은 폴더별 해시 목록을 하나로 합쳐(경로 앞에 `D/프로젝트/…` 가 붙음) 새 PC 에서 `verify --manifest 목록 --target <대상>` 한 번으로 비교합니다. `--report` 는 폴더별 결과가 든 JSON 하나를 씁니다. `--from-selection` 에서는 `--log/--state-file/--use-manifest` 를 쓸 수 없습니다(폴더마다 대상 안에 기록).
 - **정크 제외(`transfer --exclude-junk`, 단일 폴더/`--from-selection` 공통)**: 기본은 아무것도 제외하지 않습니다. 켜면 robocopy `/XF` `/XD` 로 Thumbs.db, ehthumbs.db, desktop.ini, `~$*` Office 잠금, `~WRL*.tmp`, `*.tmp`, CAD 잠금(`*.dwl` `*.dwl2` `*.ac$` `*.rhl`), `.DS_Store`, `__MACOSX`, `$RECYCLE.BIN`, System Volume Information, node_modules 를 복사하지 않고, 제외한 개수/용량을 결과(`junk_excluded`)와 요약에 표시합니다. 사용자 작업일 수 있는 `*.bak`, AutoCAD 자동 저장 `*.sv$`, `.git` 은 목록에 없습니다. `--exclude-backup-copies` 를 더하면 Revit 백업 사본(`이름.0001.rvt` 등), `*_backup` 폴더, Rhino `*.3dmbak`, SketchUp `*.skb` 도 뺍니다. 목록과 근거 등급은 `src/pcmigrate/junk.py` 한 곳입니다.
 - **한계**: 찾기는 이름/확장자와 폴더 구조만으로 판단하므로 후보가 아닌 폴더가 나오거나 빠질 수 있습니다(직접 확인 후 include). 폴더 단위로 옮기면 후보 안의 분류되지 않은 파일(작은 파일 포함)도 함께 복사됩니다. USB 외장 SSD/HDD 는 '고정'으로 보일 수 있으니 옮길 대상 드라이브가 훑히지 않게 `--roots` 로 지정하세요. 대용량 PC 에서는 훑는 데 오래 걸릴 수 있습니다(`--time-limit`).
+
+##### 찾을 파일 형식 설정(`find-exts`, 화면은 아직 없음)
+
+3DF Zephyr, DJI Terra, ArchiOffice 처럼 도구가 확장자를 모르는 프로젝트 형식은 사용자가 직접 넣을 수 있습니다. 기본값은 위의 분류 표(설계/사진/영상/문서/압축) 그대로이고, 아무것도 설정하지 않으면 결과가 이전과 완전히 같습니다. 이 설정은 `내 파일 찾기`에만 쓰이며 설정 기록 모드(`record`)나 규칙 복원 허용 확장자(`allow_extensions`)와는 무관합니다.
+
+```
+pcmigrate find-exts list [--json]                          # 지금 찾는 형식(+ 는 사용자 추가, 삭제한 기본 형식은 따로 표시)
+pcmigrate find-exts add .zep --category design [--json]    # 추가(바로 저장). 분류: design/photo/video/doc/archive (설계/사진/영상/문서/압축)
+pcmigrate find-exts remove .svg [--json]                   # 삭제(기본 형식은 삭제 목록에, 추가했던 형식은 추가 목록에서 뺌)
+pcmigrate find-exts reset [--json]                         # 기본값으로(이전 설정은 번호 .bak 으로 보관)
+pcmigrate find-data ... [--default-exts]                   # --default-exts: 설정을 무시하고 기본 표로 찾음
+```
+
+- **저장**: `%LOCALAPPDATA%\pcmigrate\settings\find-exts.json` 에 **기본값과의 차이만** 저장합니다(`{"version":1,"added":{".zep":"design"},"removed":[".svg"]}`). 확장자 글자와 분류 이름만 들어 있고 경로나 개인정보는 없습니다. 저장은 임시 파일에 쓴 뒤 바꾸는 방식이라 중간에 끊겨도 이전 설정이 남고, 저장할 때마다 이전 설정을 `.bak` 한 벌로 보관합니다. 초기화는 이전 설정 파일을 지우지 않고 `.bak`, `.bak.1` … 번호로 보관합니다.
+- **입력 규칙**: 앞뒤 공백을 지우고, 점이 없으면 붙이고, 소문자로 바꿉니다(`ZEP` → `.zep`). 영문·숫자·`_`·`-` 만 쓸 수 있고(점 포함 16자까지), 비었거나 점만 있거나 공백·경로 구분자(`\ /`)·와일드카드(`* ?`)·점이 둘 이상(`.tar.gz`)이면 쉬운 문구로 거절합니다. 이미 있는 형식을 다시 추가하면 중복이라고 알려 줍니다(이미 기본 표에 있는 확장자를 다른 분류로 옮기려면 먼저 삭제하세요).
+- **추가한 형식의 취급**: 등급 B(확실한 형식)로 보고, 분류와 상관없이 **파일 한 개만 있어도** 그 폴더가 후보가 됩니다(문서/압축도 3개 조건을 적용하지 않음). 결과의 근거에 `사용자 추가 형식: .zep 1개` 처럼 표시됩니다. 사용자가 명시적으로 넣은 것이므로 `기타 큰 파일` 규칙과 실행/시스템 제외 목록(`.exe .dll .tmp` 등)보다 먼저 적용됩니다. 삭제한 형식은 분류되지 않고(100MB 이상이면 `기타 큰 파일` 규칙은 그대로), 기본 표에 없는 확장자를 삭제할 수는 없습니다.
+- **경고**: `.exe .dll .msi .sys .bat .cmd .ps1 .vbs .lnk` 같은 프로그램 파일이나 임시·로그 확장자를 추가하면 "프로그램 파일이라 옮길 필요가 없을 수 있습니다" 경고를 보여 주지만 막지는 않습니다.
+- **안전**: 설정 파일은 1MB, 항목(추가+삭제) 500개까지만 읽고, 넘치거나 잘못된 항목은 무시하며 경고합니다. 파일이 손상돼도 `내 파일 찾기`는 기본값으로 계속 동작하고(`find-data` 요약/JSON 의 안내에 표시), 손상된 원본은 건드리지 않은 채 번호 `.bak` 으로 복사해 두며 오류 로그에 기록합니다. 찾기를 시작할 때 설정을 한 번만 읽으므로 훑는 도중 설정이 바뀌어도 그 결과는 일관됩니다. 종료 코드: 0 = 성공(이미 있는 형식 추가 안내 포함), 1 = 없는 형식 삭제·저장/초기화 실패, 2 = 잘못된 입력.
+- **한계**: 화면(GUI)에는 아직 설정 창이 없고(`find-exts` 와 같은 함수를 부르는 화면은 다음 단계), 그래도 화면의 `내 파일 찾기`는 저장된 설정을 읽어 반영합니다. 이름(확장자)만으로 분류하므로 `.dat` 처럼 여러 프로그램이 쓰는 확장자를 넣으면 오탐이 늘 수 있습니다. 확장자는 한 번에 하나씩 넣습니다.
 
 - 검사를 새 PC 로 미룬 복사(랜선/네트워크 + `--manifest-out`)는 CLI JSON 의 `success` 가 `false`, `verification_complete` 가 `false` 이고 "복사 완료, 검증 전: 새 PC 에서 verify 필요" 로 안내합니다(GUI 도 '성공' 대신 '복사 완료(검증 전)'). 건너뛴 정션/링크(앞 200개)는 `[안내]` 로 나열하고 리포트의 `skipped_link_paths` 에 남깁니다. `verify` 결과의 `manifest_errors` 는 구 PC 에서 읽지 못해 목록에서 빠진 파일 수이며 0 이 아니면 `success` 가 `false` 입니다. `import` 에서 복원 위치가 링크를 거쳐 복원하지 않은 파일은 `rejected` 로 세고 실패와 같이 취급합니다(링크 너머에는 쓰지 않음).
 - **출력 형식**: `export`/`import`/`verify`/`transfer` 는 기본으로 사람이 읽는 한국어 요약(핵심 숫자 + "다음 할 일" 한 줄)을 표준 출력에 냅니다. 이전의 JSON 이 필요하면 `--json` 을 붙이세요(스크립트/GUI 용). `transfer --dry-run` 정상 미리보기는 JSON 의 `success` 가 `true` 이고 `preview: true` 입니다(검증이 아직 없다는 뜻의 `verification_complete: false` 는 그대로).

@@ -339,7 +339,8 @@ def _cmd_find_data(args: argparse.Namespace) -> int:
     try:
         res = data_api.run_find_data(args.roots, categories=cats, min_size=args.min_size, max_depth=args.max_depth,
                                      time_limit=args.time_limit, include_removable=args.include_removable,
-                                     progress=_cli_progress(), output_selection=args.output_selection)
+                                     progress=_cli_progress(), output_selection=args.output_selection,
+                                     use_user_exts=not args.default_exts)
     except ApiError as e:
         return _fail(e)
     except OSError as e:
@@ -1228,6 +1229,8 @@ def build_parser() -> argparse.ArgumentParser:
     fdp.add_argument("--min-size", type=_size_arg, default=0, metavar="크기", help="이보다 작은 후보 숨김(예: 100MB, 1GB)")
     fdp.add_argument("--max-depth", type=_int_range(1, 12), default=4, help="후보 폴더를 묶는 최대 깊이(기본 4)")
     fdp.add_argument("--time-limit", type=_int_range(5, 86400), metavar="초", help="이 시간(초)이 넘으면 그때까지 찾은 것만 보여 줌")
+    fdp.add_argument("--default-exts", action="store_true",
+                     help="사용자가 설정한 찾을 파일 형식(pcmigrate find-exts)을 무시하고 기본 확장자 표로 찾음")
     fdp.add_argument("--json", action="store_true", help="사람이 읽는 요약 대신 JSON 으로 출력")
     fdp.add_argument("--output-selection", type=_path_arg, metavar="파일",
                      help="선택 파일(JSON)을 저장. 모든 폴더가 include:false 로 시작하므로 옮길 것만 true 로 바꾼 뒤 transfer --from-selection 에 사용")
@@ -1299,6 +1302,8 @@ def build_parser() -> argparse.ArgumentParser:
     lan_cli.add_parsers(sub, _path_arg)
     from . import record_cli
     record_cli.add_parsers(sub, _path_arg)
+    from . import find_exts_cli
+    find_exts_cli.add_parsers(sub)
     return p
 
 

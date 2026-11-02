@@ -25,6 +25,13 @@ def _isolated_import_records(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolated_find_exts(tmp_path_factory, monkeypatch):
+    """'찾을 파일 형식' 설정이 사용자의 실제 %LOCALAPPDATA% 설정을 읽거나 쓰지 않게 한다(내 파일 찾기 시험은 기본 표로 동작)."""
+    from pcmigrate import find_exts
+    monkeypatch.setattr(find_exts, "SETTINGS_DIR", str(tmp_path_factory.mktemp("find-exts-settings")))
+
+
+@pytest.fixture(autouse=True)
 def _no_real_package_scan(monkeypatch):
     """③ 첫 화면이 열릴 때의 '설정 묶음 자동 찾기'가 실제 바탕화면/드라이브를 훑지 않게 끈다(필요한 시험이 직접 켜고 가짜 위치를 넣는다)."""
     from pcmigrate.gui.controller import Controller

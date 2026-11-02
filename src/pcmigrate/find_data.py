@@ -116,10 +116,14 @@ FILE_ATTRIBUTE_REPARSE_POINT = 0x400
 CLOUD_ATTR_MASK = 0x00040000 | 0x00400000
 
 
-def classify_name(name: str, size: int = 0, other_large: int = LARGE_OTHER_BYTES) -> tuple[str, str] | None:
-    """파일 이름(+크기)으로 (분류, 근거 등급). 해당 없으면 None. 내용은 보지 않는다."""
+def classify_name(name: str, size: int = 0, other_large: int = LARGE_OTHER_BYTES,
+                  table: dict[str, tuple[str, str]] | None = None) -> tuple[str, str] | None:
+    """파일 이름(+크기)으로 (분류, 근거 등급). 해당 없으면 None. 내용은 보지 않는다.
+
+    table: 확장자 -> (분류, 등급). None 이면 기본 표(EXT_TABLE). 사용자 설정을 반영한 표는 find_exts.effective_table 이 만든다.
+    표에 있는 확장자(사용자가 추가한 것 포함)가 '기타 큰 파일' 규칙보다 먼저 적용된다."""
     ext = os.path.splitext(name)[1].lower()
-    hit = EXT_TABLE.get(ext)
+    hit = (EXT_TABLE if table is None else table).get(ext)
     if hit:
         return hit
     if size >= other_large and ext not in OTHER_EXCLUDED_EXT:
@@ -129,7 +133,7 @@ def classify_name(name: str, size: int = 0, other_large: int = LARGE_OTHER_BYTES
 
 # --------------------------------------------------------------------------- 결과 형식
 class _Agg:
-    __slots__ = ("cats", "files", "bytes", "latest", "exts", "cloud_n", "cloud_b", "errors", "weak")
+    __slots__ = ("cats", "files", "bytes", "latest", "exts", "cloud_n", "cloud_b", "errors", "weak", "user", "user_cats")
 
     def __init__(self) -> None:
         self.cats: dict[str, list[int]] = {}
@@ -138,11 +142,16 @@ class _Agg:
         self.exts: Counter = Counter()
         self.cloud_n = self.cloud_b = self.errors = 0
         self.weak: dict[str, int] = {}  # 등급 C 라서 파일 1개로는 폴더를 후보로 만들지 않는 분류(설계/사진/영상)별 개수
+        self.user: Counter = Counter()  # 사용자가 추가한 확장자별 개수(근거 문구용)
+        self.user_cats: dict[str, int] = {}  # 사용자가 추가한 확장자의 분류별 개수(파일 1개로도 후보)
 
-    def add_file(self, size: int, mtime: float, cat: str | None, ext: str, weak: bool = False) -> None:
+    def add_file(self, size: int, mtime: float, cat: str | None, ext: str, weak: bool = False, user: bool = False) -> None:
         self.files += 1
         self.bytes += size
         if cat:
+            if user:
+                self.user[ext] += 1
+                self.user_cats[cat] = self.user_cats.get(cat, 0) + 1
             if weak and cat in ("design", "photo", "video"):
                 self.weak[cat] = self.weak.get(cat, 0) + 1
             c = self.cats.setdefault(cat, [0, 0])
@@ -158,6 +167,9 @@ class _Agg:
         self.bytes += o.bytes
         self.latest = max(self.latest, o.latest)
         self.exts.update(o.exts)
+        self.user.update(o.user)
+        for k, v in o.user_cats.items():
+            self.user_cats[k] = self.user_cats.get(k, 0) + v
         self.cloud_n += o.cloud_n
         self.cloud_b += o.cloud_b
         self.errors += o.errors
@@ -213,8 +225,15 @@ class FindResult:
     excluded_examples: list = field(default_factory=list)  # [{"path","reason"}]
     errors: list = field(default_factory=list)  # [{"path","code","text"}] 앞 MAX_ERRORS_LISTED 개
     error_count: int = 0
+    ext_notes: list = field(default_factory=list)  # 찾을 파일 형식 설정 적용/경고 문구(없으면 결과에 나타나지 않음)
 
     def to_dict(self) -> dict:
+        d = self._base_dict()
+        if self.ext_notes:
+            d["ext_notes"] = list(self.ext_notes)
+        return d
+
+    def _base_dict(self) -> dict:
         return {"complete": self.complete, "stop_reason": self.stop_reason, "seconds": round(self.seconds, 2),
                 "roots": self.roots, "categories": list(self.categories), "min_size": self.min_size, "max_depth": self.max_depth,
                 "files_seen": self.files_seen, "dirs_seen": self.dirs_seen, "skipped_links": self.skipped_links,
@@ -310,6 +329,8 @@ def _qualifies_direct(a: _Agg, cats: Iterable[str] = DEFAULT_CATEGORIES) -> bool
     c, cats = a.cats, tuple(cats)
     if "other" in c and "other" in cats:
         return True
+    if any(k in cats and n > 0 for k, n in a.user_cats.items()):  # 사용자가 직접 추가한 형식은 분류와 상관없이 파일 1개로도 후보
+        return True
     for k in ("design", "photo", "video"):  # 등급 C 형식(.svg 등)만 있으면 파일 1개로는 후보가 아니다(문서/압축과 같은 3개 이상 기준)
         if k in c and k in cats and c[k][0] > a.weak.get(k, 0):
             return True
@@ -319,10 +340,12 @@ def _qualifies_direct(a: _Agg, cats: Iterable[str] = DEFAULT_CATEGORIES) -> bool
 
 class _Finder:
     def __init__(self, categories, min_size, max_depth, time_limit, cancel, progress, progress_info, clock, attr_getter,
-                 exclude_paths, user_paths, other_large, report_every):
+                 exclude_paths, user_paths, other_large, report_every, ext_table=None, user_exts=()):
         self.categories, self.min_size, self.max_depth = tuple(categories), min_size, max_depth
         self.cancel, self.progress, self.progress_info, self.clock = cancel, progress, progress_info, clock
         self.attr_getter, self.other_large, self.report_every = attr_getter, other_large, report_every
+        self.table = None if ext_table is None else dict(ext_table)  # 시작할 때 한 번 복사: 훑는 도중 설정이 바뀌어도 일관
+        self.user_exts = frozenset(user_exts)
         self.exclude = {_norm(p) for p in exclude_paths}
         self.user_paths = user_paths  # normpath -> (key, 원래 경로)
         self.start = self.last = clock()
@@ -427,8 +450,10 @@ class _Finder:
                 direct.cloud_n += 1
                 direct.cloud_b += st.st_size
                 continue
-            hit = classify_name(name, st.st_size, self.other_large)
-            direct.add_file(st.st_size, st.st_mtime, hit[0] if hit else None, os.path.splitext(name)[1].lower(), bool(hit and hit[1] == "C"))
+            hit = classify_name(name, st.st_size, self.other_large, self.table)
+            ext = os.path.splitext(name)[1].lower()
+            direct.add_file(st.st_size, st.st_mtime, hit[0] if hit else None, ext, bool(hit and hit[1] == "C"),
+                            bool(hit and self.user_exts and ext in self.user_exts))
         total.merge(direct)
         child_units: list[FolderItem] = []
         if depth < MAX_RECURSION and not self.stopped:
@@ -460,6 +485,8 @@ class _Finder:
         bits = [f"{CATEGORY_LABELS[c]} {v['files']}개" for c, v in cats.items()]
         exts = [e for e, _n in a.exts.most_common(5)]
         basis = f"{why}: " + (", ".join(bits) if bits else "분류된 파일 없음") + (f" (대표 {' '.join(exts)})" if exts else "")
+        if a.user:
+            basis += " (사용자 추가 형식: " + ", ".join(f"{e} {n}개" for e, n in a.user.most_common(5)) + ")"
         return FolderItem(path=path, kind=kind, drive=_drive_of(path), label=label, categories=cats, total_files=a.files,
                           total_bytes=a.bytes, latest_mtime=latest, top_extensions=exts, cloud_only_files=a.cloud_n,
                           cloud_only_bytes=a.cloud_b, read_errors=a.errors, basis=basis)
@@ -472,12 +499,16 @@ def find_data(roots: Iterable[str | os.PathLike] | None = None, *, user_folders:
               clock: Callable[[], float] = time.monotonic, attr_getter: Callable[[Path], int] | None = None,
               exclude_paths: Iterable[str] | None = None, include_removable: bool = False,
               drives_fn: Callable[[], list[tuple[str, str]]] | None = None,
-              other_large_bytes: int = LARGE_OTHER_BYTES, report_every: float = 2.0) -> FindResult:
+              other_large_bytes: int = LARGE_OTHER_BYTES, report_every: float = 2.0,
+              ext_table: dict[str, tuple[str, str]] | None = None, user_exts: Iterable[str] = (),
+              ext_notes: Iterable[str] = ()) -> FindResult:
     """roots(없으면 고정 드라이브 전체)를 읽기 전용으로 훑어 FindResult 를 돌려준다. 모든 환경 의존 값은 주입할 수 있다.
 
     user_folders: {"documents": 경로, ...}. None 이면 roots 가 없을 때만 현재 사용자의 기본 폴더를 조회한다({} 를 주면 사용자 폴더 항목 없음).
     exclude_paths: 설정 규칙이 담당하는 폴더(이 아래는 훑지 않음). None 이면 rules/ 에서 만든다([] 를 주면 제외 없음).
     attr_getter: 파일 속성 주입(클라우드 전용 흉내용). None 이면 scandir 가 준 속성을 쓴다.
+    ext_table/user_exts: 사용자 설정을 반영한 확장자 표(find_exts.effective_table)와 '사용자 추가' 확장자. None/비어 있으면 기본 표.
+    ext_notes: 결과에 그대로 싣는 안내/경고 문구(설정 적용 여부, 설정 파일 경고).
     """
     cats = tuple(categories)
     bad = [c for c in cats if c not in CATEGORIES]
@@ -495,8 +526,9 @@ def find_data(roots: Iterable[str | os.PathLike] | None = None, *, user_folders:
     upaths = {_norm(v): (k, v) for k, v in ufs.items() if os.path.isdir(v)}
     excl = rule_covered_paths() if exclude_paths is None else list(exclude_paths)
     f = _Finder(cats, min_size, max(1, max_depth), time_limit, cancel, progress, progress_info, clock, attr_getter, excl, upaths,
-                other_large_bytes, report_every)
+                other_large_bytes, report_every, ext_table, user_exts)
     res = f.res
+    res.ext_notes = list(ext_notes)
     res.roots = list(root_list)
     drive_aggs: dict[str, list] = {}  # 드라이브 -> [루트 목록, _Agg]
     for root in root_list:
@@ -558,6 +590,8 @@ def summary_lines(res: FindResult, limit: int = 30) -> list[str]:
         lines.append(f"- 바로가기/정션(링크) {res.skipped_links}개는 따라가지 않았습니다.")
     if res.excluded:
         lines.append("- 자동 제외한 폴더: " + ", ".join(f"{k} {v}개" for k, v in sorted(res.excluded.items(), key=lambda kv: -kv[1])))
+    for n in res.ext_notes:
+        lines.append(f"- {n}")
     if res.error_count:
         lines.append(f"- 읽지 못한 곳 {res.error_count}개(건너뛰고 계속함, --json 의 errors 참고)")
     return lines

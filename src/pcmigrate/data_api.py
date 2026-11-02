@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 from typing import Callable, Iterable
 
-from . import find_data as fd
+from . import find_data as fd, find_exts
 from .api import ApiError, Deps, check_outputs_outside, report_inside, run_transfer
 from .cancel import Cancelled  # noqa: F401  (GUI 가 가져다 쓴다)
 from .copier import Report  # noqa: F401
@@ -23,8 +23,12 @@ def run_find_data(roots: Iterable[str | os.PathLike] | None = None, *, categorie
                   exclude_paths: Iterable[str] | None = None,
                   cancel: Callable[[], bool] | None = None, progress: Callable[[str], None] | None = None,
                   progress_info: Callable[[ProgressInfo], None] | None = None,
-                  output_selection: str | Path | None = None, **inject) -> fd.FindResult:
+                  output_selection: str | Path | None = None, use_user_exts: bool = True,
+                  ext_config: find_exts.ExtConfig | None = None, **inject) -> fd.FindResult:
     """내 파일 자동 찾기. 읽기 전용. output_selection 을 주면 선택 파일(전부 include:false)을 쓴다.
+
+    use_user_exts: 사용자가 설정한 '찾을 파일 형식'(find_exts)을 쓴다(False 면 기본 표). 시작할 때 한 번만 읽어 표를 만든다.
+    설정이 손상됐으면 기본값으로 계속하고 경고를 결과의 ext_notes 에 싣는다. ext_config: 읽어 둔 설정을 직접 넘김(화면/시험용).
 
     inject: find_data 의 주입 인자(clock, attr_getter, drives_fn 등, 테스트용).
     """
@@ -34,6 +38,12 @@ def run_find_data(roots: Iterable[str | os.PathLike] | None = None, *, categorie
             if os.path.dirname(os.path.abspath(r)) != os.path.abspath(r) and report_inside(output_selection, r):
                 raise ApiError(f"선택 파일 경로가 훑을 폴더 안입니다: {output_selection}",
                                lines=["원본 폴더에는 아무것도 쓰지 않습니다. 훑는 폴더 밖(예: 문서 폴더나 외장 드라이브)에 저장하세요."])
+    if use_user_exts and "ext_table" not in inject:
+        cfg = ext_config if ext_config is not None else find_exts.load()
+        notes = list(cfg.notes)
+        if not cfg.is_default:
+            notes.insert(0, f"찾을 파일 형식 설정을 적용했습니다(추가 {len(cfg.added)}개, 삭제 {len(cfg.removed)}개).")
+        inject.update(ext_table=find_exts.effective_table(cfg), user_exts=find_exts.user_exts(cfg), ext_notes=notes)
     try:
         res = fd.find_data(root_list, categories=categories, min_size=min_size, max_depth=max_depth, time_limit=time_limit,
                            include_removable=include_removable, user_folders=user_folders, exclude_paths=exclude_paths,
