@@ -118,6 +118,13 @@ class DiscoverView(BaseView):
         self.find_btn = ttk.Button(self.find_row, text=T.FIND_BTN, command=self._find)
         self.find_btn.pack(side="left")
         self.find_row.pack(anchor="w", fill="x", pady=(2, 0))
+        self.record_row = ttk.Frame(body)  # stage60: 바꿔 보며 설정 찾기로 들어가는 길(한 줄 안내 + 링크)
+        rec_note = ttk.Label(self.record_row, text=T.REC_ENTER_NOTE, justify="left", foreground=MUTED_FG)
+        rec_note.pack(anchor="w", fill="x")
+        autowrap(rec_note)
+        self.record_btn = ActionButton(self.record_row, text=T.BTN_REC_ENTER, kind="link", command=self._record_enter)
+        self.record_btn.pack(anchor="w")
+        self.record_row.pack(anchor="w", fill="x", pady=(2, 0))
         self.find_msg = FoldTLabel(body, text="", justify="left")  # 찾기 결과 한 줄 요약(있을 때만 보인다)
         autowrap(self.find_msg)
 
@@ -427,6 +434,10 @@ class DiscoverView(BaseView):
         first = r.programs.split(", ")[0]
         if first in self.c.ruleless_program_names():
             self.find_var.set(first)  # 고른 줄의 프로그램을 '설정 찾기' 목록에 미리 채워 준다
+
+    def _record_enter(self) -> None:
+        name = self.find_var.get()
+        self.guarded(self.c.record_open, S.OLD_DISCOVER, "" if name == T.FIND_PICK else name)  # 위 목록에서 고른 프로그램이 있으면 미리 채운다
 
     def _find(self) -> None:
         name = self.find_var.get()

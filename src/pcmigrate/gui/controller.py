@@ -85,12 +85,14 @@ from .controller_config import ConfigMixin  # stage43
 from .controller_undo import UndoMixin  # stage43
 from .controller_place import PlaceMixin  # stage50: 받은 파일 원래 위치에 놓기
 from .place_flow import PlaceState  # stage50
+from .controller_record import RecordMixin  # stage60: 바꿔 보며 설정 찾기
+from .record_flow import RecordState  # stage60
 
 _WRITING_TASKS = (T.TASK_EXPORT, T.TASK_EXPORT_RETRY, T.TASK_TRANSFER, T.TASK_APPLY, T.TASK_RETRY)  # 파일을 쓰는 작업
 FORCE_STOP_AFTER = 15.0  # '중지' 요청 후 이 시간(초)이 지나도 못 멈추면 force_stop_ready() 가 True
 
 
-class Controller(FilesMixin, NetMixin, PackageFindMixin, ScanMixin, ExportMixin, InstallMixin, ImportMixin, TransferMixin, AutoMixin, ConfigMixin, UndoMixin, PlaceMixin):
+class Controller(FilesMixin, NetMixin, PackageFindMixin, ScanMixin, ExportMixin, InstallMixin, ImportMixin, TransferMixin, AutoMixin, ConfigMixin, UndoMixin, PlaceMixin, RecordMixin):
     """화면과 api 사이의 중간층. 이벤트는 listener(kind, payload) 로 전달된다."""
 
     def __init__(self, api_mod: Any = None, deps: Any = None, runner: Runner | None = None,
@@ -120,6 +122,7 @@ class Controller(FilesMixin, NetMixin, PackageFindMixin, ScanMixin, ExportMixin,
         self._in_listener_error = False
         self.auto: AutoRun | None = None  # '추천대로 한 번에' 진행 상태(없으면 None)
         self.place_state = PlaceState()  # stage50: 받은 파일 원래 위치에 놓기 화면의 상태
+        self.record_state = RecordState()  # stage60: 바꿔 보며 설정 찾기 화면의 상태
         self._place_late: list = []  # 강제로 버린 놓기 작업 중 아직 끝나지 않은 것(stage54)
         self.drive_lister: Callable[[], list] | None = None  # 시험에서 가짜 드라이브 목록을 넣는 자리
         if hasattr(self.runner, "on_callback_error"):
@@ -314,6 +317,8 @@ class Controller(FilesMixin, NetMixin, PackageFindMixin, ScanMixin, ExportMixin,
             return T.STOP_DONE_PLACE
         if task == T.TASK_PLACE_PREVIEW:
             return T.STOP_DONE_PLACE_PREVIEW
+        if task in (T.TASK_REC_SNAP, T.TASK_REC_DIFF, T.TASK_REC_DRAFT, T.TASK_REC_RESET):  # stage60
+            return T.STOP_DONE_REC
         return T.STOP_DONE_READONLY
 
 
@@ -321,3 +326,5 @@ class Controller(FilesMixin, NetMixin, PackageFindMixin, ScanMixin, ExportMixin,
 _WRITING_TASKS = _WRITING_TASKS + (T.TASK_UNDO,)
 # stage50: 받은 파일 놓기는 받은 폴더와 원래 위치에 쓰는 작업이다(미리보기도 강제로 버린 옛 놓기가 아직 파일을 옮기는 중이면 어긋난 결과를 내므로 함께 막는다)
 _WRITING_TASKS = _WRITING_TASKS + (T.TASK_PLACE, T.TASK_PLACE_PREVIEW)
+# stage60: 설정 기록 작업은 기록 폴더에 쓴다(강제로 버린 옛 작업이 아직 같은 파일을 쓰고 있으면 새로 시작하지 않는다)
+_WRITING_TASKS = _WRITING_TASKS + (T.TASK_REC_SNAP, T.TASK_REC_DRAFT, T.TASK_REC_RESET)
