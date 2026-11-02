@@ -71,6 +71,10 @@ class FindView(BaseView):
             cb = ttk.Checkbutton(flt, text=label, variable=var, command=lambda c=cat, v=var: self.guarded(self.c.set_data_filter, c, v.get()))
             cb.pack(side="left", padx=(0, 10))
             self.filter_vars[cat], self.filter_btns[cat] = var, cb
+        # 기타 칩(stage64): 직접 추가한 기타 형식이 설정에 있을 때만 보인다(없으면 위 네 칩만: 기존 화면과 같음)
+        self.misc_var = tk.BooleanVar(value=self.c.files.misc_on)
+        self.misc_cb = ttk.Checkbutton(flt, text=T.FX_FILTER_MISC, variable=self.misc_var,
+                                       command=lambda: self.guarded(self.c.set_data_filter, "misc", self.misc_var.get()))
 
         # ---- 폴더 표
         cols = [("sel", T.FD_COLS[0], 52), ("path", T.FD_COLS[1], 330), ("design", T.FD_COLS[2], 50), ("photo", T.FD_COLS[3], 50),
@@ -144,6 +148,7 @@ class FindView(BaseView):
 
     # ------------------------------------------------------------------ 표시
     def on_show(self) -> None:
+        self.c.exts_refresh_misc()  # 설정이 명령줄 등에서 바뀌었을 수 있다
         self._rebuild()
         self.scroll.scroll_to_top()
         self.find_btn.focus_set()
@@ -199,6 +204,12 @@ class FindView(BaseView):
         self._drop_sync()
         for cat, var in self.filter_vars.items():
             var.set(cat in f.filters)
+        self.misc_var.set(f.misc_on)
+        if c.exts_has_misc():
+            if not self.misc_cb.winfo_manager():
+                self.misc_cb.pack(side="left", padx=(0, 10))
+        elif self.misc_cb.winfo_manager():
+            self.misc_cb.pack_forget()
         self._empty_text(rows)
         self._fold_sections()
         self.explorer.refresh()

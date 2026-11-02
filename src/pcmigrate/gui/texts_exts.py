@@ -18,7 +18,9 @@ def install(ns: dict) -> None:
     FX_TITLE = "찾을 파일 형식 설정"
     FX_INTRO = ("내 파일 찾기는 아래 형식의 파일이 있는 폴더를 옮길 후보로 보여 드립니다. 우리가 모르는 프로젝트 형식은 직접 넣어 주세요. "
                 "직접 추가한 형식은 파일이 한 개만 있어도 그 폴더를 후보로 보여 드립니다.")
-    FX_CATS = (("design", "설계"), ("photo", "사진"), ("video", "영상"), ("doc", "문서"), ("archive", "압축"))
+    FX_CATS = (("design", "설계"), ("photo", "사진"), ("video", "영상"), ("doc", "문서"), ("archive", "압축"), ("misc", "기타"))
+    FX_CAT_MISC_HINT = "위에 맞지 않는 형식을 넣어 두는 곳입니다."
+    FX_FILTER_MISC = "기타"  # 찾기 화면 종류별 보기 칩(직접 추가한 기타 형식이 설정에 있을 때만 보인다)
     FX_CAT_TITLE = "{label} ({n}개)"
     FX_MORE, FX_MORE_OPEN = "더 보기 ▸ ({n}개)", "접기 ▾"
     FX_USER_TIP = "직접 추가한 형식입니다. ×를 누르면 목록에서 뺍니다."
@@ -41,6 +43,27 @@ def install(ns: dict) -> None:
     FX_RESET_FAILED = "기본값으로 되돌리지 못했습니다(설정은 그대로입니다). 자세한 내용은 오류 기록에 남았습니다."
     FX_DAMAGED = ("저장된 설정을 읽지 못해 기본 목록으로 보여 드립니다. 손상된 파일은 그대로 두고 복사본을 보관했습니다. "
                   "저장하면 새 설정으로 바뀝니다.")
+    # ---- 내보내기 / 가져오기
+    BTN_FX_EXPORT, BTN_FX_IMPORT = "내보내기", "가져오기"
+    FX_EXPORT_TITLE = "찾을 파일 형식 설정 저장"
+    FX_EXPORT_DEFAULT_NAME = "찾을파일형식설정.json"
+    FX_IMPORT_TITLE = "가져올 설정 파일 고르기"
+    FX_FILE_TYPES = "형식 설정 파일"
+    FX_UNSAVED_TITLE = "저장하지 않은 변경이 있습니다"
+    FX_EXPORT_UNSAVED = "아직 저장하지 않은 변경이 있습니다. 내보내기는 지금 저장된 설정을 파일로 만듭니다. 계속할까요?"
+    FX_EXPORT_NOTE = "이 파일에는 확장자 목록만 들어 있고 내 PC의 경로나 이름은 들어 있지 않습니다."
+    FX_IMPORT_UNSAVED = "저장하지 않은 변경이 사라집니다. 가져오기를 계속할까요?"
+    FX_IMPORT_REJECT_TITLE = "이 파일은 가져올 수 없습니다"
+    FX_IMPORT_REJECT_HEAD = "이 파일은 가져올 수 없습니다. 아무것도 바꾸지 않았고 기존 설정은 그대로입니다."
+    FX_IMPORT_REJECT_TAIL = "이 도구의 '내보내기'로 만든 파일인지 확인해 주세요."
+    FX_IMPORT_REJECT_SHORT = "가져올 수 없는 파일입니다. 기존 설정은 그대로입니다(자세한 이유는 열린 창을 확인해 주세요)."
+    FX_IMPORT_CONFIRM_TITLE = "이 설정으로 바꿀까요?"
+    FX_IMPORT_CONFIRM_HEAD = "파일에서 읽은 설정으로 바꿉니다(교체)."
+    FX_IMPORT_CONFIRM_SIZE = "· 직접 추가한 형식 {a}개, 찾지 않도록 뺀 기본 형식 {r}개가 됩니다."
+    FX_IMPORT_CONFIRM_DIFF = "· 지금 설정 대비 추가 {a}개, 삭제 {r}개가 바뀝니다."
+    FX_IMPORT_CONFIRM_KEEP = "· 지금 설정은 지우지 않고 보관해 둡니다."
+    FX_IMPORT_CONFIRM_TAIL = "바꿀까요?"
+    FX_IMPORT_FAILED = "설정을 가져오지 못했습니다. 기존 설정은 그대로입니다."
     FX_NOTES_PREFIX = f"{ICON_WARN} "
     FX_UNEXPECTED = "설정을 처리하는 중 예기치 못한 오류가 났습니다. 자세한 내용은 오류 기록에 남았습니다."
 

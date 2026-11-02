@@ -221,6 +221,7 @@ pcmigrate.exe find-exts import C:\이전기록\형식설정.json --dry-run
 pcmigrate.exe find-exts import C:\이전기록\형식설정.json --yes
 ```
 분류에 맞지 않는 형식(예: 3DF Zephyr .zep)은 find-exts add .zep --category 기타 로 추가합니다.
+화면에서는 찾기 화면 아래 '찾을 파일 형식 설정' 창의 [내보내기] [가져오기] 버튼으로 같은 일을 합니다(가져오기는 검사 후 확인을 거쳐 교체하며, 이상한 파일은 이유를 보여 주고 거부합니다).
 import 는 파일을 먼저 검사해서 하나라도 이상하면 아무것도 바꾸지 않고 거부합니다(기존 설정 그대로). --dry-run 은 검사와 미리보기만 합니다. 기본은 교체이고, 적용 전 현재 설정은 번호 .bak 으로 보관합니다.
 --exclude-junk 는 Thumbs.db, desktop.ini, ~$ Office 잠금, *.tmp, CAD 잠금(*.dwl 등)을 복사하지 않습니다(기본은 제외 안 함). *.bak 와 Revit 백업 사본은 기본으로 복사하며, --exclude-backup-copies 를 더하면 Revit 백업 사본도 뺍니다. find-data 는 Windows, Program Files, AppData, 휴지통을 자동으로 뺍니다. OneDrive 클라우드 전용 파일은 내려받지 않고 개수만 따로 셉니다.
 원본을 건드리는 robocopy 옵션(/MIR, /PURGE, /MOV)은 이 도구가 쓰지 않습니다. 복사가 끝나면 대상 폴더에 .pcmigrate-state.json과 로그 파일이 남습니다. 외장 2단계(--use-manifest)와 랜선 1단계(--manifest-out)는 화면의 단계 안내를 따르는 편이 안전합니다.

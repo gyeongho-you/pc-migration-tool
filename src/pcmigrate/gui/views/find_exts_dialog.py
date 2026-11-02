@@ -6,11 +6,11 @@
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 
 from .. import texts as T
-from .common import (BODY_FONT, BOLD_FONT, CHIP_DONE_BG, CHIP_TODO_BG, MUTED_FG, ActionButton, Collapsible, Notice, ScrollBody, add_tooltip,
-                     autowrap)
+from .common import (BODY_FONT, BOLD_FONT, CHIP_DONE_BG, CHIP_TODO_BG, MUTED_FG, ActionButton, Collapsible, Notice, ScrollBody, TextDialog,
+                     add_tooltip, autowrap)
 
 CHIP_LIMIT = 20  # 분류마다 처음 보이는 칩 수(나머지는 '더 보기')
 
@@ -66,6 +66,10 @@ class ExtsDialog(tk.Toplevel):
         bar.pack(side="bottom", fill="x")
         self.reset_btn = ActionButton(bar, text=T.BTN_FX_RESET, kind="plain", command=self._reset)
         self.reset_btn.pack(side="left")
+        self.export_btn = ActionButton(bar, text=T.BTN_FX_EXPORT, kind="plain", command=self._export)
+        self.export_btn.pack(side="left", padx=(8, 0))
+        self.import_btn = ActionButton(bar, text=T.BTN_FX_IMPORT, kind="plain", command=self._import)
+        self.import_btn.pack(side="left", padx=(8, 0))
         self.save_btn = ActionButton(bar, text=T.BTN_FX_SAVE, kind="primary", command=self._save)
         self.save_btn.pack(side="right")
         self.cancel_btn = ActionButton(bar, text=T.BTN_FX_CANCEL, kind="plain", command=self._cancel)
@@ -143,6 +147,8 @@ class ExtsDialog(tk.Toplevel):
         self.chips: list[tk.Misc] = []
         for cat in d["categories"]:
             ttk.Label(self.body, text=T.FX_CAT_TITLE.format(label=cat["label"], n=cat["count"]), font=BOLD_FONT).pack(anchor="w", pady=(8, 2))
+            if cat["category"] == "misc":
+                ttk.Label(self.body, text=T.FX_CAT_MISC_HINT, foreground=MUTED_FG).pack(anchor="w")
             first, rest = cat["exts"][:CHIP_LIMIT], cat["exts"][CHIP_LIMIT:]
             flow = ChipFlow(self.body, bg)
             flow.pack(fill="x")
@@ -211,6 +217,37 @@ class ExtsDialog(tk.Toplevel):
         if not self.ask_yesno(T.FX_RESET_TITLE, T.FX_RESET_ASK):
             return
         self._show(self.c.exts_reset(), "ok")
+        self._rebuild()
+
+    def _export(self) -> None:
+        """저장된 설정을 파일로 내보낸다(편집 중인 내용이 아님). 저장하지 않은 변경이 있으면 파일을 고른 뒤 한 번 확인한다."""
+        path = filedialog.asksaveasfilename(parent=self, title=T.FX_EXPORT_TITLE, initialfile=T.FX_EXPORT_DEFAULT_NAME,
+                                            defaultextension=".json", filetypes=[(T.FX_FILE_TYPES, "*.json")])
+        if not path:
+            return
+        if self.c.exts_dirty() and not self.ask_yesno(T.FX_UNSAVED_TITLE, T.FX_EXPORT_UNSAVED):
+            return
+        self._show(self.c.exts_export(path), "ok")
+
+    def _import(self) -> None:
+        """파일을 먼저 검사하고(아무것도 바꾸지 않음), 거부면 이유를 보여 주고 끝, 통과면 확인 뒤 교체로 적용한다."""
+        if self.c.exts_dirty() and not self.ask_yesno(T.FX_UNSAVED_TITLE, T.FX_IMPORT_UNSAVED):
+            return
+        path = filedialog.askopenfilename(parent=self, title=T.FX_IMPORT_TITLE, filetypes=[(T.FX_FILE_TYPES, "*.json")])
+        if not path:
+            return
+        chk = self.c.exts_import_check(path)
+        if not chk.ok:
+            self.notice.set(chk.message, "warn")
+            self.reject_dialog = TextDialog(self, T.FX_IMPORT_REJECT_TITLE, chk.text, 70, 14)
+            return
+        if chk.same:
+            self.notice.set(chk.message, "info")
+            return
+        if not self.ask_yesno(T.FX_IMPORT_CONFIRM_TITLE, chk.text):
+            return
+        res = self.c.exts_import_apply(path)
+        self._show(res, "ok")
         self._rebuild()
 
     def _save(self) -> None:

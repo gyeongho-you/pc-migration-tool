@@ -293,10 +293,11 @@ def test_misc_single_file_folder_is_candidate_and_shown(tmp_path):
     assert "기타(직접 추가) 1개" in item.basis and "사용자 추가 형식: .zep 1개" in item.basis
     assert list(res.categories) == list(fd.DEFAULT_CATEGORIES)  # 결과가 되울리는 선택 분류는 그대로
     assert res.drives[0]["categories"]["misc"]["files"] == 1
-    # 찾기 화면 행: 모든 종류가 켜진 기본 보기에서는 보이고, 설계만 켜면 빠진다(기타 칩은 화면안에서 승인 후 추가)
+    # 찾기 화면 행: 모든 종류가 켜진 기본 보기에서는 보이고, 설계만 켜면 빠진다(기타 칩은 기타 형식이 설정에 있을 때 화면에 나온다)
     from pcmigrate.gui.files_flow import row_from_item, row_visible
     row = row_from_item(item, False)
-    assert row_visible(row, {"design", "photo", "video", "doc"}) and not row_visible(row, {"design"})
+    assert row_visible(row, {"design", "photo", "video", "doc"}) and row_visible(row, {"design"})  # 기타 칩이 켜져 있으면 보임
+    assert not row_visible(row, {"design"}, False)  # 기타 칩을 끄면 가려진다
 
 
 def test_misc_beats_excluded_list_and_large_other_rule(tmp_path):

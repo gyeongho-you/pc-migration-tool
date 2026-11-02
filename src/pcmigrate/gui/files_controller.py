@@ -128,13 +128,16 @@ class FilesMixin:
             if k not in seen:
                 seen.add(k)
                 rows.append(row_from_manual(p, k in f.selected))
-        return [r for r in rows if row_visible(r, f.filters)] if visible_only else rows
+        return [r for r in rows if row_visible(r, f.filters, f.misc_on)] if visible_only else rows
 
     def set_data_filter(self, cat: str, on: bool) -> None:
-        if cat not in FIND_CATEGORIES:
+        if cat not in FIND_CATEGORIES and cat != "misc":
             raise _guard(T.G_NOT_IN_LIST)
         f = self.files
-        (f.filters.add if on else f.filters.discard)(cat)
+        if cat == "misc":  # 기타 칩: 직접 추가한 기타 형식이 설정에 있을 때만 화면에 보인다
+            f.misc_on = bool(on)
+        else:
+            (f.filters.add if on else f.filters.discard)(cat)
         self.emit("files_changed")
 
     def set_data_selected(self, path: str, on: bool) -> None:

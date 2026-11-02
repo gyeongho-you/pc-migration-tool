@@ -165,7 +165,7 @@ def reject_case(tmp_path, d, content, needle=""):
     return r
 
 
-@pytest.mark.parametrize("content,needle", [
+BAD_FILES = [
     ("{broken", "JSON"),
     ("", "JSON"),
     ("[]", "{ }"),
@@ -197,7 +197,10 @@ def reject_case(tmp_path, d, content, needle=""):
     ('{"format": "pcmigrate-find-exts", "version": 1, "added": {}, "removed": [], "note": "' + "x" * 300 + '"}', "note"),
     ('{"format": "pcmigrate-find-exts", "version": NaN, "added": {}, "removed": []}', "NaN"),
     ('{"format": "pcmigrate-find-exts", "version": Infinity}', "Infinity"),
-])
+]
+
+
+@pytest.mark.parametrize("content,needle", BAD_FILES)
 def test_import_rejects_bad_files(tmp_path, d, content, needle):
     reject_case(tmp_path, d, content, needle)
 

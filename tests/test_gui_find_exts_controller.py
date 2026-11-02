@@ -32,7 +32,7 @@ def test_open_default(c):
     st = c.exts_begin()
     d = c.exts_describe()
     assert st.open_note == "" and d["is_default"] and d["total"] == len(fd.EXT_TABLE)
-    assert [x["label"] for x in d["categories"]] == ["설계", "사진", "영상", "문서", "압축"]
+    assert [x["label"] for x in d["categories"]] == ["설계", "사진", "영상", "문서", "압축", "기타"]  # 기타는 비어 있어도 항상
     assert not c.exts_dirty() and c.exts_dirty_text() == T.FX_CLEAN
     assert not fx.config_path().exists()  # 열기만으로는 아무것도 쓰지 않는다
 
