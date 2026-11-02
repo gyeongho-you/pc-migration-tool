@@ -223,7 +223,9 @@ class TransferMixin:
     def _report_inside_sources(self, path: str) -> bool:
         """리포트 위치가 원본(고른 폴더·직접 추가한 폴더) 안인가. 안이면 원본에는 아무것도 쓰지 않으므로 리포트를 쓰지 않는다."""
         try:
-            return any(real_api.report_inside(path, folder) for folder in self.source_folders() if folder)
+            folders = list(self.source_folders())
+            folders += sorted({os.path.dirname(e.path) for e in self.drop_files()})  # 직접 추가한 파일이 든 폴더에도 쓰지 않는다
+            return any(real_api.report_inside(path, folder) for folder in folders if folder)
         except Exception:  # noqa: BLE001 - 판단하지 못하면 쓰지 않는 쪽이 안전하다
             return True
 

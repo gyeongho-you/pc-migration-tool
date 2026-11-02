@@ -733,6 +733,8 @@ def discover(recv: Path, maps: dict[str, str], include_unverified: bool, warn: C
     jrels: list[str] = []
     bad_tops: set[str] = set()  # 저널 항목이 깨진 최상위 폴더(유추로 놓지 않는다)
     real_rels = {str(v.get("rel", "")).lower() for v in items.values() if isinstance(v, dict) and not v.get("partial")}  # 폴더째 보낸 실제 항목
+    part_bad = {str(v.get("rel", "")).lower(): v.get("status") for v in items.values()
+                if isinstance(v, dict) and v.get("partial") and v.get("status") != "done"}  # 끝나지 못한 임시 보관(직접 고른 파일) 항목
     for key, it in items.items():
         meta["journal_items"] += 1
         key_top = str(key).split("\\")[0].lower()
@@ -741,6 +743,8 @@ def discover(recv: Path, maps: dict[str, str], include_unverified: bool, warn: C
             rows.append(Row("folder", "-", str(recv / JOURNAL_NAME), BAD_JOURNAL, f"항목 형식 오류: {str(key)[:60]}"))
             continue
         src, rel, status = it.get("src"), it.get("rel"), it.get("status")
+        if status == "done" and not it.get("partial") and isinstance(rel, str) and rel.lower() in part_bad:
+            status = part_bad[rel.lower()]  # 폴더는 끝났어도 같은 폴더의 직접 고른 파일이 끝나지 못했으면 폴더 전체를 검증 전으로 본다(그 파일이 놓이고 지워지지 않게)
         if not isinstance(src, str) or not isinstance(rel, str) or _bad_rel(rel):
             bad_tops.add(key_top)
             if isinstance(rel, str):

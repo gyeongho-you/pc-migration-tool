@@ -193,19 +193,26 @@ class FilesMixin:
         b = self.bundle_item()
         bsize = fmt_bytes(b.total_bytes or 0) if b is not None else ""
         dn = self.drop_total()[0]
+        dsize, dunknown = self.drop_total()[1], self.drop_unknown()
         if self.drop_dirs():  # 직접 추가한 폴더에 포함돼 빠질 자동 폴더는 합계에서 뺀다(같은 폴더를 두 번 세지 않는다)
             cover = self.folder_cover()
             sel = [r for r in self.data_rows(visible_only=False) if r.selected and r.path in cover]
             n -= len(sel)
             size -= sum(r.total_bytes or 0 for r in sel if r.total_bytes is not None)
             unknown -= sum(1 for r in sel if r.total_bytes is None)
+        if self.files.drops:  # 반대로 자동 폴더(또는 다른 직접 추가 폴더) 안에 있어 빠질 직접 추가 항목도 세지 않는다
+            keep = [(e, not row[4]) for e, row in zip(self.files.drops, self.drop_rows())]
+            dn = sum(1 for _e, k in keep if k)
+            dsize = sum(e.size for e, k in keep if k and not e.unknown)
+            dunknown = sum(1 for e, k in keep if k and e.unknown)
         if not n:
             if dn:
-                return T.DP_TOTAL_ONLY.format(n=dn, size=self._drop_size_text()) + (" · " + T.BUNDLE_INCLUDED if b is not None else "")
+                return T.DP_TOTAL_ONLY.format(n=dn, size=fmt_bytes(dsize) + (" 이상" if dunknown else "")) + (" · " + T.BUNDLE_INCLUDED if b is not None else "")
             return T.FD_TOTAL_ONLY_BUNDLE.format(note=T.BUNDLE_INCLUDED, size=bsize) if b is not None else T.FD_TOTAL_NONE
         text = T.FD_TOTAL.format(n=n, size=fmt_bytes(size))
         text += (" " + T.FD_TOTAL_UNKNOWN.format(k=unknown) if unknown else "")
-        text += (" + " + self.drop_total_text() if dn else "")
+        if dn:
+            text += " + " + T.DP_TOTAL.format(n=dn, size=fmt_bytes(dsize)) + (" " + T.FD_TOTAL_UNKNOWN.format(k=dunknown) if dunknown else "")
         return text + (T.FD_TOTAL_BUNDLE.format(note=T.BUNDLE_INCLUDED, size=bsize) if b is not None else "")
 
     def add_data_folder(self, path: str) -> str:

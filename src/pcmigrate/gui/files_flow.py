@@ -128,11 +128,15 @@ def unsafe_data_folder(path: str, env: dict | None = None) -> bool:
     if not home:
         return False
     h = os.path.normcase(os.path.abspath(home)).rstrip("\\/")
-    users = os.path.dirname(h)  # 사용자 폴더들이 모인 곳(예: C:\Users): 그 자체와 다른 사용자의 홈 루트도 거부한다
-    if users and users != h and (p == users or os.path.dirname(p) == users):
+    if p == h or p == os.path.join(h, "appdata"):  # 사용자 홈 루트와 그 AppData 루트(Roaming/Local 같은 하위는 허용: 프로그램 설정 폴더)
         return True
-    # 사용자 홈의 AppData 루트(Roaming/Local 같은 하위는 허용: 프로그램 설정 폴더)
-    return os.path.basename(p) == "appdata" and bool(users) and os.path.dirname(os.path.dirname(p)) == users or p == h
+    users = os.path.dirname(h)
+    if users and users != h and os.path.basename(users) == "users":  # 홈이 '...\Users\이름' 일 때만: Users 자체와 다른 사용자의 홈 루트·AppData 루트도 거부
+        # (홈의 부모가 드라이브 루트(D:\)인 환경에서는 D:\ 직속 폴더를 전부 거부하지 않는다)
+        if p == users or os.path.dirname(p) == users:
+            return True
+        return os.path.basename(p) == "appdata" and os.path.dirname(os.path.dirname(p)) == users
+    return False
 
 
 def short_date(iso: str) -> str:

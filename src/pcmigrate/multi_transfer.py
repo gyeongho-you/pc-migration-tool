@@ -217,7 +217,8 @@ class MultiReport:
         complete = True
         for it in self.items:
             if it.report is None:
-                complete = False
+                if it.status != "skipped_done":  # 이전 실행에서 검사까지 끝난 폴더(저널 done)를 건너뛴 것은 완료로 본다
+                    complete = False
                 continue
             r = it.report.to_dict()
             for k, v in r["summary"].items():

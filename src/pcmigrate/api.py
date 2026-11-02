@@ -1073,9 +1073,10 @@ def clean_state_files(dst: str | Path) -> list[str]:
     """전송 성공 + 검사 통과 뒤에 대상 폴더 맨 위의 이 도구 기록 파일(.pcmigrate-state.json, -preserve.json, -robocopy.log)을 지운다.
 
     복사한 데이터 파일은 건드리지 않는다. 지운 파일 이름 목록을 돌려준다. 지우지 못한 것은 조용히 남긴다."""
+    from .multi_transfer import STAGED_PRESERVE_NAME, STAGED_STATE_NAME
     from .transfer import LOG_NAME, PRESERVE_NAME, STATE_NAME
     removed = []
-    for name in (STATE_NAME, PRESERVE_NAME, LOG_NAME):
+    for name in (STATE_NAME, PRESERVE_NAME, LOG_NAME, STAGED_STATE_NAME, STAGED_PRESERVE_NAME):
         p = Path(dst) / name
         try:
             if p.is_file():
