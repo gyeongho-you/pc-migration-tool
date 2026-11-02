@@ -228,6 +228,8 @@ def load_rules(rules_dir: Path, errors: list[str] | None = None) -> list[Rule]:
             continue
         seen.add(rule.id)
         rules.append(rule)
+    if not rules and errors:  # 읽을 수 있는 규칙이 없고 건너뛴 파일이 있으면 그 오류를 그대로 알린다(원인을 가리지 않는다)
+        raise RuleError("; ".join(errors))
     if not rules:
         raise RuleError(f"규칙 폴더에 규칙 파일(*.json)이 하나도 없습니다: {rules_dir} "
                         "(규칙이 없으면 어떤 프로그램도 감지하지 못합니다. 프로그램을 다시 내려받아 주세요)")
