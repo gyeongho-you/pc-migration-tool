@@ -1037,3 +1037,72 @@ def clean_state_files(dst: str | Path) -> list[str]:
         except OSError:
             pass
     return removed
+
+
+# --------------------------------------------------------------------------- 설정 기록 모드(화면용 얇은 연결: 동작은 record_mode/record_infer 에 있다)
+
+@dataclass
+class RecordProgram:
+    program: Program
+    has_rule: bool  # 이미 자동 목록(규칙)이 있는 프로그램
+
+
+def run_record_programs(rules_dir: str | Path, deps: Deps | None = None) -> list[RecordProgram]:
+    """설치된 프로그램 목록과 '자동 목록(규칙) 있음' 표시(읽기 전용). 이름순, 같은 이름은 하나만."""
+    deps = deps or Deps()
+    rules = load_rules_checked(rules_dir)
+    seen: set[str] = set()
+    out: list[RecordProgram] = []
+    for p in sorted(programs_registry(deps.registry()), key=lambda x: x.name.lower()):
+        if p.name.lower() in seen:
+            continue
+        seen.add(p.name.lower())
+        out.append(RecordProgram(p, program_has_rule(p, rules)))
+    return out
+
+
+def run_record_infer(program: Program, exe_path: str = "", *, documents_fn=None, process_list_fn=None, version_info_fn=None):
+    """훑을 폴더 추정(폴더 이름만 본다)과 실행 중 프로세스 확인. (Inference, 실행 중으로 보이는 프로세스 이름들)."""
+    from . import record_infer as ri, record_mode as rm
+    info = ri.ProgramInfo.from_program(program, exe_path)
+    plan = ri.infer_folders(info, documents_fn=documents_fn, version_info_fn=version_info_fn)
+    return plan, rm.running_processes(program.name, [], process_list_fn)
+
+
+def run_record_start(program: Program, plan, work: str | None = None, *, exe_path: str = "", progress_info=None, cancel=None,
+                     documents_fn=None, process_list_fn=None):
+    """기록 시작 + 변경 전 스냅샷. plan 의 켜진 폴더만 훑는다. (Session, SnapshotResult)."""
+    from . import record_infer as ri, record_mode as rm
+    return rm.start(program.name, work, info=ri.ProgramInfo.from_program(program, exe_path), plan=plan, progress=progress_info,
+                    cancel=cancel, documents_fn=documents_fn, process_list_fn=process_list_fn)
+
+
+def run_record_snapshot(session, *, progress_info=None, cancel=None, documents_fn=None, process_list_fn=None):
+    """다음 스냅샷(기준선 또는 변경 후, 라벨은 자동). SnapshotResult."""
+    from . import record_mode as rm
+    return rm.snapshot(session, None, cancel=cancel, progress=progress_info, documents_fn=documents_fn, process_list_fn=process_list_fn)
+
+
+def run_record_diff(session):
+    from . import record_mode as rm
+    return rm.diff(session)
+
+
+def run_record_draft(session, output: str | None, selected: set[str] | None):
+    """체크한 후보로 규칙 초안 저장. (Analysis, 규칙 dict | None, 저장 경로 | None)."""
+    from . import record_mode as rm
+    return rm.write_draft(session, output, selected=selected)
+
+
+def run_record_reset(work: str | Path):
+    from . import record_mode as rm
+    return rm.reset(work)
+
+
+def record_resume(work: str | Path):
+    """작업 폴더의 이전 기록(Session). 없거나 읽을 수 없으면 None."""
+    from . import record_mode as rm
+    try:
+        return rm.load_session(work)
+    except rm.RecordError:
+        return None

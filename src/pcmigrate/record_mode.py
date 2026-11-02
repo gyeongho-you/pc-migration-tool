@@ -603,11 +603,15 @@ def no_draft_message(a: Analysis) -> str:
     return "조건에 맞는 후보가 없습니다(--min-confidence low 로 낮춰 보세요)."
 
 
-def build_rule(a: Analysis, min_conf: str = LOW, rule_id: str | None = None, today: str | None = None) -> dict | None:
-    """분석 결과로 규칙 JSON 초안(dict). 후보가 없으면 None. 규칙 스키마(rules.parse_rule)를 따른다."""
+def build_rule(a: Analysis, min_conf: str = LOW, rule_id: str | None = None, today: str | None = None,
+               selected: set[str] | None = None) -> dict | None:
+    """분석 결과로 규칙 JSON 초안(dict). 후보가 없으면 None. 규칙 스키마(rules.parse_rule)를 따른다.
+    selected: 화면에서 사용자가 체크한 후보 경로(환경변수 표기). 주면 확신도 기준 대신 이 경로만 담는다(참고/삭제/로그 형식/큰 파일/비밀 파일은 여전히 못 담음)."""
     today = today or datetime.now().strftime("%Y-%m-%d")
     ok = [c for c in a.candidates if not c.masked and not c.noise_like and not c.removed and c.size <= BIG_CANDIDATE
-          and not c.secret and not c.nonconfig and RANK[c.confidence] >= RANK[min_conf] and "*" not in c.path and "?" not in c.path]
+          and not c.secret and not c.nonconfig
+          and (RANK[c.confidence] >= RANK[min_conf] if selected is None else c.path in selected)
+          and "*" not in c.path and "?" not in c.path]
     a.outside = [c.path for c in ok if not c.path.startswith("%")]  # 규칙 경로가 될 수 없는 위치(다른 드라이브 등)
     pick = [c for c in ok if c.path.startswith("%")]
     left = [c for c in a.candidates if c not in pick]
@@ -715,13 +719,13 @@ def _id_conflicts(rule_id: str, out: Path) -> list[str]:
 
 
 def write_draft(s: Session, output: str | None = None, min_conf: str = LOW, rule_id: str | None = None,
-                now: Callable[[], datetime] = datetime.now) -> tuple[Analysis, dict | None, Path | None]:
+                now: Callable[[], datetime] = datetime.now, selected: set[str] | None = None) -> tuple[Analysis, dict | None, Path | None]:
     """후보를 계산하고 규칙 초안을 저장한다. 파일이 바뀌지 않았으면 초안은 만들지 않고 레지스트리 안내를 낸다. 보고서는 항상 저장.
     --output 이 이미 있으면 번호 .bak 으로 보관한 뒤 쓴다. 같은 id 의 기존 규칙이 있으면 경고한다."""
     status, a, rule, out = "failed", None, None, None
     try:
         a = diff(s, now)
-        rule = build_rule(a, min_conf, rule_id, now().strftime("%Y-%m-%d"))
+        rule = build_rule(a, min_conf, rule_id, now().strftime("%Y-%m-%d"), selected)
         if rule is None and a.outside:
             raise RecordError(OUTSIDE_MSG)
         if rule is not None:

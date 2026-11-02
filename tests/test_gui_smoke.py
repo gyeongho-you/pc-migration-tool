@@ -20,7 +20,7 @@ from pcmigrate.gui.views.common import TextDialog, sort_tree  # noqa: E402
 from test_gui_controller import FakeApi, item, plan  # noqa: E402
 
 ALL_SCREENS = (S.START, S.OLD_SCAN, S.OLD_DISCOVER, S.OLD_CHECKLIST, S.OLD_EXPORT, S.NEW_PACKAGE, S.NEW_INSTALL, S.NEW_PREVIEW,
-               S.NEW_CONFIRM, S.NEW_RESULT, S.TRANSFER, S.AUTO, *S.FILES_SCREENS, S.PLACE)  # stage50: 받은 파일 놓기
+               S.NEW_CONFIRM, S.NEW_RESULT, S.TRANSFER, S.AUTO, *S.FILES_SCREENS, S.PLACE, S.RECORD)  # stage50: 받은 파일 놓기, stage60: 바꿔 보며 설정 찾기
 
 
 @pytest.fixture

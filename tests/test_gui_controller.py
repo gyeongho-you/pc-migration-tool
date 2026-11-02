@@ -65,6 +65,9 @@ class FakeApi:
     def system_info(self):
         return SimpleNamespace(os_name="Test OS", is_admin=False, python="3")
 
+    def run_record_programs(self, rules_dir, deps=None):  # stage60: 바꿔 보며 설정 찾기 화면이 열릴 때 설치 목록을 읽는다(가짜는 빈 목록)
+        return []
+
     def run_scan(self, rules_dir, deps=None):
         self.calls.append(("scan",))
         return SimpleNamespace(program_count=3, matched=[], discovery=(1, 2), match_info=[], checklist=None)

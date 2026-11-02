@@ -910,6 +910,8 @@ from .texts_place import install as _install_place_texts  # noqa: E402  (stage50
 _install_place_texts(globals())
 from .texts_exts import install as _install_exts_texts  # noqa: E402  (stage61: 찾을 파일 형식 설정 창 문구)
 _install_exts_texts(globals())
+from .texts_record import install as _install_record_texts  # noqa: E402  (stage60: 바꿔 보며 설정 찾기 화면 문구)
+_install_record_texts(globals())
 START_CHOICES = (START_CHOICES[0], START_CARD3, START_CHOICES[2])  # noqa: F821  (② 카드만 새 문구로)
 
 # --------------------------------------------------------------------------- 전체 이전 순서(? 도움말에서 열림, README 와 같은 원본)
