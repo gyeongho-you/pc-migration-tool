@@ -237,8 +237,9 @@ class AutoMixin:
         if self.auto.flow != "new":
             return
         _ok, _skipped, failed = self.import_counts()
-        self._auto_mark("apply", "warn" if failed else "done")
-        self._auto_finish(T.AUTO_FAILED_WARN.format(n=failed) if failed else "")
+        stopped = self.interrupted_note()  # 중간에 멈춘 복원(stage72): 성공으로 끝낸 것처럼 보이지 않게 경고로 마무리
+        self._auto_mark("apply", "warn" if failed or stopped else "done")
+        self._auto_finish(stopped or (T.AUTO_FAILED_WARN.format(n=failed) if failed else ""))
 
     # ---- 대용량: 질문 두 개 -> 폴더 -> 미리보기 -> (복사 시작 직전 확인) -> 복사 / 랜선 새 PC 쪽은 목록·폴더 -> 검사
     def _auto_begin_transfer(self) -> None:

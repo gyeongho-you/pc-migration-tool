@@ -1160,7 +1160,7 @@ class ResultSummary(_ForgetMixin, ttk.Frame):
         self.box.configure(text="", bg=self.winfo_toplevel().cget("background"))
         set_shown(self, False)
 
-    def show(self, ok: int, skipped: int, failed: int, ok_message: str, fail_message: str, pending: bool = False) -> None:
+    def show(self, ok: int, skipped: int, failed: int, ok_message: str, fail_message: str, pending: bool = False, notice: str = "") -> None:
         """pending: 복사는 끝났지만 검사를 미룬 상태 — '성공'이라고 하지 않고 '복사 완료(내용 확인 전)'로 표시한다."""
         set_shown(self, True)  # 결과가 생기면 원래 자리에 다시 나타난다
         if pending:
@@ -1172,6 +1172,8 @@ class ResultSummary(_ForgetMixin, ttk.Frame):
                                   foreground=DANGER_FG if failed else MUTED_FG)
         if failed:
             self.box.configure(text=fail_message, bg=DANGER_BG, fg=DANGER_FG)
+        elif notice:  # 중간에 멈춘 결과: 성공 문구 대신 안내를 경고색으로(stage72)
+            self.box.configure(text=notice, bg=WARN_BG, fg=WARN_FG)
         elif pending:
             self.box.configure(text=ok_message, bg=WARN_BG, fg=WARN_FG)
         else:

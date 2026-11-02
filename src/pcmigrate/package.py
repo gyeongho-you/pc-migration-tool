@@ -23,6 +23,7 @@ from .package_base import (  # noqa: F401
     ALLOWED_COMPRESSION,
     CHUNK,
     DENY_DIR_NAMES,
+    DENY_COMPOUND_SUFFIXES,
     DENY_EXTENSIONS,
     DENY_FILE_NAMES,
     EXTRA_ID,

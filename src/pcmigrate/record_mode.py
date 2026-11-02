@@ -414,6 +414,8 @@ def secret_reason(tok: str) -> str | None:
 def nonconfig_reason(tok: str) -> str | None:
     """파일 이름이 알려진 설정 형식(settings_filter 의 확장자/점 파일 이름 허용 목록)이 아니면 사유, 맞으면 None."""
     name = tok.rsplit("\\", 1)[-1]
+    if any(ch in part for part in tok.split("\\")[1:] for ch in "%*?[]"):  # 이름에 % * ? [ ] 가 든 경로는 규칙 경로(%환경변수%·glob)로 오인되므로 형식 제외와 같은 이유로 남긴다(stage72)
+        return NONCONFIG_REASON
     return None if settings_filter.is_config_name(name) else NONCONFIG_REASON
 
 

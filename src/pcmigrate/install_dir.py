@@ -96,8 +96,10 @@ def _skip_word_name(name: str) -> bool:
 
 def is_settings_name(name: str) -> bool:
     """설치 폴더에서 옮길 수 있는 설정 형식의 이름인지: 허용 확장자 + 거부 확장자 아님 + 라이선스/로그/캐시/잠금/임시 이름 아님."""
-    from .package import DENY_EXTENSIONS, GLOBAL_EXCLUDE, _excluded
+    from .package import DENY_COMPOUND_SUFFIXES, DENY_EXTENSIONS, GLOBAL_EXCLUDE, _excluded
     base = name.rstrip(" .")
+    if base.lower().endswith(DENY_COMPOUND_SUFFIXES):  # app.exe.config / x.dll.config: 실행 설정이라 설정 형식으로 보지 않는다(stage72)
+        return False
     ext = os.path.splitext(base)[1].lower()
     if ext not in INSTALL_SETTINGS_EXTENSIONS or ext in DENY_EXTENSIONS:
         return False

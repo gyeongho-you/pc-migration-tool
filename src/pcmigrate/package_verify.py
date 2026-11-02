@@ -5,12 +5,13 @@
 from __future__ import annotations
 import hashlib
 import json
+import os
 import zipfile
 import zlib
 from pathlib import Path
 
 from .cancel import checkpoint
-from .package_base import ALLOWED_COMPRESSION, CHUNK, FORMAT_VERSION, MANIFEST, MAX_ENTRIES, MAX_MANIFEST_BYTES, MAX_TOTAL_BYTES, PackageError, _safe_rel
+from .package_base import ALLOWED_COMPRESSION, CHUNK, FORMAT_VERSION, MANIFEST, MAX_ENTRIES, MAX_COMPRESSION_RATIO, MAX_MANIFEST_BYTES, MAX_TOTAL_BYTES, RATIO_CHECK_MIN_BYTES, RATIO_TOTAL_FLOOR_BYTES, PackageError, _safe_rel
 
 
 def _hash_entry(zf: zipfile.ZipFile, name: str, limit: int | None = None) -> tuple[int, str]:
@@ -138,6 +139,13 @@ def verify_package(path: Path) -> tuple[dict | None, list[str]]:
         declared_total = sum(f["size"] for f in manifest["files"] if _file_entry_ok(f))
         if declared_total > MAX_TOTAL_BYTES:  # 선언 크기의 합이 비정상적으로 크면 해시를 계산하느라 시간/디스크를 쓰기 전에 거부한다(L5)
             return None, [f"패키지가 선언한 파일 크기의 합이 너무 큽니다({declared_total:,}바이트 > {MAX_TOTAL_BYTES:,}바이트). 손상되었거나 안전하지 않은 패키지입니다"]
+        try:
+            zip_size = os.path.getsize(path)
+        except OSError:
+            zip_size = 0
+        if zip_size and declared_total > max(zip_size * MAX_COMPRESSION_RATIO, RATIO_TOTAL_FLOOR_BYTES):
+            return None, [f"패키지의 선언 크기 합({declared_total:,}바이트)이 파일 실제 크기({zip_size:,}바이트)에 비해 비정상적으로 큽니다(압축비 {MAX_COMPRESSION_RATIO}배 초과). "
+                          "압축 폭탄일 수 있어 거부합니다"]
         listed = set()
         for f in manifest["files"]:
             if not _file_entry_ok(f):
@@ -156,6 +164,10 @@ def verify_package(path: Path) -> tuple[dict | None, list[str]]:
             listed.add(arc)
             if arc not in names:
                 problems.append(f"패키지에 없음: {arc}")
+                continue
+            zi = zf.getinfo(arc)
+            if zi.file_size >= RATIO_CHECK_MIN_BYTES and zi.file_size > zi.compress_size * MAX_COMPRESSION_RATIO:
+                problems.append(f"압축비가 비정상적으로 큰 엔트리(압축 폭탄 의심, {MAX_COMPRESSION_RATIO}배 초과): {arc}")
                 continue
             if zf.getinfo(arc).file_size != size:  # 선언과 다른 크기는 읽기 전에 거른다(거대 엔트리를 해시하느라 시간/디스크를 쓰지 않게)
                 problems.append(f"크기/해시 불일치: {arc}")

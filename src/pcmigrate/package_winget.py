@@ -5,7 +5,6 @@
 from __future__ import annotations
 import json
 import os
-import re
 import zipfile
 from pathlib import Path
 
@@ -18,7 +17,6 @@ from .package_verify import verify_package
 
 
 WINGET_ENTRY = "programs/winget.json"
-_ID_OK = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$")  # 실제 id 에 쓰이는 '+'(예: Notepad++.Notepad++)까지만 허용. 공백/따옴표/셸 문자는 거부
 MAX_WINGET_BYTES = 64 * 1024 * 1024
 
 
@@ -63,7 +61,7 @@ def winget_schema_problem(data: object) -> str:
             if not isinstance(pkg, dict):
                 return "Packages 항목 형식 오류"
             pid = pkg.get("PackageIdentifier")
-            if not isinstance(pid, str) or not _ID_OK.fullmatch(pid):
+            if not isinstance(pid, str) or not valid_winget_id(pid):
                 return f"PackageIdentifier 형식 오류: {str(pid)[:40]!r}"
             ver = pkg.get("Version")
             if ver is not None and not isinstance(ver, (str, int, float)):

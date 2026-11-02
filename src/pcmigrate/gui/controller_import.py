@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 
 from . import texts as T
+from ..cancel import Cancelled
 from .controller_common import GuardError, _accepts, _meta_value, _supported
 
 
@@ -175,8 +176,14 @@ class ImportMixin:
         inst_kw = {"allow_install_dir": True} if consent else {}
 
         def work(progress, token):
-            return self.api.run_import(package, self.state.rules_dir, yes=True, allow_extra=allow_extra,
-                                       deps=self.deps, **_supported(self.api.run_import, progress_info=progress), **sel_kw, **inst_kw)
+            try:
+                return self.api.run_import(package, self.state.rules_dir, yes=True, allow_extra=allow_extra,
+                                           deps=self.deps, **_supported(self.api.run_import, progress_info=progress), **sel_kw, **inst_kw)
+            except Cancelled as e:  # 중지해도 이미 복원한 파일은 결과 화면에 보이고 프로그램별로 되돌릴 수 있게 부분 결과(mode='interrupted')를 넘긴다(stage72)
+                part = getattr(e, "partial_result", None)
+                if part is None:
+                    raise
+                return part
 
         def done(res):
             self.state.import_result = res
@@ -193,10 +200,16 @@ class ImportMixin:
             return {}
         rep = r.report
         counts = rep.to_dict()["summary"]
-        return {"counts": counts, "rejected": counts.get("rejected", 0), "denied": counts.get("denied", 0),
+        stopped = [("", T.STOP_DONE_APPLY)] if getattr(r, "mode", "") == "interrupted" else []  # 기존 '중지했습니다. 이미 복원한 파일이…' 문구 재사용
+        return {"counts": counts, "interrupted": bool(stopped), "rejected": counts.get("rejected", 0), "denied": counts.get("denied", 0),
                 "failures": [(f.dst, T.friendly_detail(f.error)) for f in rep.failures],
                 "backups": [x.backup for x in rep.results if x.backup],
-                "warnings": [(w.get("name", ""), i) for w in r.plan.warnings for i in w.get("items", [])]}
+                "warnings": [(w.get("name", ""), i) for w in r.plan.warnings for i in w.get("items", [])] + stopped}
+
+    def interrupted_note(self) -> str:
+        """복원이 중간에 멈춘 결과면 기존 중지 안내문(STOP_DONE_APPLY), 아니면 빈 문자열."""
+        r = self.state.import_result
+        return T.STOP_DONE_APPLY if getattr(r, "mode", "") == "interrupted" else ""
 
     def backup_folder(self) -> str:
         """복원 때 만든 백업 파일(.bak)이 있는 폴더(여러 곳이면 첫 번째). 없으면 빈 문자열."""
