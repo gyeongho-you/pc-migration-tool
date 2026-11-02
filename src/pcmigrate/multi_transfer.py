@@ -128,6 +128,7 @@ def plan_items(selected: Iterable[SelectedItem | str], dst: str | os.PathLike, *
         if os.path.normcase(s_real) == os.path.normcase(d_real) or _is_within(Path(d_real), Path(s_real)):
             raise TransferError(f"대상은 원본과 같거나 원본 폴더 안에 있을 수 없습니다: 원본 {it.path} / 대상 {dst}")
     rels: dict[str, str] = {}
+    staged_rels: set[str] = set()
     custom_keys: set[str] = set()
     for it in kept:
         custom = bool(getattr(it, "dest_rel", ""))
@@ -139,9 +140,13 @@ def plan_items(selected: Iterable[SelectedItem | str], dst: str | os.PathLike, *
             custom_keys.add(rel.lower())
         else:
             rel = dest_rel(getattr(it, "orig_dir", "") or it.path)
-        if rel.lower() in rels:  # 이름 변환이 겹치는 경우(실제로는 거의 없음): 조용히 합치지 않고 거부
+        staged = bool(getattr(it, "orig_dir", ""))
+        if rel.lower() in rels and not (staged or rel.lower() in staged_rels):  # 이름 변환이 겹치는 경우(실제로는 거의 없음): 조용히 합치지 않고 거부
             raise TransferError(f"대상 폴더 이름이 겹칩니다: {it.path} 와 {rels[rel.lower()]}")
-        rels[rel.lower()] = it.path
+        # (직접 고른 파일의 임시 보관 항목은 같은 폴더 이름이어도 된다: 정크 규칙 등으로 폴더 전송에서 빠진 파일을 같은 위치에 더 담는다)
+        if staged:
+            staged_rels.add(rel.lower())
+        rels.setdefault(rel.lower(), it.path)
         plan.items.append(PlanItem(it.path, rel, it.total_bytes, custom, getattr(it, "orig_dir", "")))
     if custom_keys:  # 지정한 이름이 다른 항목의 <드라이브>\... 구조 안쪽/바깥쪽과 겹치는 경우도 거부
         for ck in custom_keys:
@@ -277,7 +282,10 @@ def summary_lines(rep: MultiReport, dst: str) -> list[str]:
     elif d["failed_count"] or d["items_failed"]:
         lines.append("다음 할 일: 원인을 해결한 뒤 같은 명령에 --retry-failed 를 붙여 실패한 파일만 다시 처리하세요(끝난 폴더는 빠르게 지나갑니다).")
     elif d["verification_complete"]:
-        lines.append("다음 할 일: 검사까지 통과했습니다. 원본 정리는 충분히 확인한 뒤 판단하세요.")
+        skipped_any = bool(c.get("cloud_only")) or bool(d.get("junk_excluded")) or any(i.get("skipped_links") for i in d["items"])
+        lines.append("다음 할 일: 검사까지 통과했습니다. "
+                     + ("건너뛴 항목(클라우드 전용·정크·링크)은 보내지 않았으니 구 PC 에 그대로 두세요. " if skipped_any else "")
+                     + "원본 정리는 충분히 확인한 뒤 판단하세요.")
     else:
         lines.append("다음 할 일: 복사만 끝났습니다. 새 PC 에서 pcmigrate verify 로 검사해야 정확한지 알 수 있습니다(그 전에는 원본을 지우지 마세요).")
     return lines
@@ -340,11 +348,16 @@ def precheck_space(plan: Plan, dst: Path, *, dest_info_fn=None, cancel=None, est
     if dest.kind == "cdrom":
         raise TransferError("대상이 CD/DVD 드라이브입니다. 쓸 수 있는 하드디스크나 외장 드라이브를 고르세요.")
     est = existing = 0
+    try:
+        prior_rels = set(_read_journal(dst)["items"]) if Path(dst).is_dir() else set()
+    except (OSError, KeyError, TypeError):
+        prior_rels = set()
     for it in plan.items:
         if it.estimate is None:
             it.estimate = (estimate_fn or _scan_bytes)(it.src, cancel)
         est += it.estimate
-        existing += min(it.estimate, _existing_bytes(dst / it.rel, cancel))
+        if prior_rels is None or it.rel.lower() in prior_rels:  # 이 도구가 이전에 담은 폴더만 '이미 있는 양'으로 뺀다
+            existing += min(it.estimate, _existing_bytes(dst / it.rel, cancel))  # (남이 만든 같은 크기 다른 내용 파일은 .bak 이 되어 공간이 더 든다)
     required = int(max(0, est - existing) * (1 + SPACE_MARGIN))
     blocked = dest.free is not None and dest.free < required
     return {"estimate_bytes": est, "existing_bytes": existing, "required_bytes": required, "dest_free_bytes": dest.free,
@@ -444,8 +457,11 @@ def run_multi(selected: Iterable[SelectedItem | str], dst: str | os.PathLike, tr
             raise
         except DriveDisconnected:
             raise
-        except (TransferError, OSError, ValueError) as e:
-            res = ItemResult(shown, str(item_dst), "error", error=str(e))
+        except Exception as e:  # noqa: BLE001 - 한 항목의 예외(예상 밖 포함)가 나머지 항목을 막지 않게 항목 오류로 기록하고 계속한다
+            if not isinstance(e, (TransferError, OSError, ValueError)):
+                from . import errorlog
+                errorlog.record(e, f"multi-transfer item {shown}")
+            res = ItemResult(shown, str(item_dst), "error", error=str(e) if str(e) else type(e).__name__)
             if not dry_run:
                 journal["items"][key] = {"src": shown, "rel": it.rel, "status": "failed", "error": str(e), **partial}
                 _write_journal(dst, journal)

@@ -209,7 +209,10 @@ class TransferMixin:
                                                   retry_failed, workers, split_large)
         check = self.check_transfer_paths(s.transfer_src, s.transfer_dst)
         if not check.ok:
-            raise GuardError(" ".join(t for ok, t in check.lines if not ok))
+            msg = " ".join(t for ok, t in check.lines if not ok)
+            if report_path and not real_api.report_inside(report_path, s.transfer_src):
+                self._write_blocked_report(report_path, msg)  # 시작하지 못해도 결과 리포트는 남긴다
+            raise GuardError(msg)
         if report_path and real_api.report_inside(report_path, s.transfer_src):
             raise GuardError(T.G_REPORT_INSIDE_SOURCE)
         key = (s.transfer_src, s.transfer_dst)
@@ -247,9 +250,14 @@ class TransferMixin:
             extra["split_large"] = True
 
         def work(progress, token):
-            return self.api.run_transfer(s.transfer_src, s.transfer_dst, dry_run=dry_run, include_cloud=include_cloud,
-                                         strict=strict, progress=progress, cancel=token, deps=self.deps,
-                                         warn=progress, progress_info=progress, **extra)
+            try:
+                return self.api.run_transfer(s.transfer_src, s.transfer_dst, dry_run=dry_run, include_cloud=include_cloud,
+                                             strict=strict, progress=progress, cancel=token, deps=self.deps,
+                                             warn=progress, progress_info=progress, **extra)
+            except BaseException as e:  # 취소·오류로 끝나도 결과 리포트(aborted)를 남기고 예외는 그대로 전파(오류 상자/오류 로그는 기존대로)
+                if report_path:
+                    self._write_abort_report(report_path, e)
+                raise
 
         def done(rep):
             s.transfer_report, s.transfer_was_dry_run = rep, dry_run
@@ -270,6 +278,16 @@ class TransferMixin:
         label = (T.TASK_TRANSFER_PREVIEW if dry_run else T.TASK_VERIFY_AGAIN if verify_only
                  else T.TASK_RETRY if retry_failed else T.TASK_TRANSFER)
         self._run(label, work, done, cancellable=True)
+
+    @staticmethod
+    def _write_abort_report(path: str, exc: BaseException) -> None:
+        import json
+        from ..cancel import Cancelled
+        data = {"aborted": True, "cancelled": isinstance(exc, (Cancelled, KeyboardInterrupt)), "success": False, "reason": f"{type(exc).__name__}: {exc}"}
+        try:
+            Path(path).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        except OSError:
+            pass
 
     def start_verify(self, report_path: str = "") -> None:
         """랜선 2단계(새 PC): 목록 파일과 로컬 폴더를 비교한다. 폴더는 읽기만 한다(결과 파일도 그 폴더 밖에만 저장)."""

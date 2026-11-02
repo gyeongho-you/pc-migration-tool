@@ -961,6 +961,10 @@ class FilesMixin:
             notes.append(T.TX_SKIPPED_NOTE.format(n=cloud_n, junk=junk_n))
         if rep.get("failed_count"):
             notes.append(T.TX_FAILED_HEAD.format(n=rep["failed_count"]))
+            for x in (rep.get("failed") or [])[:5]:  # 앞 5건(읽지 못한 항목 포함): 경로와 이유
+                notes.append("· " + T.ellipsize_path(str(x.get("path", "")), 60) + " — " + T.friendly_detail(str(x.get("error", ""))))
+            if int(rep["failed_count"]) > 5:
+                notes.append("· " + T.TR_SELECTION_MORE.format(n=int(rep["failed_count"]) - 5))
         if self.files.tx_bundle:
             notes.insert(0, T.BUNDLE_RESULT_NOTE)
         notes += self.drop_result_lines(rep.get("drop_stage"))  # 직접 고른 N개: 보냄·건너뜀·실패, 제외 안내, 임시 보관 정리 결과

@@ -83,7 +83,11 @@ def run_send(target: str, code: str, selection=None, sources: list[str] | None =
             p = build_send_plan(None, its, opts, cancel=cancel, progress_info=progress_info)
             return _run_send(host, port, code, p, opts, progress_info, cancel, on_event)
 
-        return drop_stage.run_with_extras(items, list(extra_files), None, go, cancel=cancel, warn=warn or (lambda m: None), progress=progress)
+        jk = {}
+        if opts.exclude_junk:
+            from .junk import make_spec
+            jk = {"junk_spec": make_spec(opts.junk_backup_copies)}
+        return drop_stage.run_with_extras(items, list(extra_files), None, go, cancel=cancel, warn=warn or (lambda m: None), progress=progress, **jk)
     if plan is None:
         plan = build_send_plan(sources, selection, opts, cancel=cancel, progress_info=progress_info)
     return _run_send(host, port, code, plan, opts, progress_info, cancel, on_event)

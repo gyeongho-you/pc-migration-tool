@@ -568,6 +568,7 @@ class _Session:
                 self.ch.send_json(T_LIST_ACK, {"h": hints, "off": off, "last": True, "needed": needed, "free": free})
                 break
             self.ch.send_json(T_LIST_ACK, {"h": hints, "off": off})
+        _keep_previous_manifest(self.dest / MANIFEST_NAME)  # 같은 받는 폴더로 다시 받아도 이전 해시 목록을 덮어쓰지 않는다
         self.writer = ManifestWriter(self.dest / MANIFEST_NAME, f"lan:{self.plan['name'] or self.peer}", self.plan["files"],
                                      self.plan["bytes"], {"lan": True})
 
@@ -789,7 +790,10 @@ class _Session:
             return
         res = FileResult(src="(lan)", dst=str(cur.dst), status=COPIED, size=cur.size, sha256=digest)
         try:
-            _install(cur.part, cur.dst, res, long_path)
+            if _same_content(cur.dst, cur.size, digest):  # 내용이 같은 파일이 이미 있으면 .bak 으로 옮기지 않고 받은 임시 파일만 버린다
+                os.remove(long_path(cur.part))
+            else:
+                _install(cur.part, cur.dst, res, long_path)
         except OSError as e:
             f = failure.classify(e, rel)
             self._fail_note(cur.i, rel, f.code)
@@ -970,7 +974,7 @@ def build_send_plan(sources: list[str] | None = None, selection: str | os.PathLi
         prefix = "" if flat and not it.custom else it.rel.replace("\\", "/")
         plan.roots.append(it.src)
         sc = scan_source_info(it.src, cancel=cancel, progress_info=progress_info)
-        if spec is not None:
+        if spec is not None and not it.orig:  # 직접 고른 파일(임시 보관)은 정크 규칙으로 빼지 않는다(사용자가 고른 파일)
             ex = apply_to_scan(sc, spec)
             if excl_total is None:
                 excl_total = ex
@@ -1007,6 +1011,30 @@ def build_send_plan(sources: list[str] | None = None, selection: str | os.PathLi
     if excl_total is not None:
         plan.junk = excl_total.as_dict(spec)
     return plan
+
+
+def _same_content(dst, size: int, digest: str) -> bool:
+    try:
+        p = Path(dst)
+        return os.path.isfile(long_path(p)) and os.path.getsize(long_path(p)) == size and sha256_file(p) == digest
+    except OSError:
+        return False
+
+
+def _keep_previous_manifest(path: Path) -> None:
+    """기존 해시 목록이 있으면 .pcmigrate-manifest.<번호>.jsonl 로 보관한다(번호는 비어 있는 가장 작은 수)."""
+    if not os.path.lexists(long_path(path)):
+        return
+    n = 1
+    while True:
+        alt = path.with_name(f"{path.stem}.{n}{path.suffix}")
+        if not os.path.lexists(long_path(alt)):
+            break
+        n += 1
+    try:
+        os.replace(long_path(path), long_path(alt))
+    except OSError:
+        pass  # 옮기지 못하면 기존 동작(덮어쓰기)
 
 
 class _Inbox:
@@ -1054,7 +1082,9 @@ class _Sender:
         self.pending = 0
         self.tracker = ProgressTracker("copy", plan.total_bytes, plan.total_files)
         self.counts = {"sent": 0, "skipped_existing": 0, "resumed": 0, "retried": 0, "exact": 0, "mismatch": 0, "preserved_existing": 0}
-        self.failed: list[dict] = list(plan.failed)
+        # 조사(scan) 단계에서 읽지 못한 항목도 폴더 전송처럼 실패로 센다(failed_count/success 에 반영)
+        self.failed: list[dict] = list(plan.failed) + [{"path": e["path"], "reason": e.get("reason", "scan"), "error": e.get("error", "")}
+                                                       for e in plan.scan_errors]
         self.chunk = clamp_chunk(opts.chunk)
         self._last_ping = time.monotonic()
         self._last_prog = 0.0

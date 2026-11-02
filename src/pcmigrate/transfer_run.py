@@ -64,6 +64,11 @@ def transfer(src: Path, dst: Path, *, dry_run: bool = False, include_cloud: bool
         raise TransferError(f"원본 폴더가 없습니다: {src}")
     if os.path.realpath(src) == os.path.realpath(dst) or _is_within(dst, src):
         raise TransferError("대상은 원본과 같거나 원본 폴더 안에 있을 수 없습니다")
+    if _is_within(src, dst):  # 원본이 대상 안에 있다: 대상 안의 '원본과 같은 이름' 경로가 원본 자신/하위와 겹치면 원본에 새 파일이 생긴다
+        rel = os.path.relpath(os.path.realpath(src), os.path.realpath(dst))
+        if rel != "." and os.path.isdir(os.path.join(os.path.realpath(src), rel)):
+            raise TransferError("대상이 원본 폴더의 상위 폴더이고 원본 안에 같은 이름의 하위 폴더가 있어, 복사하면 원본 폴더에 파일이 생깁니다. "
+                                "대상을 원본과 겹치지 않는 다른 폴더로 지정하세요")
     if verify_only and retry_failed:
         raise TransferError("검사만 다시(verify_only)와 실패한 것만 다시(retry_failed)는 함께 쓸 수 없습니다")
     if dry_run and (verify_only or retry_failed):

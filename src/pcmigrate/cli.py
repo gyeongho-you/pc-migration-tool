@@ -233,6 +233,22 @@ def _chunk_mb(text: str) -> float:
     return v
 
 
+def _save_abort_report(path, exc: BaseException) -> None:
+    """전송이 끝까지 가지 못했어도(취소/드라이브 분리/공간 부족/오류) 결과 리포트(--report)를 남긴다(원본은 읽기만, 리포트는 원본 밖)."""
+    if not path:
+        return
+    from .cancel import Cancelled
+    data = {"aborted": True, "cancelled": isinstance(exc, (Cancelled, KeyboardInterrupt)), "success": False,
+            "reason": f"{type(exc).__name__}: {exc}"}
+    rep = getattr(exc, "report", None)
+    try:
+        if rep is not None and hasattr(rep, "to_dict"):
+            data["partial"] = rep.to_dict()
+        Path(path).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    except (OSError, ValueError, TypeError):
+        pass
+
+
 def _cmd_transfer(args: argparse.Namespace) -> int:
     def warn(msg: str) -> None:
         _err(f"[경고] {msg}")
@@ -269,15 +285,22 @@ def _cmd_transfer(args: argparse.Namespace) -> int:
                               copy_threads=args.copy_threads, split_large=args.split_large,
                               exclude_junk=args.exclude_junk, junk_backup_copies=args.exclude_backup_copies)
     except ApiError as e:
+        _save_abort_report(args.report, e)
         return _fail(e)
     except TransferError as e:
+        _save_abort_report(args.report, e)
         _err(f"전송 실패: {e}")
         return 1
     except ManifestError as e:
+        _save_abort_report(args.report, e)
         _err(f"해시 목록 오류: {e}")
         return 1
     except OSError as e:
+        _save_abort_report(args.report, e)
         return _write_failed(args.dst, e)
+    except BaseException as e:  # 취소(Cancelled)/Ctrl+C 등: 리포트를 남기고 원래 처리(종료 코드)는 그대로
+        _save_abort_report(args.report, e)
+        raise
     if args.report:
         try:
             report.write(Path(args.report))
@@ -385,7 +408,7 @@ def _cmd_transfer_selection(args: argparse.Namespace) -> int:
             keep_awake=not args.no_keep_awake, manifest_out=args.manifest_out, verify_dest=args.verify_dest,
             copy_mode=args.copy_mode, copy_threads=args.copy_threads, split_large=args.split_large,
             exclude_junk=args.exclude_junk, junk_backup_copies=args.exclude_backup_copies, skip_done=args.skip_done_items,
-            extra_files=args.extra_file or None, abort_report=args.report if args.extra_file else None)
+            extra_files=args.extra_file or None, abort_report=args.report or None)
     except ApiError as e:
         return _fail(e)
     except TransferError as e:

@@ -416,6 +416,8 @@ def validate_rel(rel: object) -> str:
             raise UnsafePath(f"이름이 너무 깁니다: {part[:40]!r}…")
         if part.lower().endswith(PART_SUFFIX):
             raise UnsafePath(f"도구의 임시 파일 이름은 쓸 수 없습니다: {part[:60]!r}")
+        if part.lower().startswith(OWN_PREFIX):  # 하위 폴더/파일 이름도(첫 칸만이 아니라) 도구 기록 이름은 받지 않는다
+            raise UnsafePath(f"도구의 기록 파일 이름은 쓸 수 없습니다: {part[:60]!r}")
     if p.parts[0].lower().startswith(OWN_PREFIX):
         raise UnsafePath(f"도구의 기록 파일 이름은 쓸 수 없습니다: {p.parts[0][:60]!r}")
     return str(PurePosixPath(*p.parts))

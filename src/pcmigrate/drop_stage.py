@@ -141,14 +141,24 @@ class StagePlan:
 
 
 def plan_drops(entries: list[DropEntry], checked: list[str], *, cancel: Callable[[], bool] | None = None,
-               attr_fn: Callable[[os.stat_result], int] = _attrs) -> StagePlan:
-    """끌어다 놓은 항목을 정리한다. 원본은 읽기만 한다(stat/목록)."""
+               attr_fn: Callable[[os.stat_result], int] = _attrs, junk_spec=None) -> StagePlan:
+    """끌어다 놓은 항목을 정리한다. 원본은 읽기만 한다(stat/목록).
+
+    junk_spec: 정크 제외가 켜져 있으면, 체크한 폴더 안에 있어도 폴더 전송에서 빠질 파일(정크 규칙에 걸림)은 겹침으로 보지 않고
+    직접 고른 파일로 보낸다(두 경로에서 다 빠지는 것을 막는다). 직접 고른 파일은 정크 규칙으로 다시 빼지 않는다.
+    """
     plan = StagePlan()
-    ckeys = sorted({_key(c) for c in checked}, key=len)
+    ckeys = sorted({_key(c) for c in checked if os.path.isdir(c)}, key=len)  # 없어진 폴더는 겹침 판정에 쓰지 않는다(폴더 전송이 실패하므로)
     seen: set[str] = set()
 
     def covered(k: str) -> str | None:
         return next((c for c in ckeys if _under(k, c)), None)
+
+    def junked(k: str, c: str) -> bool:
+        if junk_spec is None:
+            return False
+        rel = k[len(c):].lstrip("\\/").replace("\\", "/")
+        return bool(rel) and junk_spec.classify_rel(rel) is not None
 
     def fail(path: str, e: BaseException | str) -> None:
         reason = e if isinstance(e, str) else reason_text(e)
@@ -159,7 +169,7 @@ def plan_drops(entries: list[DropEntry], checked: list[str], *, cancel: Callable
     def add_file(path: str, top: str, expect: DropEntry | None) -> None:
         k = _key(path)
         c = covered(k)
-        if c is not None:
+        if c is not None and not junked(k, c):
             plan.overlap.append({"path": path, "covered_by": c})
             return
         if k in seen:
@@ -195,7 +205,7 @@ def plan_drops(entries: list[DropEntry], checked: list[str], *, cancel: Callable
             continue
         k = _key(e.path)
         c = covered(k)
-        if c is not None:
+        if c is not None and junk_spec is None:  # 정크 제외가 켜져 있으면 파일 단위로 따져 본다(정크 규칙에 걸리는 파일은 폴더 전송에서 빠진다)
             plan.overlap.append({"path": e.path, "covered_by": c})
             continue
         try:
@@ -221,7 +231,7 @@ def plan_drops(entries: list[DropEntry], checked: list[str], *, cancel: Callable
             for d in sorted(dirs):
                 full = fs.plain_path_text(os.path.join(root, d))
                 c = covered(_key(full))
-                if c is not None:
+                if c is not None and junk_spec is None:
                     plan.overlap.append({"path": full, "covered_by": c})
                 elif fs.is_reparse(full):
                     plan.skipped_links.append(full)
@@ -245,7 +255,21 @@ def tops_of(plan: StagePlan) -> list[str]:
 
 # --------------------------------------------------------------------------- 2) 임시 폴더
 def staging_root() -> Path:
-    return Path(expand_env(STAGING_DIR))
+    """임시 보관 루트. %LOCALAPPDATA% 를 해석할 수 없으면(미정의/상대 경로) 현재 폴더에 '%LOCALAPPDATA%' 폴더가 생기지 않게 시스템 임시 폴더로 대신한다."""
+    p = expand_env(STAGING_DIR)
+    if "%" in p or not os.path.isabs(p):
+        import tempfile
+        return Path(tempfile.gettempdir()) / "pcmigrate" / "staging"
+    return Path(p)
+
+
+def under_stage(path) -> bool:
+    """path 가 이 도구의 임시 보관 폴더(표식 파일이 있는 폴더) 안인가."""
+    p = Path(os.path.abspath(os.fspath(path)))
+    for anc in [p, *list(p.parents)[:12]]:
+        if (anc / MARKER_NAME).is_file() and _read_marker(anc) is not None:
+            return True
+    return False
 
 
 def _read_marker(d: Path) -> dict | None:
@@ -481,7 +505,7 @@ def _write_abort(path, ds: dict, err: BaseException) -> None:
 def run_with_extras(items: list, extras, dst, run_fn: Callable[[list], "object"], *, dry_run: bool = False,
                     cancel: Callable[[], bool] | None = None, warn: Callable[[str], None] = lambda m: None,
                     progress: Callable[[str], None] | None = None, abort_report=None, root: Path | None = None,
-                    free_fn: Callable[[str], int | None] = fs.free_space, attr_fn=_attrs, no_link: bool = False):
+                    free_fn: Callable[[str], int | None] = fs.free_space, attr_fn=_attrs, no_link: bool = False, junk_spec=None):
     """items(선택 파일의 폴더들) + extras(경로 문자열 또는 DropEntry) 를 함께 전송한다. run_fn(항목 목록) -> MultiReport.
 
     예외(취소 포함)가 나도 임시 폴더는 지우고, abort_report 가 있으면 중단 리포트를 저장한 뒤 예외를 다시 던진다.
@@ -505,7 +529,7 @@ def run_with_extras(items: list, extras, dst, run_fn: Callable[[list], "object"]
     try:
         if progress:
             progress("직접 고른 파일 확인 중…")
-        plan = plan_drops(entries, checked, cancel=cancel, attr_fn=attr_fn)
+        plan = plan_drops(entries, checked, cancel=cancel, attr_fn=attr_fn, junk_spec=junk_spec)
         info = _info(plan, entries)
         if stale:
             info["stale_cleaned"] = stale

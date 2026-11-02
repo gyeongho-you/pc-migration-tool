@@ -88,13 +88,18 @@ def run_transfer_selection(selection, dst: str | Path, *, dry_run: bool = False,
     deps = deps or Deps()
     items = load_selected(selection)
     for it in items:  # 해시 목록은 원본 폴더 밖에 쓴다(원본은 읽기만)
-        check_outputs_outside(it.path if isinstance(it, fd.SelectedItem) else it, manifest_out=manifest_out)
+        check_outputs_outside(it.path if isinstance(it, fd.SelectedItem) else it, manifest_out=manifest_out, report=abort_report)
     opts = dict(include_cloud=include_cloud, strict=strict, workers=workers, chunk=chunk, keep_awake=keep_awake,
                 verify_dest=verify_dest, copy_mode=copy_mode, copy_threads=copy_threads, split_large=split_large,
                 exclude_junk=exclude_junk, junk_backup_copies=junk_backup_copies)
 
     def one(src: Path, d: Path, **kw) -> Report:
-        return run_transfer(src, d, deps=deps, **opts, **kw)
+        o = opts
+        if opts["exclude_junk"]:
+            from .drop_stage import under_stage
+            if under_stage(src):  # 직접 고른 파일(임시 보관)은 정크 규칙으로 빼지 않는다(사용자가 고른 파일, 겹침 판정과 같은 기준)
+                o = {**opts, "exclude_junk": False, "junk_backup_copies": False}
+        return run_transfer(src, d, deps=deps, **o, **kw)
 
     def go(its: list) -> MultiReport:
         return run_multi(its, dst, one, dry_run=dry_run, manifest_out=manifest_out, skip_done=skip_done,
@@ -115,7 +120,14 @@ def run_transfer_selection(selection, dst: str | Path, *, dry_run: bool = False,
     from . import drop_stage
     return drop_stage.run_with_extras(items, [os.fspath(x) if not isinstance(x, drop_stage.DropEntry) else x for x in extra_files],
                                       dst, go, dry_run=dry_run, cancel=cancel, warn=warn, progress=progress,
-                                      abort_report=abort_report, **(drop_kwargs or {}))
+                                      abort_report=abort_report, **{**_junk_kw(exclude_junk, junk_backup_copies), **(drop_kwargs or {})})
+
+
+def _junk_kw(exclude_junk: bool, backup_copies: bool) -> dict:
+    if not exclude_junk:
+        return {}
+    from .junk import make_spec
+    return {"junk_spec": make_spec(include_backup_copies=backup_copies)}
 
 
 def preview_plan(selection, dst: str | Path):

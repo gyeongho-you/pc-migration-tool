@@ -613,6 +613,8 @@ def test_multi_space_precheck_uses_estimate_from_selection_and_existing(tmp_path
         run_transfer_selection(items, tmp_path / "out", deps=deps_with(FakeRobo()), keep_awake=False, dest_info_fn=lambda p: info)
     # 이미 대상에 있는 양은 빼고 점검한다(이어받기)
     put(tmp_path / "out" / mt.dest_rel(str(a)) / "have.bin", b"h" * 9_900)
+    rel = mt.dest_rel(str(a))  # stage67: 이 도구가 이전에 담은 폴더(이어받기 기록이 있음)만 '이미 있는 양'으로 뺀다
+    (tmp_path / "out" / mt.JOURNAL_NAME).write_text(json.dumps({"version": 1, "items": {rel.lower(): {"src": str(a), "rel": rel, "status": "pending"}}}), encoding="utf-8")
     plan = preview_plan(items, tmp_path / "out")
     space = mt.precheck_space(plan, tmp_path / "out", dest_info_fn=lambda p: info)
     assert space["existing_bytes"] == 9_900 and not space["space_blocked"]
