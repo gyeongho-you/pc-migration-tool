@@ -30,6 +30,10 @@ class Program:
     source: str = "registry"  # "registry" | "winget"
     winget_id: str = ""
     install_location: str = ""  # 레지스트리 InstallLocation(없으면 빈 문자열). discover 의 연결 근거
+    # 설정 기록 모드의 폴더 추정용(선택). 사용자 이름이 든 경로일 수 있어 설정 묶음(registry.json)에는 담지 않는다(package_export 가 뺌).
+    display_icon: str = ""
+    uninstall_string: str = ""
+    install_date: str = ""
 
     @property
     def display(self) -> str:
@@ -86,7 +90,8 @@ def read_registry_programs() -> list[Program]:
                         if not name or val("SystemComponent") == "1":
                             continue
                         p = Program(name, val("DisplayVersion"), val("Publisher"),
-                                    install_location=val("InstallLocation"))
+                                    install_location=val("InstallLocation"), display_icon=val("DisplayIcon"),
+                                    uninstall_string=val("UninstallString"), install_date=val("InstallDate"))
                         found[(p.name, p.version)] = p
                 except OSError:
                     continue

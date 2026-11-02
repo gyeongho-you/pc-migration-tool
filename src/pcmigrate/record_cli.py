@@ -6,7 +6,7 @@ import json
 import sys
 import time
 
-from . import errorlog, failure, record_mode as rm
+from . import errorlog, failure, record_infer as ri, record_mode as rm
 from .cancel import Cancelled
 from .progress import fmt_bytes, format_info
 from .record_snapshot import HASH_LIMIT, MAX_FILES
@@ -69,12 +69,64 @@ def _run(fn):
         return 130
 
 
+def _installed_programs() -> list:
+    """설치 프로그램 목록(레지스트리). 읽을 수 없는 환경(비 Windows 등)이면 빈 목록. cli 의 주입점을 그대로 쓴다."""
+    from . import cli
+    try:
+        return list(cli._deps().registry())
+    except (ImportError, OSError):
+        return []
+
+
+def _pick_installed(query: str, exe: str):
+    matches = ri.installed_match(_installed_programs(), query)
+    if not matches:
+        raise rm.RecordError(f"설치된 프로그램 목록에서 '{query}' 을(를) 찾지 못했습니다. 이름 일부를 다르게 써 보거나 --program 으로 이름을 직접 쓰세요")
+    if len({(p.name, p.version) for p in matches}) > 1:
+        raise rm.RecordError("이름이 여러 프로그램에 맞습니다. 더 정확히 쓰세요: " + ", ".join(sorted({p.name for p in matches})[:10]))
+    return ri.ProgramInfo.from_program(matches[0], exe)
+
+
 def _cmd_start(args) -> int:
     def go() -> int:
-        s, r = rm.start(args.program, args.work, args.roots, args.match, args.all_roots, args.include_caches,
-                        int(args.hash_limit_mb * 1024 * 1024), args.max_files, args.force, progress=_progress())
+        info, program = None, args.program
+        if args.from_installed:
+            info = _pick_installed(args.from_installed, args.exe or "")
+            program = program or info.name
+        if not program:
+            raise rm.RecordError("--program 이나 --from-installed 가 필요합니다")
+        if info is None and args.exe:
+            info = ri.ProgramInfo(program, exe_path=args.exe)
+        infer = not args.no_infer and not args.all_roots
+        plan = None
+        if infer:  # 폴더 추정 결과를 먼저 보여 준다
+            plan = ri.infer_folders(info or ri.ProgramInfo(program), extra_words=args.match)
+            try:
+                if args.roots:
+                    ri.add_roots(plan, args.roots)
+            except ValueError as e:
+                raise rm.RecordError(str(e)) from e
+            _out(*ri.render_inference(plan))
+        s, r = rm.start(program, args.work, None if infer else args.roots, args.match, args.all_roots, args.include_caches,
+                        int(args.hash_limit_mb * 1024 * 1024), args.max_files, args.force, info=info, infer=infer, plan=plan,
+                        progress=_progress())
         _show_snapshot(r, errorlog.tokenize_home(str(s.work)))
         _out("다음: 프로그램을 설정 변경 없이 한 번 열었다 닫고 `pcmigrate record snapshot` (기준선)")
+        return 0
+    return _run(go)
+
+
+def _cmd_reset(args) -> int:
+    def go() -> int:
+        r = rm.reset(args.work)
+        if r.status == "nothing":
+            _out("보관할 이전 기록이 없었습니다.")
+        else:
+            _out(f"이전 기록 {len(r.moved)}개를 삭제하지 않고 보관했습니다: " + ", ".join(f"{a} -> {b}" for a, b in r.moved),
+                 "처음부터 하려면 `pcmigrate record start ...` 를 다시 실행하세요.")
+        if r.kept_foreign:
+            _err("[안내] 기록 도구의 파일이 아니라 그대로 둔 파일: " + ", ".join(r.kept_foreign))
+        _out(f"결과 보고: {rm.REPORT_FILE}")
         return 0
     return _run(go)
 
@@ -128,7 +180,10 @@ def add_parsers(sub, path_arg) -> None:
     rs = r.add_subparsers(dest="record_command", required=True)
 
     st = rs.add_parser("start", help="기록 시작 + 변경 전 스냅샷(before). 프로그램을 먼저 완전히 닫으세요")
-    st.add_argument("--program", required=True, help="프로그램 이름(폴더 이름 부분 일치로 대상을 좁히는 데 씀)")
+    st.add_argument("--program", help="프로그램 이름(없으면 --from-installed 의 이름). 이름·게시자·설치 위치로 훑을 폴더를 추정함")
+    st.add_argument("--from-installed", metavar="이름", help="설치된 프로그램 목록에서 이름으로 골라 게시자·설치 위치 정보까지 폴더 추정에 씀")
+    st.add_argument("--exe", type=path_arg, metavar="실행파일", help="프로그램 실행 파일 경로(있으면 제품/회사 정보로 추정을 보강)")
+    st.add_argument("--no-infer", action="store_true", help="폴더 추정을 끄고 예전 방식(이름 낱말 부분 일치, --roots 는 기본 루트 대체)으로 훑음")
     st.add_argument("--match", action="append", metavar="낱말", help="폴더 이름에 이 낱말이 들어 있어도 대상에 넣음(여러 번 가능, 예: 제조사 이름)")
     st.add_argument("--roots", nargs="+", type=path_arg, metavar="폴더", help="기본 루트 대신 이 폴더들 전체를 훑음")
     st.add_argument("--all-roots", action="store_true", help="이름으로 좁히지 않고 기본 루트 전체를 훑음(오래 걸릴 수 있음)")
@@ -136,8 +191,12 @@ def add_parsers(sub, path_arg) -> None:
     st.add_argument("--work", type=path_arg, help="작업 폴더(기본: %%LOCALAPPDATA%%\\pcmigrate\\record\\<이름>)")
     st.add_argument("--hash-limit-mb", type=float, default=HASH_LIMIT / 1024 / 1024, help="이 크기 이하 파일만 해시(기본 20, 0 이면 크기/시각만)")
     st.add_argument("--max-files", type=int, default=MAX_FILES, help=f"스냅샷 파일 수 상한(기본 {MAX_FILES:,})")
-    st.add_argument("--force", action="store_true", help="작업 폴더의 기존 기록을 버리고 새로 시작(스냅샷 파일은 덮어씀)")
+    st.add_argument("--force", action="store_true", help="작업 폴더의 기존 기록을 .bak 으로 보관하고 새로 시작(`record reset` 과 같은 보관)")
     st.set_defaults(func=_cmd_start)
+
+    rz = rs.add_parser("reset", help="초기화: 이전 스냅샷·상태·후보·초안·보고서를 지우지 않고 .bak 으로 보관하고 빈 상태로")
+    rz.add_argument("--work", type=path_arg, required=True, help="작업 폴더(start 에서 쓴 것)")
+    rz.set_defaults(func=_cmd_reset)
 
     sn = rs.add_parser("snapshot", help="스냅샷 추가: 기준선(baseline) 또는 설정을 바꾼 뒤(after1, after2 ...)")
     sn.add_argument("--label", help="before | baseline | baseline2 | after1 | after2 ... (생략하면 다음 순서를 자동 선택)")

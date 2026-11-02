@@ -25,6 +25,7 @@ from .package_collect import Item, collect_extra_items, collect_items
 from .package_savepoint import FAILED_SUFFIX, JOURNAL_VERSION, LOCK_SUFFIX, SAVEPOINT_BYTES, SAVEPOINT_SECONDS, _GRACEFUL_SAVEPOINT, _Journal, _OutputLock, _ResumeVerifyFailed, _cleanup_stale_stages, _fingerprint, _prepare_part, discard_partial, part_paths
 from .package_verify import verify_package
 from .package_zip import COMPRESS_MODES, _PartZip, _write_entry, _zi_dump, _zi_load
+RECORD_ONLY_FIELDS = frozenset({"display_icon", "uninstall_string", "install_date"})  # 설정 기록 모드 전용(경로에 사용자 이름이 있을 수 있어 묶음에 넣지 않는다)
 
 
 def export_package(rules: list[Rule], out: Path, programs: list[Program],
@@ -308,7 +309,7 @@ def _export_once(rules, out, programs, winget_text, expand, winget_list_text, ex
         savepoint()  # 마무리 단계가 실패해도 담은 파일은 다시 담지 않도록
         journal.close()
         journal = None
-        zf.writestr("programs/registry.json", json.dumps([asdict(p) for p in programs],
+        zf.writestr("programs/registry.json", json.dumps([{k: v for k, v in asdict(p).items() if k not in RECORD_ONLY_FIELDS} for p in programs],
                                                          ensure_ascii=False, indent=2))
         if winget_text:
             zf.writestr("programs/winget.json", winget_text)
