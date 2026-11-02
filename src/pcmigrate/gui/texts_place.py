@@ -105,7 +105,14 @@ def install(ns: dict) -> None:
     PL_ERR_MINIMAL = "오류로 멈췄고 자세한 결과는 만들지 못해 오류 요약만 남겼습니다. 오류 로그를 확인해 주세요."
     PL_SUM_PLACE = f"{ICON_OK} 놓을 파일 {{n:,}}개 ({{size}})"
     PL_SUM_PLACED = f"{ICON_OK} 놓은 파일 {{n:,}}개 ({{size}})"
-    PL_SUM_SAME_PREVIEW = "그중 이미 같은 파일이 있어 건너뛸 것 {n:,}개"
+    PL_SUM_PLACE_MAX = f"{ICON_OK} 놓을 파일 {{n:,}}개 (받은 파일 전체 {{size}} 중)"  # 건너뛸 파일이 있으면 정확한 용량을 알 수 없다
+    PL_SUM_PLACE_STOPPED = f"{ICON_FAIL} 중단됨 — 일부만 확인: 지금까지 놓을 파일 {{n:,}}개 ({{size}})"
+    PL_SUM_PLACED_STOPPED = f"{ICON_FAIL} 중단됨 — 일부만 처리: 지금까지 놓은 파일 {{n:,}}개 ({{size}})"
+    PL_SUM_NONE_PREVIEW = f"{ICON_WARN} 놓을 수 있는 파일이 없습니다(직접 옮길 것 {{n}}건)"
+    PL_SUM_NONE_DONE = f"{ICON_WARN} 놓은 파일이 없습니다(직접 옮길 것 {{n}}건)"
+    PL_SUM_SAME_PREVIEW = "이미 같은 파일이 있어 건너뛸 것 {n:,}개"
+    PL_SUM_REFUSED_PREVIEW = f"{ICON_WARN} 덮어쓰기를 거부해 건너뛸 것 {{n:,}}개"
+    PL_SUM_REFUSED = f"{ICON_WARN} 덮어쓰기를 거부해 건너뜀 {{n:,}}개"
     PL_SUM_SAME = "이미 같은 파일이 있어 건너뜀 {n:,}개"
     PL_SUM_MANUAL = f"{ICON_WARN} 직접 옮길 것 {{n}}건"
     PL_SUM_FAILED = f"{ICON_FAIL} 실패 {{n}}개"
@@ -120,7 +127,14 @@ def install(ns: dict) -> None:
     PL_DEST_NEWER = (f"{ICON_WARN} 이미 있는 파일이 받은 파일보다 더 새로운 것이 {{n}}개 있습니다. "
                      "새 PC에서 이미 작업한 파일일 수 있으니 덮어쓰기 전에 확인해 주세요.")
     PL_DEST_NEWER_DONE = f"{ICON_WARN} 덮어쓰기 전에 기존 파일이 더 새로웠던 것이 {{n}}개 있습니다. 기존 파일은 백업 파일(.bak)로 남아 있습니다."
-    PL_REMAINING = "받은 폴더에 남은 것: 파일 {files:,}개 / {size}. 빈 폴더는 지우지 않았습니다. 확인한 뒤 직접 지워 주세요."
+    PL_REMAINING_STOPPED = ("아직 놓지 않은 파일이 {files:,}개({size}) 남아 있습니다. 지우지 마세요. "
+                            "원인을 확인한 뒤 미리보기부터 다시 하면 이어서 놓습니다.")
+    PL_REMAINING_UNPLACED = ("받은 폴더에 아직 놓지 않은 파일이 {files:,}개({size}) 남아 있습니다(아래 '못 놓은 것' 표 참고). "
+                             "지우지 마세요. 표의 사유를 보고 직접 옮기거나 원인을 해결한 뒤 미리보기부터 다시 해 주세요.")
+    PL_REMAINING_REFUSED = ("덮어쓰기를 거부한 파일이 {n:,}개 있습니다. 받은 폴더의 것이 새 데이터일 수 있으니 지우지 마세요. "
+                            "확인한 뒤 직접 옮기거나, '덮어쓰지 않기'를 끄고 미리보기부터 다시 해 주세요(기존 파일은 백업 파일로 남습니다).")
+    PL_REMAINING_CLEAN = ("정리가 끝났습니다. 받은 폴더에 남은 것은 빈 폴더와 기록 파일뿐이니 "
+                          "확인한 뒤 받은 폴더를 지워도 됩니다(이 도구는 빈 폴더와 기록 파일을 지우지 않습니다).")
     PL_UNREAD = f"{ICON_WARN} 끝까지 읽지 못한 곳이 {{n}}곳 있어 남은 파일을 정확히 알 수 없습니다."
     PL_RETRY_NOTE = ("실패한 파일은 받은 폴더에 그대로 있습니다. 원인을 해결한 뒤 '미리보기'를 다시 하고 '놓기'를 누르면 "
                      "실패한 파일부터 이어서 처리합니다.")
@@ -161,11 +175,15 @@ def install(ns: dict) -> None:
     PL_TODO_NETWORK = "네트워크 공유 폴더가 원래 위치였던 파일은 자동으로 놓지 않습니다. 공유 폴더에 직접 복사해 주세요."
     PL_TODO_LOCKED = "다른 프로그램(CAD, 탐색기 미리보기 등)이 쓰는 파일이 있었습니다. 그 프로그램을 닫은 뒤 미리보기부터 다시 해 주세요."
     PL_TODO_LINK = "바로가기(링크)는 따라가지 않고 건너뛰었습니다. 링크 너머는 따로 확인해 직접 옮겨 주세요."
-    PL_TODO_NOOVERWRITE = "덮어쓰지 않기로 해서 건너뛴 파일은 확인한 뒤 직접 옮기거나, 옵션을 끄고 다시 해 주세요(기존 파일은 백업 파일로 남습니다)."
+    PL_TODO_NOOVERWRITE = ("덮어쓰지 않기로 해서 건너뛴 파일은 받은 폴더의 것이 새 데이터일 수 있으니 지우지 마세요. "
+                           "확인한 뒤 직접 옮기거나, 옵션을 끄고 미리보기부터 다시 해 주세요(기존 파일은 백업 파일로 남습니다).")
     PL_TODO_NAME = "Windows 에서 쓸 수 없는 이름의 파일은 이름을 바꿔 직접 옮겨 주세요."
     PL_TODO_UNVERIFIED = "받기가 끝나고 확인되지 않은 폴더는 놓지 않았습니다. 먼저 받기를 마치고 검사해 주세요."
     PL_TODO_OTHER = "표의 '사유'를 보고 직접 처리해 주세요."
-    PL_TODO_LEFTOVER = "받은 폴더에 남은 파일은 확인한 뒤 직접 지워 주세요. 이 도구는 받은 폴더의 빈 폴더와 기록 파일을 지우지 않습니다."
+    PL_TODO_LEFTOVER = ("복사는 끝났지만 받은 폴더에서 지우지 못한 파일은, 대상에 온전히 있는지 확인한 뒤 받은 폴더에서 직접 지워 주세요"
+                        "(표의 사유 참고). 아직 놓지 않은 파일은 지우지 마세요.")
+    PL_TODO_UNPLACED = ("아직 놓지 않은 파일이 받은 폴더에 남아 있습니다. 지우지 마세요. "
+                        "원인을 확인한 뒤 미리보기부터 다시 하면 이어서 놓습니다.")
     PL_TODO_WARNINGS = f"{ICON_WARN} 확인할 경고 {{n}}건(자세한 내용은 결과 리포트의 '경고' 항목):"
     PL_TODO_WARNINGS_PREVIEW = f"{ICON_WARN} 확인할 경고 {{n}}건(미리보기는 리포트를 저장하지 않습니다. 놓은 뒤 결과 리포트의 '경고' 항목에서도 볼 수 있습니다):"
     PL_TODO_PATHS = (f"{ICON_WARN} 파일 안에 적힌 경로(도면의 외부 참조 등)는 고쳐 쓰지 않습니다. "
@@ -176,9 +194,11 @@ def install(ns: dict) -> None:
     PL_ACK = "받은 폴더의 파일이 지워진다는 것과, 구 PC의 원본이 그대로 있다는 것을 확인했습니다."
     PL_CONFIRM_TITLE = "받은 파일을 원래 위치에 놓을까요?"
     PL_CONFIRM = ("받은 파일을 원래 위치로 놓습니다.\n\n"
-                  "· 놓을 파일: {n:,}개 ({size})\n· 덮어쓰는 파일: {over:,}개 (기존 파일은 백업 파일(.bak)로 보관됩니다)\n{delete}\n"
+                  "· 놓을 파일: {n:,}개 ({size}){skip}\n· 덮어쓰는 파일: {over:,}개 (기존 파일은 백업 파일(.bak)로 보관됩니다)\n{delete}\n"
                   "· 직접 옮겨야 할 것: {manual}건\n· 결과 리포트: {report}\n\n계속할까요?")
-    PL_CONFIRM_DELETE = "· 받은 폴더에서 지우는 파일: {n:,}개 / {size}  ← 되돌릴 수 없습니다"
+    PL_CONFIRM_SIZE_MAX = "받은 파일 전체 {size} 중"
+    PL_CONFIRM_SKIP =", 건너뛸 것 {n:,}개"
+    PL_CONFIRM_DELETE ="· 받은 폴더에서 지우는 파일: {n:,}개 / {size}  ← 되돌릴 수 없습니다"
     PL_CONFIRM_DELETE_NONE = "· 받은 폴더에서 지우는 파일: 없음"
     PL_CONFIRM_MOVE = "· 받은 폴더에서 원래 위치로 이동: {n:,}개 (같은 드라이브라 저장 공간은 늘지 않고, 받은 폴더에서는 사라집니다)"
     PL_CONFIRM_KEEP = "· 받은 폴더의 파일은 지우지 않습니다(복사만)."

@@ -117,8 +117,10 @@ def place_summary(rep: Any) -> dict:
     preview = bool(rep.dry_run)
     interrupted = str((getattr(rep, "meta", {}) or {}).get("interrupted") or "")
     same = int(c.get("skipped_identical", 0))
-    if preview:
-        placed_n, placed_bytes = int(rep.total_files), int(rep.total_bytes)
+    refused = sum(1 for r in rep.skipped if r.code == po.NO_OVERWRITE)  # '덮어쓰지 않기'로 거부한(또는 거부할) 파일
+    if preview:  # 미리보기의 total_files 에는 이미 같은 파일과 덮어쓰기 거부 예정이 들어 있다: 실제로 놓을 것만 센다
+        skipped_n = same + refused
+        placed_n, placed_bytes = max(0, int(rep.total_files) - skipped_n), int(rep.total_bytes)
     else:
         placed_n, placed_bytes = int(c.get("moved", 0)) + int(c.get("copied", 0)), int(rep.placed_bytes)
     over_n = (len(rep.overwrites) + int(rep.overwrite_truncated)) if preview else int(rep.overwritten_count)
@@ -138,10 +140,11 @@ def place_summary(rep: Any) -> dict:
     gi = dict(rep.gather_info or {})
     return {
         "preview": preview, "interrupted": interrupted, "why": T.PL_WHY.get(interrupted, interrupted),
-        "keep": bool(rep.keep), "placed_n": placed_n, "placed_bytes": placed_bytes, "same_n": same,
+        "keep": bool(rep.keep), "placed_n": placed_n, "placed_bytes": placed_bytes, "same_n": same, "refused_n": refused,
+        "bytes_exact": not (preview and (same or refused)),  # 미리보기에서 건너뛸 파일이 있으면 용량은 '받은 파일 전체' 값이다
         "manual_n": int(rep.manual_count), "failed_n": int(rep.failed_count), "overwrite_n": over_n, "dest_newer_n": dest_newer,
         "move_n": move_n, "delete_n": delete_n, "delete_bytes": delete_bytes, "removed_n": int(rep.removed_sources) + (int(g.removed_sources) if g is not None else 0),
-        "remaining_files": int(remaining.get("files", 0) or 0), "remaining_bytes": int(remaining.get("bytes", 0) or 0),
+        "has_remaining": bool(remaining), "remaining_files": int(remaining.get("files", 0) or 0), "remaining_bytes": int(remaining.get("bytes", 0) or 0),
         "unreadable": int(remaining.get("unreadable", 0) or 0),
         "gather": bool(gi), "gather_folder": str(gi.get("folder", "")), "gather_n": len(rep.gathered),
         "gather_blocked": bool(gi.get("blocked")), "gather_guide_error": bool(gi.get("guide_error")),
@@ -160,13 +163,24 @@ def place_head(sm: dict) -> str:
 
 
 def place_summary_line(sm: dict) -> str:
-    """한 줄 요약 카드의 글."""
+    """한 줄 요약 카드의 글. 중단/오류일 때는 '✔' 대신 중단 표시, 놓을 수 있는 파일이 없을 때는 주의 표시를 쓴다."""
     if sm["nothing"] and not sm["interrupted"]:
         return T.PL_SUM_NOTHING
-    parts = [(T.PL_SUM_PLACE if sm["preview"] else T.PL_SUM_PLACED).format(n=sm["placed_n"], size=_size(sm["placed_bytes"]))]
+    preview, size = sm["preview"], _size(sm["placed_bytes"])
+    none_placed = not sm["placed_n"] and not sm["same_n"] and not sm["interrupted"] and (sm["manual_n"] or sm["failed_n"])
+    if sm["interrupted"]:
+        parts = [(T.PL_SUM_PLACE_STOPPED if preview else T.PL_SUM_PLACED_STOPPED).format(n=sm["placed_n"], size=size)]
+    elif none_placed:
+        parts = [(T.PL_SUM_NONE_PREVIEW if preview else T.PL_SUM_NONE_DONE).format(n=sm["manual_n"])]
+    elif preview:
+        parts = [(T.PL_SUM_PLACE if sm["bytes_exact"] else T.PL_SUM_PLACE_MAX).format(n=sm["placed_n"], size=size)]
+    else:
+        parts = [T.PL_SUM_PLACED.format(n=sm["placed_n"], size=size)]
     if sm["same_n"]:
-        parts.append((T.PL_SUM_SAME_PREVIEW if sm["preview"] else T.PL_SUM_SAME).format(n=sm["same_n"]))
-    if sm["manual_n"]:
+        parts.append((T.PL_SUM_SAME_PREVIEW if preview else T.PL_SUM_SAME).format(n=sm["same_n"]))
+    if sm["refused_n"]:
+        parts.append((T.PL_SUM_REFUSED_PREVIEW if preview else T.PL_SUM_REFUSED).format(n=sm["refused_n"]))
+    if sm["manual_n"] and not none_placed:
         parts.append(T.PL_SUM_MANUAL.format(n=sm["manual_n"]))
     parts.append(T.PL_SUM_FAILED.format(n=sm["failed_n"]) if sm["failed_n"] else "")
     return "    ".join(p for p in parts if p)
@@ -252,9 +266,16 @@ def place_todo_lines(rep: Any, warnings: list[str] | None = None) -> list[str]:
     if any(code in codes for code in ("in_use", "locked")):
         lines.append(T.PL_TODO_LOCKED)
         covered.update(("in_use", "locked"))
-    if codes & {po.LEFTOVER, po.SRC_CHANGED, po.SRC_READONLY, po.SRC_ADS, po.SRC_ADS_UNKNOWN} or (not rep.dry_run and not rep.keep and (rep.remaining or {}).get("files")):
+    left_codes = {po.LEFTOVER, po.SRC_CHANGED, po.SRC_READONLY, po.SRC_ADS, po.SRC_ADS_UNKNOWN}
+    if codes & left_codes:  # 복사는 끝났고 받은 폴더의 사본만 못 지운 것: 대상을 확인한 뒤 지워도 된다
         lines.append(T.PL_TODO_LEFTOVER)
-        covered.update((po.LEFTOVER, po.SRC_CHANGED, po.SRC_READONLY, po.SRC_ADS, po.SRC_ADS_UNKNOWN))
+        covered.update(left_codes)
+    if not rep.dry_run and not rep.keep and (rep.remaining or {}).get("files"):
+        sm = place_summary(rep)
+        only_leftover = bool(rep.leftover) and not (sm["interrupted"] or sm["failed_n"] or rep.skipped)
+        only_refused = bool(sm["refused_n"]) and not (sm["interrupted"] or sm["failed_n"]) and len(rep.skipped) == sm["refused_n"]
+        if not only_leftover and not only_refused:  # 거부만 남았으면 위 '덮어쓰지 않기' 안내가 이미 지우지 말라고 한다
+            lines.append(T.PL_TODO_UNPLACED)
     if codes - covered - {po.INSIDE_RECEIVE, po.SAME_LOCATION}:
         lines.append(T.PL_TODO_OTHER)
     if rep.warnings:
@@ -269,9 +290,29 @@ def place_todo_lines(rep: Any, warnings: list[str] | None = None) -> list[str]:
     return lines
 
 
+def remaining_notes(sm: dict) -> list[str]:
+    """놓은 뒤 받은 폴더에 남은 것 안내(복사만 하기가 아닐 때). '지워도 되는지'는 한 가지로만 말한다:
+    중단/실패/덮어쓰기 거부/건너뜀으로 남은 파일은 아직 놓지 않은 것이므로 지우지 말라고 하고,
+    놓기가 정상으로 끝나 남은 것이 빈 폴더와 기록 파일뿐일 때만 받은 폴더를 지워도 된다고 한다."""
+    files = sm["remaining_files"]
+    if not files:
+        clean = sm["has_remaining"] and not sm["interrupted"] and not sm["failed_n"] and not sm["unreadable"] and not sm["manual_n"]
+        return [T.PL_REMAINING_CLEAN] if clean else []
+    args = {"files": files, "size": _size(sm["remaining_bytes"])}
+    stopped = bool(sm["interrupted"] or sm["failed_n"])
+    only_refused = sm["refused_n"] and not stopped and sm["manual_n"] == sm["refused_n"]
+    out: list[str] = []
+    if not only_refused:
+        out.append((T.PL_REMAINING_STOPPED if stopped else T.PL_REMAINING_UNPLACED).format(**args))
+    if sm["refused_n"]:
+        out.append(T.PL_REMAINING_REFUSED.format(n=sm["refused_n"]))
+    return out
+
+
 def place_notes(rep: Any, sm: dict) -> list[str]:
     """요약 아래 안내 줄들(대상이 더 새로움, 받은 폴더에 남은 것, 읽지 못한 곳, 모으기 결과, 실패 안내)."""
     notes: list[str] = []
+    skip_retry = False
     if sm["preview"] and sm["move_n"] and not sm["keep"]:  # 같은 드라이브 이동: 삭제 예정은 아니지만 받은 폴더에서 사라진다(확인 체크는 요구하지 않는다)
         notes.append(T.PL_MOVE_NOTE.format(n=sm["move_n"]))
     if sm["dest_newer_n"]:
@@ -281,8 +322,11 @@ def place_notes(rep: Any, sm: dict) -> list[str]:
             notes.append(T.PL_REMOVED.format(n=sm["removed_n"]))
         if sm["keep"]:
             notes.append(T.PL_KEEP_NOTE_RESULT)
-        elif sm["remaining_files"]:
-            notes.append(T.PL_REMAINING.format(files=sm["remaining_files"], size=_size(sm["remaining_bytes"])))
+        else:
+            remain = remaining_notes(sm)
+            notes.extend(remain)
+            if remain and sm["failed_n"]:  # 받은 폴더에 남은 것 안내가 '미리보기부터 다시 하면 이어서 놓습니다'까지 말하므로 같은 말을 되풀이하지 않는다
+                skip_retry = True
         if sm["unreadable"]:
             notes.append(T.PL_UNREAD.format(n=sm["unreadable"]))
     if sm["gather"]:
@@ -292,7 +336,7 @@ def place_notes(rep: Any, sm: dict) -> list[str]:
             notes.append(T.PL_GATHER_RESULT.format(folder=sm["gather_folder"], n=sm["gather_n"]))
         if sm["gather_guide_error"]:
             notes.append(T.PL_GATHER_GUIDE_ERROR)
-    if sm["failed_n"] and not sm["preview"]:
+    if sm["failed_n"] and not sm["preview"] and not skip_retry:
         notes.append(T.PL_RETRY_NOTE)
     return notes
 
@@ -309,5 +353,7 @@ def place_confirm_text(rep: Any, keep: bool, report_path: str) -> str:
         if sm["delete_n"]:
             parts.append(T.PL_CONFIRM_DELETE.format(n=sm["delete_n"], size=_size(sm["delete_bytes"])))
         delete = "\n".join(parts) or T.PL_CONFIRM_DELETE_NONE
-    return T.PL_CONFIRM.format(n=sm["placed_n"], size=_size(sm["placed_bytes"]), over=sm["overwrite_n"], delete=delete,
+    skip_n = sm["same_n"] + sm["refused_n"]
+    size = _size(sm["placed_bytes"]) if sm["bytes_exact"] else T.PL_CONFIRM_SIZE_MAX.format(size=_size(sm["placed_bytes"]))
+    return T.PL_CONFIRM.format(n=sm["placed_n"], size=size, skip=T.PL_CONFIRM_SKIP.format(n=skip_n) if skip_n else "", over=sm["overwrite_n"], delete=delete,
                                manual=sm["manual_n"], report=report_path)

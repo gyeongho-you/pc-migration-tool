@@ -29,7 +29,8 @@ MAX_CHOICES = 30
 
 
 def _clean(p: str) -> str:
-    return (p or "").strip()
+    """입력칸의 경로: 앞뒤 공백과 따옴표를 지운다(탐색기의 '경로로 복사' 는 따옴표가 붙는다. CLI 와 같은 규칙)."""
+    return real_api.clean_path_arg(p or "")
 
 
 class PlaceMixin:
@@ -355,6 +356,9 @@ class PlaceMixin:
         if rep is None:
             return
         try:
+            err = rep.meta.get("error")  # 백엔드가 예외 원문(홈 경로 포함)을 남긴다: 저장 전에 사용자 폴더 이름을 치환한다(항목별 경로는 기능상 그대로)
+            if isinstance(err, str):
+                rep.meta["error"] = errorlog.tokenize_home(err)
             saved, note = self._write_place_report(rep, path)
         except Exception as e:  # noqa: BLE001 - 저장 오류가 작업 결과/원래 예외를 가리지 않게
             errorlog.record(e, "받은 파일 놓기: 결과 리포트 저장")
@@ -390,7 +394,8 @@ class PlaceMixin:
             rep = holder.get("rep")
             if rep is not None:
                 s.report, s.was_preview, s.warnings, s.stopped_note = rep, not apply, list(holder["warns"]), ""
-                s.stopped, s.report_stale = "cancelled" if isinstance(holder.get("exc"), Cancelled) else "error", False
+                s.stopped = "cancelled" if isinstance(holder.get("exc"), Cancelled) else "error"
+                s.report_stale = holder.get("key") is not None and holder["key"] != self._place_key()
             s.saved_path, s.save_note = holder.get("saved", ""), holder.get("note", "")
             self.emit("place_done", rep)
         return n
@@ -420,6 +425,10 @@ class PlaceMixin:
             if chk.apply_block:
                 raise GuardError(chk.apply_block)
             prev = s.preview_report
+            if prev is not None:
+                psm = place_summary(prev)
+                if not psm["total_files"] and not psm["gather_n"]:  # place_reasons 와 같은 가드: 놓을 것도 모을 것도 없으면 놓지 않는다
+                    raise GuardError(T.WHY_PL_NOTHING)
             if prev is not None and not s.keep and place_summary(prev)["delete_n"] and not s.ack:
                 raise GuardError(T.G_PL_NEED_ACK)
             bad = self._place_probe_report(report_path)
@@ -437,7 +446,7 @@ class PlaceMixin:
             kw["env"] = self.place_env
         if self.place_protected_fn is not None:
             kw["protected_fn"] = self.place_protected_fn
-        holder: dict = {"rep": None, "exc": None, "warns": [], "saved": "", "note": "", "finished": False, "minimal": False}
+        holder: dict = {"key": key, "rep": None, "exc": None, "warns": [], "saved": "", "note": "", "finished": False, "minimal": False}
 
         def work(progress, token):
             def warn(msg: str) -> None:
@@ -466,7 +475,8 @@ class PlaceMixin:
 
         def adopt(rep: Any) -> None:
             s.report, s.was_preview, s.warnings = rep, not apply, list(holder["warns"])
-            s.stopped, s.stopped_note, s.report_stale = "", "", False
+            s.stopped, s.stopped_note = "", ""
+            s.report_stale = key != self._place_key()  # 실행하는 동안 입력/옵션을 바꿨으면 끝난 결과는 '이전 결과'
             self._place_chk = None  # 폴더 상태가 바뀌었을 수 있다
             if apply:
                 s.saved_path, s.save_note = holder.get("saved", ""), holder.get("note", "")
@@ -478,6 +488,8 @@ class PlaceMixin:
             adopt(rep)
             if not apply:
                 s.preview_key, s.preview_report, s.ack = key, rep, False
+                if key != self._place_key():  # 미리보기 도중 옵션을 바꿨다: 놓기는 이미 '다시 미리보기'로 막혀 있고 이유 문구도 맞춘다
+                    s.preview_stale = True
             self.emit("place_done", rep)
 
         def fail():
