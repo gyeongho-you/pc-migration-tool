@@ -192,14 +192,14 @@ class FilesMixin:
         n, size, unknown = self.data_total()
         b = self.bundle_item()
         bsize = fmt_bytes(b.total_bytes or 0) if b is not None else ""
-        dn, dsize = self.drop_total()
+        dn = self.drop_total()[0]
         if not n:
             if dn:
-                return T.DP_TOTAL_ONLY.format(n=dn, size=fmt_bytes(dsize)) + (" · " + T.BUNDLE_INCLUDED if b is not None else "")
+                return T.DP_TOTAL_ONLY.format(n=dn, size=self._drop_size_text()) + (" · " + T.BUNDLE_INCLUDED if b is not None else "")
             return T.FD_TOTAL_ONLY_BUNDLE.format(note=T.BUNDLE_INCLUDED, size=bsize) if b is not None else T.FD_TOTAL_NONE
         text = T.FD_TOTAL.format(n=n, size=fmt_bytes(size))
         text += (" " + T.FD_TOTAL_UNKNOWN.format(k=unknown) if unknown else "")
-        text += (" + " + T.DP_TOTAL.format(n=dn, size=fmt_bytes(dsize)) if dn else "")
+        text += (" + " + self.drop_total_text() if dn else "")
         return text + (T.FD_TOTAL_BUNDLE.format(note=T.BUNDLE_INCLUDED, size=bsize) if b is not None else "")
 
     def add_data_folder(self, path: str) -> str:
@@ -263,6 +263,8 @@ class FilesMixin:
         for r in self.data_rows(visible_only=False):
             if r.selected:
                 out.append(SelectedItem(r.path, True, r.total_bytes, r.total_files, r.kind))
+        for e in self.drop_dirs():  # 직접 추가한 폴더: 폴더째 전송(자동 목록의 필터링과 무관). 겹치는 폴더는 plan_items 가 한 번만 보낸다
+            out.append(SelectedItem(e.path, True, None, None, T.FD_KIND_MANUAL))
         b = self.bundle_item()
         if b is not None:  # 체크한 경우에만(자동으로 넣지 않는다)
             out.append(b)
@@ -370,6 +372,10 @@ class FilesMixin:
         except OSError:
             pass
 
+    def _drop_size_text(self) -> str:
+        n, size = self.drop_total()
+        return fmt_bytes(size) + (" 이상" if self.drop_unknown() else "")
+
     def data_has_send(self) -> bool:
         """보낼 것이 있는가(체크한 폴더가 있거나, 설정 묶음만 함께 보내기로 체크했다)."""
         return bool(self.data_selection()) or self.bundle_item() is not None or bool(self.files.drops)
@@ -475,9 +481,8 @@ class FilesMixin:
         if len(items) > 6:
             lines.append("  · " + T.TR_SELECTION_MORE.format(n=len(items) - 6))
         lines += self._bundle_lines(self.files.transfer_items)
-        dn, dsize = self.drop_total()
-        if dn:
-            lines.append(T.DP_TOTAL.format(n=dn, size=fmt_bytes(dsize)))
+        if self.drop_files():
+            lines.append(self.drop_total_text(files_only=True))
         return "\n".join(lines)
 
     def _bundle_lines(self, items: list) -> list[str]:
@@ -503,9 +508,8 @@ class FilesMixin:
         if len(items) > 4:
             lines.append("  · " + T.TR_SELECTION_MORE.format(n=len(items) - 4))
         lines += ["  · " + t for t in self._bundle_lines(all_items)]
-        dn, dsize = self.drop_total()
-        if dn:
-            lines.append("  · " + T.DP_TOTAL.format(n=dn, size=fmt_bytes(dsize)))
+        if self.drop_files():
+            lines.append("  · " + self.drop_total_text(files_only=True))
         return "\n".join(lines)
 
     # ---- 보내는 쪽 화면의 한 줄 요약/확인 문구
@@ -518,9 +522,8 @@ class FilesMixin:
         items = self.lan_send_items() if items is None else items
         folders, size = self._folders_and_size(items)
         text = T.TX_SELECTION.format(n=len(folders), size=size) if folders else T.TX_SELECTION_UNKNOWN.format(n=0)
-        dn, dsize = self.drop_total()
-        if dn:
-            text = (text + " + " if folders else "") + T.DP_TOTAL.format(n=dn, size=fmt_bytes(dsize))
+        if self.drop_files():
+            text = (text + " + " if folders else "") + self.drop_total_text(files_only=True)
         note = self.bundle_note(items)
         return text + (" · " + note if note else "")
 
@@ -528,8 +531,7 @@ class FilesMixin:
         items = self.lan_send_items() if items is None else items
         folders, size = self._folders_and_size(items)
         text = T.TX_CONFIRM.format(n=len(folders), size=size, target=target)
-        dn, dsize = self.drop_total()
-        lines = self._bundle_lines(items) + ([T.DP_TOTAL.format(n=dn, size=fmt_bytes(dsize))] if dn else [])
+        lines = self._bundle_lines(items) + ([self.drop_total_text(files_only=True)] if self.drop_files() else [])
         return ("\n".join(lines) + "\n\n" + text) if lines else text
 
     def files_stage(self, screen: str) -> int:
@@ -555,7 +557,7 @@ class FilesMixin:
         if self.is_verify_flow():
             return [s.verify_target]
         if self.has_selection():
-            return [i.path for i in self.files.transfer_items if not self.is_bundle_item(i)] + [e.path for e in self.files.drops if e.is_dir]
+            return [i.path for i in self.files.transfer_items if not self.is_bundle_item(i)]
         return [s.transfer_src]
 
     def _check_selection_paths(self, dst: str):
@@ -578,7 +580,7 @@ class FilesMixin:
         elif items or f.drops:
             rd = os.path.realpath(dst)
             inside = False
-            for i in [*items, *[e for e in f.drops if e.is_dir]]:
+            for i in items:
                 rs = os.path.realpath(i.path)
                 try:
                     if os.path.commonpath([rs, rd]) == rs:
@@ -690,7 +692,9 @@ class FilesMixin:
         items = list(f.transfer_items)
         junk = f.junk
         if f.drops:  # 직접 고른 파일: 전송을 시작할 때 백엔드가 겹침을 빼고 임시 보관 폴더에 담아 함께 보내고 지운다(중단돼도 리포트 저장)
-            extra["extra_files"] = list(f.drops)
+            files_only = self.drop_files()  # 폴더는 선택 폴더 항목(폴더째)으로 가고, 파일만 임시 보관 경로로 간다
+            if files_only:
+                extra["extra_files"] = files_only
         if report_path and (f.drops or _accepts(d.run_transfer_selection, "abort_report")):
             extra["abort_report"] = report_path  # 중단/예외/보낼 것이 없을 때도 결과 리포트를 저장한다
 
@@ -937,7 +941,7 @@ class FilesMixin:
         t, c = _clean(target), (code or "").strip()
         f, lan = self.files, self._lan()
         junk = f.junk
-        drops = list(f.drops)
+        drops = self.drop_files()
         f.tx_report, f.tx_error, f.tx_error_code, f.tx_cancelled = None, "", "", False
         f.tx_bundle = any(self.is_bundle_item(i) for i in items)
         holder: dict[str, Any] = {}

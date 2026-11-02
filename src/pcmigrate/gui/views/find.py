@@ -44,14 +44,12 @@ class FindView(BaseView):
         self.bundle_note.pack(anchor="w", fill="x", padx=(24, 0))
         autowrap(self.bundle_note, 40)
 
-        # ---- 찾기 / 직접 추가
+        # ---- 찾기(위쪽은 '내 파일 찾기' 자동 목록 전용. 직접 추가는 아래 상자)
         top = ttk.Frame(body)
         self.top_row = top
         top.pack(fill="x", pady=(2, 4))
         self.find_btn = ActionButton(top, text=T.BTN_FD_FIND, command=lambda: self.guarded(self.c.find_data_start))
         self.find_btn.pack(side="left")
-        self.add_btn = ActionButton(top, text=T.BTN_FD_ADD, kind="plain", command=self._add_folder)
-        self.add_btn.pack(side="left", padx=(8, 0))
         self.primary = self.find_btn
         self.summary = FoldTLabel(body, text="", justify="left", foreground=MUTED_FG)
         self.summary.pack(anchor="w", fill="x")
@@ -139,7 +137,7 @@ class FindView(BaseView):
         self.receive_btn = ActionButton(self.links, text=T.FD_RECEIVE_LINK, kind="link", command=lambda: self.guarded(self.c.files_receive_only))
         self.receive_btn.pack(anchor="w", pady=(2, 0))
         add_tooltip(self.receive_btn, T.FD_RECEIVE_NOTE)
-        for b in (self.find_btn, self.add_btn, self.drop_files_btn):
+        for b in (self.find_btn, self.drop_files_btn, self.drop_folder_btn):
             bind_alt(self.app, b, lambda: self.app.current == self.name)
         self.hook = DropHook(self.drop_box, self._on_drop)  # 끌어다 놓기(실패하면 조용히 꺼지고, 버튼은 그대로 동작)
         self.after(200, self._install_hook)
@@ -197,7 +195,6 @@ class FindView(BaseView):
         self.find_btn.configure(text=T.BTN_FD_AGAIN if res is not None else T.BTN_FD_FIND)
         self.find_btn.state(["disabled"] if busy else ["!disabled"])
         self.find_btn.emphasize(not n_sel)
-        self.add_btn.state(["disabled"] if busy else ["!disabled"])
         for b in (self.select_all_btn, self.clear_all_btn):
             b.state(["disabled"] if busy or not rows else ["!disabled"])
         self.junk_var.set(f.junk)
@@ -237,9 +234,14 @@ class FindView(BaseView):
         row.pack(fill="x")
         self.drop_files_btn = ActionButton(row, text=T.BTN_DP_FILES, kind="plain", command=self._drop_pick_files)
         self.drop_files_btn.pack(side="left")
+        self.drop_folder_btn = ActionButton(row, text=T.BTN_DP_FOLDER, kind="plain", command=self._drop_pick_folder)
+        self.drop_folder_btn.pack(side="left", padx=(8, 0))
         self.drop_hint = FoldTLabel(box, text=T.DP_HINT, justify="left", foreground=MUTED_FG)
-        self.drop_hint.pack(anchor="w", fill="x", pady=(2, 2))
+        self.drop_hint.pack(anchor="w", fill="x", pady=(2, 0))
         autowrap(self.drop_hint, 40)
+        self.drop_nofilter = FoldTLabel(box, text=T.DP_NO_FILTER, justify="left", foreground=MUTED_FG)  # 직접 추가는 확장자 필터링을 거치지 않는다
+        self.drop_nofilter.pack(anchor="w", fill="x", pady=(0, 2))
+        autowrap(self.drop_nofilter, 40)
         add_tooltip(box, T.TIP_DP_TEMP)
         cols = [("path", T.DP_COLS[0], 380), ("size", T.DP_COLS[1], 80), ("when", T.DP_COLS[2], 100)]
         frame, self.drop_tree = make_tree(box, cols, height=4, select="extended")
@@ -284,7 +286,7 @@ class FindView(BaseView):
             self.drop_iids[iid] = path
         if rows:
             if not self.drop_tree_frame.winfo_manager():
-                self.drop_tree_frame.pack(fill="x", pady=(2, 2), after=self.drop_hint)
+                self.drop_tree_frame.pack(fill="x", pady=(2, 2), after=self.drop_nofilter)
             if not self.drop_actions.winfo_manager():
                 self.drop_actions.pack(anchor="w", pady=(2, 0), after=self.drop_tree_frame)
         else:
@@ -297,7 +299,8 @@ class FindView(BaseView):
         else:
             self.drop_msg.pack_forget()
         busy = bool(c.state.busy)
-        self.drop_files_btn.state(["disabled"] if busy else ["!disabled"])
+        for b in (self.drop_files_btn, self.drop_folder_btn):
+            b.state(["disabled"] if busy else ["!disabled"])
         for b in (self.drop_remove_btn, self.drop_clear_btn):
             b.state(["disabled"] if busy or not rows else ["!disabled"])
 
@@ -323,6 +326,11 @@ class FindView(BaseView):
         paths = filedialog.askopenfilenames(parent=self, title=T.DP_ADD_FILES_TITLE)
         if paths:
             self._drop_add([clean_path(p.replace("/", "\\")) for p in paths])
+
+    def _drop_pick_folder(self) -> None:
+        p = filedialog.askdirectory(parent=self, title=T.DP_ADD_FOLDER_TITLE, mustexist=True)
+        if p:
+            self._drop_add([clean_path(p.replace("/", "\\"))])
 
     def _drop_remove(self) -> None:
         sel = [self.drop_iids[i] for i in self.drop_tree.selection() if i in self.drop_iids]
@@ -424,11 +432,6 @@ class FindView(BaseView):
         """'찾을 파일 형식 설정' 창(모달). 작업 중이면 GuardError 로 안내만 한다."""
         from .find_exts_dialog import ExtsDialog
         ExtsDialog(self, self.c)
-
-    def _add_folder(self) -> None:
-        p = filedialog.askdirectory(parent=self, title=T.FD_ADD_TITLE, mustexist=True)
-        if p:
-            self.guarded(self.c.add_data_folder, clean_path(p.replace("/", "\\")))
 
     def _toggle(self, iid: str) -> None:
         r = self.rows.get(iid)

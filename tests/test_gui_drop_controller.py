@@ -8,6 +8,7 @@ from pcmigrate import drop_stage as ds, find_data as fd
 from pcmigrate.gui import state as S, texts as T
 from pcmigrate.gui.controller import Controller, GuardError
 from pcmigrate.gui.runner import Runner
+from pcmigrate.find_data import SelectedItem  # noqa: F401
 from pcmigrate.multi_transfer import MultiReport
 
 from test_gui_controller import FakeApi
@@ -119,7 +120,7 @@ def test_lan_direct_send_with_drops_is_allowed(env):
     env.set_role(T.MV_ROLE_SEND)
     assert env.files_method_reason() == ""
     assert env.lan_send_problem("192.0.2.1", "123456") == ""
-    assert "직접 고른 파일 1개" in env.tx_selection_text() and "직접 고른 파일 1개" in env.tx_confirm_text("192.0.2.1")
+    assert "직접 추가한 1개" in env.tx_selection_text() and "직접 추가한 1개" in env.tx_confirm_text("192.0.2.1")
     env.clear_drops()
     assert env.lan_send_problem("192.0.2.1", "123456") == T.G_TX_NEED_SELECTION
 
@@ -127,9 +128,9 @@ def test_lan_direct_send_with_drops_is_allowed(env):
 def test_totals_text_includes_drops(env):
     sel_folder(env, env.work / "A")
     env.add_drop_paths([str(env.work / "loose.txt")])
-    assert "직접 고른 파일 1개" in env.data_total_text()
+    assert "직접 추가한 1개" in env.data_total_text()
     env.set_data_selected(str(env.work / "A"), False)
-    assert env.data_total_text().startswith("선택한 폴더 없이 직접 고른 파일 1개")
+    assert env.data_total_text().startswith("선택한 폴더 없이 직접 추가한 1개")
 
 
 def start_flow(env, tmp_path, mode=T.MODE_EXTERNAL):
@@ -243,21 +244,95 @@ def test_lan_send_without_drops_passes_nothing_extra(env):
     assert lan.kw == {}
 
 
-def test_folders_go_to_folder_table_not_to_drop_list(env):
-    """폴더는 직접 고른 파일이 아니라 위쪽 폴더 표에 '직접 폴더 추가'와 같은 방식(체크된 상태)으로 들어간다. 파일은 목록에."""
+def test_folders_stay_in_the_box_list_and_go_as_selected_folders(env):
+    """stage70: 폴더도 한 목록(상자)에 담긴다. 위쪽 자동 목록(폴더 표)에는 들어가지 않고, 전송에서는 폴더째(선택 폴더 항목) 간다."""
     msg = env.add_drop_paths([str(env.work / "B"), str(env.work / "loose.txt")])
-    assert T.DP_FOLDERS_MOVED.format(n=1) in msg and T.DP_ADDED.format(n=1) in msg
-    assert env.drop_total()[0] == 1 and env.drop_entries()[0].path.endswith("loose.txt")
-    assert env.data_selection() == [str(env.work / "B")]
-    row = next(r for r in env.data_rows(visible_only=False) if r.path == str(env.work / "B"))
-    assert row.manual and row.selected  # 기존 '직접 폴더 추가' 줄과 같은 종류
-    # 폴더만 놓은 경우: 파일 목록은 비어 있고 안내만
+    assert T.DP_ADDED.format(n=2) in msg
+    assert env.drop_total()[0] == 2 and [e.is_dir for e in env.drop_entries()] == [True, False]
+    assert env.data_selection() == [] and not [r for r in env.data_rows(visible_only=False)]  # 위쪽은 자동 목록 전용
+    rows = env.drop_rows()
+    assert rows[0][3] == T.DP_TAG_FOLDER and rows[0][1] == "-"  # 폴더: 크기는 읽지 않음, '(폴더)' 꼬리표
+    items = env.data_selected_items()
+    assert [i.path for i in items] == [str(env.work / "B")] and items[0].include
+    assert [e.path for e in env.drop_files()] == [str(env.work / "loose.txt")]
+    assert env.data_has_send()
+    assert "크기를 아직 모릅니다" in env.drop_total_text()
+
+
+def test_system_folders_are_refused_in_the_box(env):
+    from pcmigrate.gui.files_flow import unsafe_data_folder
+    root = os.path.abspath(os.sep)
+    assert unsafe_data_folder(root)
+    with pytest.raises(GuardError, match="드라이브 전체"):
+        env.add_drop_paths([root])
+    msg = env.add_drop_paths([root, str(env.work / "B")])  # 섞여 있으면 안전한 것만 담고 안내
+    assert T.G_FD_SYSTEM_FOLDER in msg and env.drop_total()[0] == 1
+
+
+def test_folder_overlap_rules_by_path_prefix_only(env):
+    """겹침: 직접 추가한 폴더가 체크 폴더 안 -> 그 폴더 뺌 / 체크 폴더를 품음 -> 안쪽 자동 폴더 뺌 / 직접 추가끼리 / 파일."""
+    work = env.work
+    sub = work / "A" / "sub"
+    # (1) 직접 추가한 폴더가 체크한 자동 폴더 안에 있다
+    env.add_data_folder(str(work / "A"))
+    env.add_drop_paths([str(sub), str(work / "A" / "a1.txt"), str(work / "B")])
+    rows = {os.path.basename(r[0]): r for r in env.drop_rows()}
+    assert rows["sub"][3] == T.DP_TAG_COVERED and rows["sub"][4] and rows["a1.txt"][4] and not rows["B"][4]
+    assert env.drop_notes() == [T.DP_OVERLAP.format(n=2)]
+    # (2) 직접 추가한 폴더가 체크한 자동 폴더를 품는다: 안쪽 자동 폴더가 빠진다
     env.clear_drops()
-    msg = env.add_drop_paths([str(env.work / "A")])
-    assert msg == T.DP_FOLDERS_MOVED.format(n=1) and env.drop_total()[0] == 0
-    assert str(env.work / "A") in env.data_selection()
-    # 같은 폴더를 다시 놓아도 오류 없이(이미 체크됨) 안내만
-    assert T.DP_FOLDERS_MOVED.format(n=1) in env.add_drop_paths([str(env.work / "A")])
+    env.add_drop_paths([str(work)])
+    assert env.drop_notes() == [T.DP_OVERLAP.format(n=1)]  # 자동 체크 폴더 A 가 바깥 폴더에 포함
+    assert env.folder_cover() == {str(work / "A"): str(work)}
+    # (3) 직접 추가한 폴더끼리, 같은 폴더(자동과 직접 추가)
+    env.clear_drops()
+    env.add_drop_paths([str(work / "A"), str(work / "A" / "sub")])
+    cover = env.folder_cover()
+    assert cover[str(work / "A")] == str(work / "A")  # 같은 폴더면 앞선(자동 체크) 쪽을 남기고 직접 추가 쪽이 빠짐
+    assert cover[str(work / "A" / "sub")] in (str(work / "A"),)
+
+
+def test_overlap_removal_in_transfer_sends_outer_folder_once(tmp_path):
+    """백엔드 확인: 바깥(직접 추가) 폴더 + 안쪽(자동) 폴더 + 안쪽 파일 -> 폴더 한 번, 이중 복사 없음, 리포트에 뺀 목록."""
+    from pcmigrate import multi_transfer as mt
+    from pcmigrate.data_api import run_transfer_selection
+    from test_find_data_multi_transfer import FakeRobo, deps_with, put
+    base = tmp_path / "pc" / "P"
+    put(base / "A" / "a1.txt", b"1")
+    put(base / "B" / "b1.txt", b"2")
+    put(base / "loose.txt", b"3")
+    items = [SelectedItem(str(base / "A"), True), SelectedItem(str(base), True)]
+    rep = run_transfer_selection(items, tmp_path / "out", deps=deps_with(FakeRobo()), keep_awake=False, extra_files=[base / "A" / "a1.txt", base / "loose.txt"])
+    d = rep.to_dict()
+    assert [i["src"] for i in d["items"]] == [str(base)] and d["dropped"][0]["path"] == str(base / "A")
+    assert d["drop_stage"]["overlap_count"] == 2 and d["success"]
+    rel = mt.dest_rel(str(base))
+    assert sorted(p.name for p in (tmp_path / "out" / rel).rglob("*.txt")) == ["a1.txt", "b1.txt", "loose.txt"]
+
+
+def test_folders_have_no_file_count_limit_but_files_do(env, monkeypatch):
+    monkeypatch.setattr(ds, "MAX_DROP_FILES", 1)
+    env.add_drop_paths([str(env.work)])  # 폴더째: 안에 파일이 여러 개여도 제한 없음, 안을 읽지도 않는다
+    assert env.drop_total()[0] == 1
+    with pytest.raises(GuardError, match="너무 많습니다"):
+        env.add_drop_paths([str(env.work / "A" / "a1.txt"), str(env.work / "loose.txt")])
+    assert env.drop_total()[0] == 1
+
+
+def test_removing_a_folder_from_the_box_removes_its_selected_item(env):
+    env.add_drop_paths([str(env.work / "B"), str(env.work / "loose.txt")])
+    assert len(env.data_selected_items()) == 1
+    assert env.remove_drop_paths([str(env.work / "B")]) == 1
+    assert env.data_selected_items() == [] and [e.path for e in env.drop_files()] == [str(env.work / "loose.txt")]
+
+
+def test_folder_box_item_is_not_filtered_even_if_auto_list_excluded_it(env, tmp_path):
+    """자동 목록의 종류 필터로 숨겨진 폴더도 직접 추가하면 필터 없이 그대로 보낸다."""
+    env.set_data_filter("design", False)  # 필터를 줄여도
+    env.add_drop_paths([str(env.work / "B")])
+    start_flow(env, tmp_path)
+    env.start_transfer(dry_run=True)
+    assert any(c[0] == "transfer" and str(env.work / "B") in c[1] for c in env.data_api.calls)
 
 
 def test_dropped_folder_is_sent_as_selected_folder_never_as_extra(env, tmp_path):

@@ -227,9 +227,10 @@ def test_m4_add_data_folder_refuses_unsafe_and_drop_does_not_count_it(env, tmp_p
     with pytest.raises(GuardError) as e:
         c.add_data_folder(str(sysdir))
     assert str(e.value) == T.G_FD_SYSTEM_FOLDER and str(sysdir) not in c.files.extra and not c.files.selected
-    msg = c.add_drop_paths([str(sysdir), str(okdir)])
-    assert "폴더 1곳" in msg and "읽을 수 없는 항목 1개" in msg  # 시스템 폴더는 '옮겼습니다' 로 세지 않는다
-    assert c.files.extra == [str(okdir)]
+    monkeypatch.setattr("pcmigrate.gui.files_drop.unsafe_data_folder", lambda p: os.path.abspath(p) == os.path.abspath(str(sysdir)))
+    msg = c.add_drop_paths([str(sysdir), str(okdir)])  # stage70: 상자에서도 같은 기준으로 거부(안전한 것만 담고 안내)
+    assert T.G_FD_SYSTEM_FOLDER in msg and T.DP_ADDED.format(n=1) in msg
+    assert [e.path for e in c.drop_entries()] == [str(okdir)] and c.files.extra == []
 
 
 def test_m4_real_drive_root_refused(env):

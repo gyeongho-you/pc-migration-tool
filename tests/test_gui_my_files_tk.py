@@ -182,18 +182,21 @@ def test_junk_checkbox_and_excluded_and_cloud_sections(ctx):
     assert ctx.c.last_error is None and "시스템: 4곳" in " ".join(labels_of(v.excluded.body))
 
 
-def test_add_folder_button_uses_dialog_and_selects(ctx, monkeypatch):
+def test_box_folder_button_uses_dialog_and_adds_folder_to_box_list(ctx, monkeypatch):
+    """stage70: 위쪽 '직접 폴더 추가' 버튼은 없다. 아래 상자의 '폴더 추가'가 폴더를 상자 목록에 담고(폴더째 전송), 위쪽 자동 폴더 표는 그대로다."""
     mine = ctx.tmp / "추가할폴더"
     mine.mkdir()
     monkeypatch.setattr(filedialog, "askdirectory", lambda **k: str(mine).replace("\\", "/"))
     v = go(ctx, S.FIND)
-    v.add_btn.invoke()
+    assert not hasattr(v, "add_btn")
+    v.drop_folder_btn.invoke()
     ctx.app.update()
-    assert ctx.c.data_selection() == [str(mine)]
-    assert str(v.tree.item(v.tree.get_children()[0])["values"][0]) == T.CHECKED and v.total.cget("text").startswith("선택한 1개")
+    assert ctx.c.data_selection() == [] and [i.path for i in ctx.c.data_selected_items()] == [str(mine)]
+    assert len(v.drop_tree.get_children()) == 1 and not v.tree.get_children()
+    assert v.total.cget("text").startswith("선택한 폴더 없이 직접 추가한 1개")
     monkeypatch.setattr(filedialog, "askdirectory", lambda **k: str(ctx.tmp / "없음"))
-    v.add_btn.invoke()
-    assert ctx.shown and ctx.shown[-1][0] == "warn"
+    v.drop_folder_btn.invoke()
+    assert "읽을 수 없는 항목 1개" in v.drop_msg.cget("text")
 
 
 def test_partial_and_empty_results_show_plain_notices(ctx):

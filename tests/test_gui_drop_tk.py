@@ -79,8 +79,12 @@ def tree_rows(tree):
 def test_box_exists_with_buttons_and_hint_and_next_disabled_when_empty(ctx):
     v = find_view(ctx)
     assert v.drop_box.cget("text") == T.DP_TITLE
-    assert str(v.drop_files_btn.cget("text")) == T.BTN_DP_FILES and not hasattr(v, "drop_folder_btn") and v.drop_box.cget("text") == "직접 고른 파일"
-    assert T.DP_HINT in texts_in(v.drop_box) and not v.drop_tree_frame.winfo_manager()
+    assert str(v.drop_files_btn.cget("text")) == T.BTN_DP_FILES and str(v.drop_folder_btn.cget("text")) == T.BTN_DP_FOLDER
+    assert v.drop_box.cget("text") == "직접 추가한 파일·폴더" and not hasattr(v, "add_btn")  # 위쪽 '직접 폴더 추가' 버튼은 없다
+    assert T.DP_HINT in texts_in(v.drop_box) and "직접 추가한 파일·폴더는 확장자 필터링을 거치지 않습니다." in texts_in(v.drop_box)
+    assert not v.drop_tree_frame.winfo_manager()
+    top = [str(w.cget("text")) for w in v.top_row.winfo_children()]
+    assert top == [T.BTN_FD_FIND]  # 위쪽은 '내 파일 찾기' 자동 목록 전용
     assert "disabled" in v.next_btn.state()
 
 
@@ -91,7 +95,7 @@ def test_drop_receive_function_adds_rows_enables_next_and_shows_total(ctx):
     rows = tree_rows(v.drop_tree)
     assert len(rows) == 2 and rows[1][0].endswith("b1.txt")
     assert "disabled" not in v.next_btn.state()
-    assert "직접 고른 파일 2개" in v.total.cget("text")
+    assert "직접 추가한 2개" in v.total.cget("text")
     assert T.DP_ADDED.format(n=2) in v.drop_msg.cget("text")
 
 
@@ -121,10 +125,12 @@ def test_buttons_work_via_dialogs_and_remove_and_clear(ctx, monkeypatch):
     v = find_view(ctx)
     monkeypatch.setattr(filedialog, "askopenfilenames", lambda **k: (str(ctx.work / "loose.txt").replace("\\", "/"),))
     v.drop_files_btn.invoke()
-    monkeypatch.setattr(filedialog, "askopenfilenames", lambda **k: (str(ctx.work / "B" / "b1.txt").replace("\\", "/"),))
-    v.drop_files_btn.invoke()
+    monkeypatch.setattr(filedialog, "askdirectory", lambda **k: str(ctx.work / "B").replace("\\", "/"))
+    v.drop_folder_btn.invoke()
     ctx.app.update()
-    assert len(tree_rows(v.drop_tree)) == 2
+    rows = tree_rows(v.drop_tree)
+    assert len(rows) == 2 and T.DP_TAG_FOLDER in rows[1][0] and rows[1][1] == "-"  # 파일과 폴더가 한 목록에('(폴더)' 꼬리표)
+    assert ctx.c.data_selection() == []  # 위쪽 자동 목록에는 들어가지 않는다
     v.drop_tree.selection_set(v.drop_tree.get_children()[0])
     v.drop_remove_btn.invoke()
     ctx.app.update()
@@ -147,7 +153,7 @@ def test_method_screen_subtitle_with_drops_only(ctx):
     v._on_drop([str(ctx.work / "loose.txt")])
     ctx.c.go(S.METHOD)
     ctx.app.update()
-    assert "직접 고른 파일 1개" in ctx.app.views[S.METHOD].sub.cget("text")
+    assert "직접 추가한 1개" in ctx.app.views[S.METHOD].sub.cget("text")
 
 
 # ----------------------------------------------------------------------------- 끌어다 놓기 연결(가짜 API)
@@ -242,18 +248,30 @@ def test_transfer_screen_shows_drop_result_lines_after_copy(ctx):
     ctx.c.files_continue()
     ctx.app.update()
     tv = ctx.app.views[S.TRANSFER]
-    assert "직접 고른 파일 2개" in tv.sel_box.cget("text") or "직접 고른 파일 2개" in " ".join(texts_in(tv))
+    assert "직접 추가한 2개" in tv.sel_box.cget("text") or "직접 추가한 2개" in " ".join(texts_in(tv))
     ctx.c.state.transfer_dst = str(ctx.tmp / "out")
     ctx.c.start_transfer(dry_run=True)
     ctx.app.update()
     assert T.DP_RESULT.format(n=2, ok=2, skip=2, bad=1) in tv.preview_box.cget("text")
 
 
-def test_dropping_folder_adds_row_to_folder_table_and_hint_line(ctx):
+def test_dropping_folder_adds_folder_row_to_the_box_list(ctx):
     v = find_view(ctx)
     v._on_drop([str(ctx.work / "B"), str(ctx.work / "loose.txt")])
     ctx.app.update()
-    assert len(tree_rows(v.drop_tree)) == 1  # 파일만 직접 고른 목록에
-    paths = [r.path for r in v.rows.values()]
-    assert str(ctx.work / "B") in paths and ctx.c.data_selection() == [str(ctx.work / "B")]  # 폴더 표에 체크된 줄
-    assert T.DP_FOLDERS_MOVED.format(n=1) in v.drop_msg.cget("text")
+    rows = tree_rows(v.drop_tree)
+    assert len(rows) == 2 and T.DP_TAG_FOLDER in rows[0][0]  # 끌어다 놓은 폴더도 상자 목록에 '(폴더)' 줄로
+    assert v.rows == {} and ctx.c.data_selection() == []  # 위쪽 자동 폴더 표는 건드리지 않는다
+    assert [i.path for i in ctx.c.data_selected_items()] == [str(ctx.work / "B")]  # 전송에서는 폴더째
+
+
+def test_overlap_tag_and_note_shown_for_folder_inside_checked_auto_folder(ctx):
+    from test_gui_my_files_controller import find_result  # noqa: F401
+    v = find_view(ctx)
+    ctx.c.add_data_folder(str(ctx.work / "A"))  # 체크된 자동 폴더(옛 API 로 체크 상태를 만든다)
+    (ctx.work / "A" / "sub").mkdir(exist_ok=True)
+    v._on_drop([str(ctx.work / "A" / "sub"), str(ctx.work / "A" / "a1.txt")])
+    ctx.app.update()
+    rows = tree_rows(v.drop_tree)
+    assert all(T.DP_TAG_COVERED in r[0] for r in rows)
+    assert T.DP_OVERLAP.format(n=2) in v.drop_msg.cget("text")

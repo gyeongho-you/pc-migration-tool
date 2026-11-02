@@ -66,6 +66,7 @@ class DropEntry:
     mtime_ns: int = 0
     error: str = ""  # 담을 때 이미 읽을 수 없었던 이유
     files: int = 1  # 폴더면 안의 일반 파일 수(상한 MAX_DROP_FILES+1 에서 세기를 멈춘다)
+    unknown: bool = False  # 폴더를 읽지 않고 담았다(크기·파일 수 모름): shallow 로 만든 폴더 항목
 
 
 class TooLongPath(OSError):
@@ -92,11 +93,16 @@ def _attrs(st: os.stat_result) -> int:
     return getattr(st, "st_file_attributes", 0)
 
 
-def describe(path: str | os.PathLike) -> DropEntry:
-    """항목 하나의 경로/용량/수정시각을 기록한다(읽기만). 폴더는 안의 일반 파일 용량 합. 읽을 수 없으면 error 에 이유."""
+def describe(path: str | os.PathLike, shallow: bool = False) -> DropEntry:
+    """항목 하나의 경로/용량/수정시각을 기록한다(읽기만). 폴더는 안의 일반 파일 용량 합. 읽을 수 없으면 error 에 이유.
+
+    shallow: 폴더 안을 읽지 않는다(화면에서 폴더째 보낼 항목을 담을 때: 큰 폴더에서 화면이 멈추지 않게). 크기/파일 수는 unknown.
+    """
     p = os.fspath(path)
     try:
         st = os.lstat(fs.long_path(p))
+        if _stat.S_ISDIR(st.st_mode) and shallow:
+            return DropEntry(p, True, 0, st.st_mtime_ns, files=0, unknown=True)
         if _stat.S_ISDIR(st.st_mode):
             total = count = 0
             for root, dirs, files in os.walk(fs.long_path(p)):

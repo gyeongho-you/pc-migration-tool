@@ -101,7 +101,7 @@ def test_link_added_once_and_existing_links_unchanged(ctx):
     kids = [w for w in v.links.winfo_children()]
     assert kids == [v.exts_btn, v.legacy_btn, v.receive_btn]  # 링크 한 줄만 추가, 순서 유지
     # 기존 찾기 화면의 다른 문구는 그대로
-    assert v.find_btn.cget("text") == T.BTN_FD_FIND and v.add_btn.cget("text") == T.BTN_FD_ADD
+    assert v.find_btn.cget("text") == T.BTN_FD_FIND and not hasattr(v, "add_btn")
     assert v.junk_cb.cget("text") == T.FD_JUNK
 
 
