@@ -985,7 +985,7 @@ def build_send_plan(sources: list[str] | None = None, selection: str | os.PathLi
         plan.cloud_only += 0 if opts.include_cloud else len(sc.cloud)
         plan.skipped_links += sc.skipped_links
         for rel, code, text in sc.errors:
-            plan.scan_errors.append({"path": f"{it.src}/{rel}", "reason": code, "error": text})
+            plan.scan_errors.append({"path": f"{it.orig or it.src}/{rel}", "reason": code, "error": text})
         for rel, size, mtime in rows:
             wire = f"{prefix}/{rel}" if prefix else rel
             try:

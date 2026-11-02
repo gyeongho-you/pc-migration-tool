@@ -415,7 +415,8 @@ def run_multi(selected: Iterable[SelectedItem | str], dst: str | os.PathLike, tr
         label = f"[{n}/{total}] {shown}"
         key = it.rel.lower()
         prior = journal["items"].get(key, {})
-        if skip_done and not it.orig and not dry_run and not retry_failed and prior.get("status") == "done":
+        partial = {"partial": True} if it.orig else {}  # 임시 보관(직접 고른 일부 파일) 항목: 폴더 전체가 끝났다는 뜻이 아니다
+        if skip_done and not it.orig and not dry_run and not retry_failed and prior.get("status") == "done" and not prior.get("partial"):
             mr.items.append(ItemResult(shown, str(item_dst), "skipped_done"))
             if on_item:
                 on_item(n, total, shown, "skipped_done", None)
@@ -435,7 +436,7 @@ def run_multi(selected: Iterable[SelectedItem | str], dst: str | os.PathLike, tr
         if item_dir is not None and not dry_run:
             kw["manifest_out"] = item_dir / f"{n:04d}.jsonl"
         if not dry_run:
-            journal["items"][key] = {"src": shown, "rel": it.rel, "status": "pending"}
+            journal["items"][key] = {"src": shown, "rel": it.rel, "status": "pending", **partial}
             _write_journal(dst, journal)
         try:
             rep = transfer_fn(Path(it.src), item_dst, **kw)
@@ -446,7 +447,7 @@ def run_multi(selected: Iterable[SelectedItem | str], dst: str | os.PathLike, tr
         except (TransferError, OSError, ValueError) as e:
             res = ItemResult(shown, str(item_dst), "error", error=str(e))
             if not dry_run:
-                journal["items"][key] = {"src": shown, "rel": it.rel, "status": "failed", "error": str(e)}
+                journal["items"][key] = {"src": shown, "rel": it.rel, "status": "failed", "error": str(e), **partial}
                 _write_journal(dst, journal)
             mr.items.append(res)
             warn(f"{label}: 이 폴더는 처리하지 못했습니다 — {e}")
@@ -460,7 +461,7 @@ def run_multi(selected: Iterable[SelectedItem | str], dst: str | os.PathLike, tr
             r = rep.to_dict()
             done = not bad and bool(r.get("verification_complete"))
             journal["items"][key] = {"src": shown, "rel": it.rel, "status": "done" if done else "failed" if bad else "copied",
-                                     "files": r.get("total_files"), "bytes": r.get("total_bytes"), "failed": len(rep.failures)}
+                                     "files": r.get("total_files"), "bytes": r.get("total_bytes"), "failed": len(rep.failures), **partial}
             _write_journal(dst, journal)
         if on_item:
             on_item(n, total, shown, status, rep)

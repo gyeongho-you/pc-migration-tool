@@ -175,6 +175,9 @@ def _cmd_send(args: argparse.Namespace) -> int:
     if bool(args.from_selection) == bool(args.sources) and not (args.extra_file and not args.from_selection and not args.sources):
         _err(f"보낼 곳을 하나만 지정하세요(--from-selection 선택 파일 또는 원본 폴더): {SEND_USAGE}")
         return 2
+    if args.extra_file and args.layout == "flat":
+        _err("--extra-file 은 폴더를 <드라이브>\\<경로> 구조로 보내므로 --layout flat 과 함께 쓸 수 없습니다")
+        return 2
     if args.exclude_backup_copies and not args.exclude_junk:
         _err("--exclude-backup-copies 는 --exclude-junk 와 함께만 쓸 수 있습니다")
         return 2

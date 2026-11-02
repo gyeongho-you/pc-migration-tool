@@ -101,6 +101,8 @@ def run_transfer_selection(selection, dst: str | Path, *, dry_run: bool = False,
                          retry_failed=retry_failed, verify_only=verify_only, progress=progress, progress_info=progress_info,
                          on_item=on_item, cancel=cancel, warn=warn, dest_info_fn=dest_info_fn, estimate_fn=estimate_fn)
 
+    for x in extra_files or []:  # 직접 고른 항목 안에도 해시 목록/리포트를 쓰지 않는다(원본은 읽기만)
+        check_outputs_outside(x.path if hasattr(x, "path") else os.fspath(x), manifest_out=manifest_out, report=abort_report)
     if not extra_files:
         if not abort_report:
             return go(items)

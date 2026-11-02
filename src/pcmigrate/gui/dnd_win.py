@@ -17,6 +17,7 @@ from typing import Callable
 WM_DROPFILES = 0x0233
 GWLP_WNDPROC = -4
 
+WM_NCDESTROY = 0x0082
 REASON_NO_WINDOWS, REASON_ADMIN, REASON_ERROR = "no_windows", "admin", "error"
 
 
@@ -30,6 +31,7 @@ class DropHook:
         self.installed = False
         self.reason = ""  # 설치하지 못한 이유("" 이면 문제 없음 또는 아직 설치 전)
         self._orig: dict[int, int] = {}
+        self._accepted: list[int] = []  # DragAcceptFiles 를 켠 핸들(롤백 때 모두 끈다)
         self._cb = None  # 콜백 객체를 계속 붙들고 있어야 한다(가비지 수집되면 충돌)
         self._api: dict = {}
 
@@ -50,6 +52,7 @@ class DropHook:
             for w in _walk(self.widget):
                 hwnd = int(w.winfo_id())
                 self._api["accept"](hwnd, True)
+                self._accepted.append(hwnd)
                 self._orig[hwnd] = self._api["subclass"](hwnd, self._cb)
             self.installed = True
             self.reason = ""
@@ -62,13 +65,19 @@ class DropHook:
             return False
 
     def _rollback(self) -> None:
+        """바꿔 끼운 프로시저를 모두 되돌리고 DragAcceptFiles 를 모두 끈다(한 핸들이 실패해도 나머지는 계속)."""
         for hwnd, orig in list(self._orig.items()):
             try:
                 self._api["restore"](hwnd, orig)
+            except Exception:  # noqa: BLE001
+                pass
+        for hwnd in list(self._accepted):
+            try:
                 self._api["accept"](hwnd, False)
             except Exception:  # noqa: BLE001
                 pass
         self._orig.clear()
+        self._accepted.clear()
 
     def uninstall(self) -> None:
         if self.installed:
@@ -76,9 +85,10 @@ class DropHook:
         self.installed = False
 
     def _on_destroy(self, event) -> None:
+        # 창이 사라지는 중에도 원래 프로시저는 WM_DESTROY/WM_NCDESTROY 처리를 위해 유지한다(여기서 지우면 파괴 메시지를 삼킨다).
+        # 핸들별 정리는 _proc 이 WM_NCDESTROY 를 원래 프로시저에 넘긴 직후에 한다.
         if event.widget is self.widget:
             self.installed = False
-            self._orig.clear()  # 창이 사라지면 핸들도 사라진다(되돌릴 필요 없음)
 
     # ------------------------------------------------------------------ 메시지 처리
     def _proc(self, hwnd, msg, wparam, lparam):
@@ -90,7 +100,14 @@ class DropHook:
         except Exception:  # noqa: BLE001
             return 0
         orig = self._orig.get(int(hwnd), 0)
-        return self._api["call_orig"](orig, hwnd, msg, wparam, lparam) if orig else 0
+        if not orig:
+            return 0
+        result = self._api["call_orig"](orig, hwnd, msg, wparam, lparam)
+        if msg == WM_NCDESTROY:  # 이 창의 마지막 메시지: 원래 프로시저가 처리한 뒤에 우리 기록을 지운다
+            self._orig.pop(int(hwnd), None)
+            if int(hwnd) in self._accepted:
+                self._accepted.remove(int(hwnd))
+        return result
 
     def deliver(self, paths: list) -> None:
         """받은 경로 목록을 화면에 전달한다(시험은 이 함수를 직접 부른다). 빈 목록(실제 파일이 없는 항목)도 전달한다."""

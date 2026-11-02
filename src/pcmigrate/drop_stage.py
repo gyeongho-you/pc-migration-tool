@@ -18,6 +18,7 @@ import json
 import os
 import shutil
 import stat as _stat
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -38,6 +39,7 @@ MARKER_NAME = ".pcmigrate-staging.json"
 STAGING_DIR = r"%LOCALAPPDATA%\pcmigrate\staging"  # 시험은 이 값을 임시 폴더로 바꾼다
 STALE_SECONDS = 24 * 3600  # 표식 파일이 이보다 오래 갱신되지 않은 폴더는 비정상 종료 잔여물로 본다(전송 중에는 표식을 계속 갱신)
 MAX_DROP_FILES = 20000  # 직접 고른 파일 수 상한(폴더를 통째로 놓아 파일이 늘어나는 경우 포함). 넘으면 시작 전에 오류로 멈춘다
+HEARTBEAT_SECONDS = 300  # 전송하는 동안 표식을 이 간격으로 갱신한다(오래 걸리는 전송 중에 다른 실행이 잔여물로 오인해 지우지 않게)
 MAX_LISTED = 200  # 리포트에 적는 항목 수 상한(개수는 따로 센다)
 
 
@@ -66,8 +68,17 @@ class DropEntry:
     files: int = 1  # 폴더면 안의 일반 파일 수(상한 MAX_DROP_FILES+1 에서 세기를 멈춘다)
 
 
+class TooLongPath(OSError):
+    """임시 보관 경로가 Windows 한도(약 32,000자)를 넘음."""
+
+
+MAX_STAGE_PATH = 32000
+
+
 def reason_text(e: BaseException) -> str:
     """실패 사유를 사용자 문구로(내부 오류 이름/errno 를 보이지 않는다). 자세한 내용은 오류 로그에만 남는다."""
+    if getattr(e, "winerror", None) == 206 or isinstance(e, TooLongPath):
+        return "경로가 너무 깁니다(임시 보관에 담을 수 없습니다). 이 파일이 든 폴더를 '직접 폴더 추가'로 넣어 폴더째 보내 주세요"
     if isinstance(e, FileNotFoundError):
         return "찾을 수 없습니다(없어졌거나 다른 곳으로 옮겨졌습니다)"
     if isinstance(e, PermissionError):
@@ -247,7 +258,7 @@ def _read_marker(d: Path) -> dict | None:
 
 def new_stage_dir(root: Path | None = None) -> Path:
     root = Path(root) if root is not None else staging_root()
-    d = root / f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
+    d = root / f"{time.strftime('%y%m%d%H%M%S')}-{uuid.uuid4().hex[:6]}"
     d.mkdir(parents=True, exist_ok=False)
     (d / MARKER_NAME).write_text(json.dumps({"tool": "pcmigrate", "kind": "drop-staging", "version": 1, "pid": os.getpid(),
                                              "created": time.strftime("%Y-%m-%d %H:%M:%S")}), encoding="utf-8")
@@ -259,6 +270,27 @@ def touch_marker(d: Path) -> None:
         os.utime(d / MARKER_NAME)
     except OSError:
         pass
+
+
+class _Heartbeat:
+    """stage 폴더의 표식 파일을 주기적으로 갱신한다(데몬 스레드, 끝나면 stop)."""
+
+    def __init__(self, stage: Path, interval: float | None = None) -> None:
+        self.stage, self.interval = stage, (HEARTBEAT_SECONDS if interval is None else interval)
+        self._stop = threading.Event()
+        self._t = threading.Thread(target=self._run, daemon=True)
+
+    def _run(self) -> None:
+        while not self._stop.wait(self.interval):
+            touch_marker(self.stage)
+
+    def __enter__(self):
+        self._t.start()
+        return self
+
+    def __exit__(self, *a) -> None:
+        self._stop.set()
+        self._t.join(timeout=5)
 
 
 def _rm_error(func, path, exc_info) -> None:
@@ -356,7 +388,9 @@ def stage_files(plan: StagePlan, stage: Path, *, cancel=None, progress: Callable
             raise Cancelled()
         out = stage / dest_rel(src)
         try:
-            out.parent.mkdir(parents=True, exist_ok=True)
+            if len(str(out)) > MAX_STAGE_PATH:
+                raise TooLongPath(f"임시 보관 경로가 너무 깁니다: {len(str(out))}자")
+            os.makedirs(fs.long_path(out.parent), exist_ok=True)  # 260자 넘는 원본 경로도 담을 수 있게(원본 읽기와 같은 긴 경로 처리)
             if not no_link and os.stat(fs.long_path(src)).st_mode & _stat.S_IWRITE:
                 try:
                     os.link(fs.long_path(src), fs.long_path(out))
@@ -458,6 +492,14 @@ def run_with_extras(items: list, extras, dst, run_fn: Callable[[list], "object"]
     checked = [it.path for it in items if isinstance(it, SelectedItem) and it.include] + [it for it in items if isinstance(it, str)]
     plan = StagePlan()
     info: dict = {"entries": len(entries)}
+    if dst is not None:  # 받는 곳이 직접 고른 폴더 안이면(원본에 쓰게 되므로) 시작하지 않는다
+        from .transfer import _is_within
+        d_real = os.path.realpath(dst)
+        for e in entries:
+            if e.is_dir and not e.error:
+                s_real = os.path.realpath(e.path)
+                if os.path.normcase(s_real) == os.path.normcase(d_real) or _is_within(Path(d_real), Path(s_real)):
+                    raise TransferError(f"대상은 직접 고른 폴더와 같거나 그 안에 있을 수 없습니다: 원본 {e.path} / 대상 {dst}")
     stage: Path | None = None
     result = err = None
     try:
@@ -483,6 +525,9 @@ def run_with_extras(items: list, extras, dst, run_fn: Callable[[list], "object"]
             warn(w.strip(" ·-"))
         if dry_run and not checked:  # 미리보기에 폴더가 하나도 없으면 직접 고른 파일의 정리 결과만 보여 준다
             result = MultiReport(dry_run=True)
+        elif stage is not None:
+            with _Heartbeat(stage):  # 오래 걸리는 전송 중에도 표식을 갱신한다
+                result = run_fn(list(items) + extra_items)
         else:
             result = run_fn(list(items) + extra_items)
     except BaseException as e:  # noqa: BLE001 - 정리 후 그대로 다시 던진다
