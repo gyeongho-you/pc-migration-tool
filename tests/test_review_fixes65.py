@@ -54,9 +54,11 @@ def test_full_run_done_still_skips_and_partial_flag_is_recorded(tmp_path):
     assert [i.status for i in r.items] == ["skipped_done"]  # 기존 동작 유지
     run([], [proj / "x.txt"], dst)
     j = json.loads((dst / mt.JOURNAL_NAME).read_text(encoding="utf-8"))
-    assert all(v.get("partial") for v in j["items"].values())  # 일부 파일 실행이 폴더 완료 기록을 덮어씀(보수적)
+    real = j["items"][mt.dest_rel(str(proj)).lower()]
+    assert not real.get("partial") and real["status"] == "done"  # stage71: 일부 파일 실행은 자기 키(#staged)에 쓰고 폴더 완료 기록을 덮지 않는다
+    assert j["items"][mt.dest_rel(str(proj)).lower() + mt.STAGED_SUFFIX]["partial"] is True
     r = run_transfer_selection([SelectedItem(str(proj), True)], dst, deps=deps_with(FakeRobo()), keep_awake=False, skip_done=True)
-    assert [i.status for i in r.items] != ["skipped_done"]
+    assert [i.status for i in r.items] == ["skipped_done"]  # 폴더를 이미 끝냈다는 기록이 남아 있으므로 건너뜀
 
 
 # ---------------------------------------------------------------- ② 긴 경로

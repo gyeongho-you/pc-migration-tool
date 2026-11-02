@@ -35,6 +35,9 @@ from .transfer import DriveDisconnected, SPACE_MARGIN, TransferError, _is_within
 
 JOURNAL_NAME = ".pcmigrate-multi.json"
 JOURNAL_VERSION = 1
+STAGED_SUFFIX = "#staged"  # 직접 고른 파일(임시 보관) 항목의 저널 키 접미: 같은 폴더의 실제 항목 기록과 섞이지 않게 한다
+STAGED_STATE_NAME = ".pcmigrate-state-staged.json"
+STAGED_PRESERVE_NAME = ".pcmigrate-preserve-staged.json"
 MAX_ITEM_FAILURES_LISTED = 50
 _BAD = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
@@ -409,7 +412,7 @@ def run_multi(selected: Iterable[SelectedItem | str], dst: str | os.PathLike, tr
         warn("대상이 FAT32 입니다. 4GB 보다 큰 파일이 든 폴더는 그 폴더만 실패로 기록되고 나머지는 계속됩니다(--split-large 로 해결 가능).")
     journal = {"version": JOURNAL_VERSION, "items": {}} if dry_run else _read_journal(dst)
     prev_keys = set(journal["items"])
-    new_keys = {it.rel.lower() for it in plan.items}
+    new_keys = {it.rel.lower() + (STAGED_SUFFIX if it.orig else "") for it in plan.items}
     if prev_keys and prev_keys != new_keys and not dry_run:
         warn("이전 실행과 선택한 폴더 구성이 다릅니다. 같은 대상에 이어서 담습니다(이전에 담은 폴더는 지우지 않습니다).")
     if not dry_run:
@@ -426,7 +429,7 @@ def run_multi(selected: Iterable[SelectedItem | str], dst: str | os.PathLike, tr
         item_dst = dst / it.rel
         shown = it.orig or it.src  # 임시 폴더에서 온 항목은 원래 경로로 표시/기록
         label = f"[{n}/{total}] {shown}"
-        key = it.rel.lower()
+        key = it.rel.lower() + (STAGED_SUFFIX if it.orig else "")
         prior = journal["items"].get(key, {})
         partial = {"partial": True} if it.orig else {}  # 임시 보관(직접 고른 일부 파일) 항목: 폴더 전체가 끝났다는 뜻이 아니다
         if skip_done and not it.orig and not dry_run and not retry_failed and prior.get("status") == "done" and not prior.get("partial"):
@@ -446,6 +449,9 @@ def run_multi(selected: Iterable[SelectedItem | str], dst: str | os.PathLike, tr
             kw["progress"] = lambda m, _l=label: progress(f"{_l} {m}")
         if progress_info:
             kw["progress_info"] = lambda info, _l=label: progress_info(dataclasses.replace(info, message=f"{_l} {info.message}".strip()))
+        if it.orig:  # 같은 폴더 이름의 실제 항목과 이어받기 상태/보존 기록 파일을 나눈다(서로 덮어쓰지 않게)
+            kw["state_path"] = item_dst / STAGED_STATE_NAME
+            kw["preserve_path"] = item_dst / STAGED_PRESERVE_NAME
         if item_dir is not None and not dry_run:
             kw["manifest_out"] = item_dir / f"{n:04d}.jsonl"
         if not dry_run:

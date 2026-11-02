@@ -286,10 +286,9 @@ def test_folder_overlap_rules_by_path_prefix_only(env):
     assert env.folder_cover() == {str(work / "A"): str(work)}
     # (3) 직접 추가한 폴더끼리, 같은 폴더(자동과 직접 추가)
     env.clear_drops()
-    env.add_drop_paths([str(work / "A"), str(work / "A" / "sub")])
-    cover = env.folder_cover()
-    assert cover[str(work / "A")] == str(work / "A")  # 같은 폴더면 앞선(자동 체크) 쪽을 남기고 직접 추가 쪽이 빠짐
-    assert cover[str(work / "A" / "sub")] in (str(work / "A"),)
+    msg = env.add_drop_paths([str(work / "A"), str(work / "A" / "sub")])
+    assert T.DP_ALREADY.format(n=1) in msg  # stage71: 자동 목록(옛 직접 추가 포함)에 이미 있는 같은 폴더는 다시 담지 않는다(두 번 세지 않음)
+    assert env.folder_cover()[str(work / "A" / "sub")] == str(work / "A")
 
 
 def test_overlap_removal_in_transfer_sends_outer_folder_once(tmp_path):

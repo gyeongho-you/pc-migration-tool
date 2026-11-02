@@ -732,6 +732,7 @@ def discover(recv: Path, maps: dict[str, str], include_unverified: bool, warn: C
     covered: set[str] = set()  # 저널이 다루는 최상위 폴더 이름(소문자)
     jrels: list[str] = []
     bad_tops: set[str] = set()  # 저널 항목이 깨진 최상위 폴더(유추로 놓지 않는다)
+    real_rels = {str(v.get("rel", "")).lower() for v in items.values() if isinstance(v, dict) and not v.get("partial")}  # 폴더째 보낸 실제 항목
     for key, it in items.items():
         meta["journal_items"] += 1
         key_top = str(key).split("\\")[0].lower()
@@ -750,6 +751,8 @@ def discover(recv: Path, maps: dict[str, str], include_unverified: bool, warn: C
             continue
         covered.add(rel.split("\\")[0].lower())
         jrels.append(rel.lower())
+        if it.get("partial") and rel.lower() in real_rels:  # 임시 보관(직접 고른 파일) 항목: 같은 폴더의 실제 항목이 한 번에 놓으므로 단위를 또 만들지 않는다(완료 표시도 실제 항목 기준)
+            continue
         cur = recv.joinpath(*rel.split("\\"))
         if rel.lower() != dest_rel(src).lower():  # 이름을 지정해 받은 폴더(설정 묶음 등)
             if _isdir(cur) and not _has_files(cur):

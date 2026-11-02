@@ -216,6 +216,24 @@ class TransferMixin:
         except OSError as e:
             errorlog.record(e, "복사 결과 리포트 저장(중단)")
 
+    # 단순 확인 요구(쓰기 확인·미리보기 필요·옵션 변경)와 작업 중/리포트 위치 오류는 '시작하지 못한 것'이 아니므로 리포트를 만들지 않는다
+    # (이전의 정상 리포트를 '중단'으로 바꾸지 않게).
+    _NO_ABORT_REPORT = ("G_BUSY", "G_REPORT_INSIDE_SOURCE", "G_TRANSFER_CONFIRM", "G_TRANSFER_NEED_PREVIEW", "G_TRANSFER_OPTIONS_CHANGED")
+
+    def _report_inside_sources(self, path: str) -> bool:
+        """리포트 위치가 원본(고른 폴더·직접 추가한 폴더) 안인가. 안이면 원본에는 아무것도 쓰지 않으므로 리포트를 쓰지 않는다."""
+        try:
+            return any(real_api.report_inside(path, folder) for folder in self.source_folders() if folder)
+        except Exception:  # noqa: BLE001 - 판단하지 못하면 쓰지 않는 쪽이 안전하다
+            return True
+
+    def _abort_report_for_guard(self, report_path: str, message: str) -> None:
+        if not report_path or message in {getattr(T, n) for n in self._NO_ABORT_REPORT}:
+            return
+        if self._report_inside_sources(report_path):
+            return
+        self._write_abort_report(report_path, message)
+
     def start_transfer(self, dry_run: bool = True, strict: bool = False, include_cloud: bool = False,
                        report_path: str = "", write_confirmed: bool = False, verify_only: bool = False,
                        retry_failed: bool = False, workers: int | None = None, split_large: bool = False) -> None:
@@ -226,9 +244,8 @@ class TransferMixin:
                                                   retry_failed, workers, split_large)
         try:
             self._start_single_transfer(dry_run, strict, include_cloud, report_path, write_confirmed, verify_only, retry_failed, workers, split_large)
-        except GuardError as e:  # 시작하지 못한 이유도 결과 리포트로 남긴다(작업 중이거나 리포트 위치가 원본 안이면 쓰지 않는다)
-            if report_path and str(e) not in (T.G_BUSY, T.G_REPORT_INSIDE_SOURCE):
-                self._write_abort_report(report_path, str(e))
+        except GuardError as e:  # 실제로 시작하지 못한 이유는 결과 리포트로 남긴다
+            self._abort_report_for_guard(report_path, str(e))
             raise
 
     def _start_single_transfer(self, dry_run: bool, strict: bool, include_cloud: bool, report_path: str, write_confirmed: bool,
@@ -278,8 +295,8 @@ class TransferMixin:
                 return self.api.run_transfer(s.transfer_src, s.transfer_dst, dry_run=dry_run, include_cloud=include_cloud,
                                              strict=strict, progress=progress, cancel=token, deps=self.deps,
                                              warn=progress, progress_info=progress, **extra)
-            except Exception as e:  # noqa: BLE001 - 오류·취소로 끝나도 결과 리포트는 남긴다(미리보기는 저장하지 않는다)
-                if report_path:
+            except Exception as e:  # noqa: BLE001 - 오류·취소로 끝나도 결과 리포트는 남긴다(오류로 끝난 미리보기도 마찬가지)
+                if report_path and not self._report_inside_sources(report_path):
                     self._write_abort_report(report_path, "취소했습니다" if type(e).__name__ == "Cancelled" else f"{type(e).__name__}: {e}")
                 raise
 

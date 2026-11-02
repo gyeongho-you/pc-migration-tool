@@ -193,6 +193,12 @@ class FilesMixin:
         b = self.bundle_item()
         bsize = fmt_bytes(b.total_bytes or 0) if b is not None else ""
         dn = self.drop_total()[0]
+        if self.drop_dirs():  # 직접 추가한 폴더에 포함돼 빠질 자동 폴더는 합계에서 뺀다(같은 폴더를 두 번 세지 않는다)
+            cover = self.folder_cover()
+            sel = [r for r in self.data_rows(visible_only=False) if r.selected and r.path in cover]
+            n -= len(sel)
+            size -= sum(r.total_bytes or 0 for r in sel if r.total_bytes is not None)
+            unknown -= sum(1 for r in sel if r.total_bytes is None)
         if not n:
             if dn:
                 return T.DP_TOTAL_ONLY.format(n=dn, size=self._drop_size_text()) + (" · " + T.BUNDLE_INCLUDED if b is not None else "")
@@ -213,6 +219,8 @@ class FilesMixin:
             raise _guard(T.G_FD_SYSTEM_FOLDER)
         k = norm(p)
         f = self.files
+        if k in {norm(e.path) for e in f.drops if e.is_dir}:  # 상자에 이미 직접 추가한 폴더: 같은 폴더를 두 번 세지 않는다
+            raise _guard(T.G_FD_ALREADY)
         known = {norm(r.path): r for r in self.data_rows(visible_only=False)}
         if k in known:
             if known[k].selected:
@@ -652,7 +660,7 @@ class FilesMixin:
         check = self.check_transfer_paths(s.transfer_src, s.transfer_dst)
         if not check.ok:
             msg = " ".join(t for ok, t in check.lines if not ok)
-            self._write_blocked_report(report_path, msg)  # 시작하지 못해도 결과 리포트는 남긴다
+            self._abort_report_for_guard(report_path, msg)  # 시작하지 못해도 결과 리포트는 남긴다(원본 안이면 쓰지 않음, 기존 파일은 번호 .bak 으로 보관)
             raise _guard(msg)
         if report_path:
             for folder in self.source_folders():

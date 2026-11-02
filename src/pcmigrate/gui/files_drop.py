@@ -30,6 +30,18 @@ def _under(k: str, base: str) -> bool:
     return k == base or k.startswith(base.rstrip(os.sep) + os.sep)
 
 
+def _ancestor_in(k: str, keys: set[str]) -> str | None:
+    """k 의 상위 폴더(자기 자신 제외) 중 keys 에 있는 가장 가까운 것. 부모 사슬을 거슬러 집합을 조회한다(깊이만큼, 전체 비교 없음)."""
+    cur = k
+    while True:
+        parent = os.path.dirname(cur)
+        if not parent or parent == cur:
+            return None
+        if parent in keys:
+            return parent
+        cur = parent
+
+
 def _clean(path: str) -> str:
     return (path or "").strip().strip("\"'“”‘’`").strip()
 
@@ -66,32 +78,52 @@ class DropMixin:
         k = self.drop_unknown()
         return T.DP_TOTAL.format(n=n, size=fmt_bytes(size)) + (" " + T.FD_TOTAL_UNKNOWN.format(k=k) if k else "")
 
-    def folder_cover(self) -> dict[str, str]:
+    def folder_cover(self, selection: list[str] | None = None) -> dict[str, str]:
         """겹쳐서 빠질 폴더: {빠질 폴더 경로: 포함하는 폴더 경로}. 자동 체크 폴더 + 직접 추가한 폴더 전체를 접두 비교만으로 따진다.
-        같은 폴더가 둘이면 자동 체크 쪽을 남긴다(앞선 것이 우선)."""
-        allf = [(norm(p), p) for p in self.data_selection()] + [(norm(e.path), e.path) for e in self.drop_dirs()]
+        같은 폴더가 둘이면 자동 체크 쪽을 남긴다(앞선 것이 우선). 직접 추가한 폴더가 없으면 비교하지 않는다(자동 폴더끼리는 전송 때 plan_items 가 처리).
+        성능: 정규화 경로 집합 + 부모 사슬 조회로 폴더 수 N 에 대해 N × 경로 깊이(N² 비교 없음). selection: 이미 구한 자동 체크 폴더 목록(다시 만들지 않으려고)."""
+        dirs = self.drop_dirs()
+        if not dirs:
+            return {}
+        sel = self.data_selection() if selection is None else selection
+        allf = [(norm(p), p) for p in sel] + [(norm(e.path), e.path) for e in dirs]
+        first: dict[str, str] = {}  # 정규화 경로 -> 처음 나온 폴더(같은 폴더 중복은 뒤의 것이 빠진다)
+        for k, p in allf:
+            first.setdefault(k, p)
+        keys = set(first)
         out: dict[str, str] = {}
-        for i, (k, p) in enumerate(allf):
-            for j, (k2, p2) in enumerate(allf):
-                if i != j and _under(k, k2) and (k != k2 or j < i):
-                    out.setdefault(p, p2)
-                    break
+        seen: set[str] = set()
+        for k, p in allf:
+            if k in seen:
+                out.setdefault(p, first[k])
+                continue
+            seen.add(k)
+            anc = _ancestor_in(k, keys)
+            if anc is not None:
+                out.setdefault(p, first[anc])
         return out
 
-    def _checked_keys(self) -> list[str]:
+    def _checked_keys(self, selection: list[str] | None = None) -> set[str]:
         """파일이 '이미 포함됨'인지 볼 때 쓰는 폴더들: 자동 체크 폴더 + 직접 추가한 폴더(모두 폴더째 가는 것)."""
-        return [norm(p) for p in self.data_selection()] + [norm(e.path) for e in self.drop_dirs()]
+        sel = self.data_selection() if selection is None else selection
+        return {norm(p) for p in sel} | {norm(e.path) for e in self.drop_dirs()}
 
-    def drop_rows(self) -> list[tuple[str, str, str, str, bool]]:
-        """표 줄: (경로, 용량, 수정한 날, 꼬리표, 이미 포함되는가)."""
-        checked = self._checked_keys()
-        cover = self.folder_cover()
+    def _covered_file(self, k: str, checked: set[str]) -> bool:
+        return k in checked or _ancestor_in(k, checked) is not None
+
+    def drop_rows(self, selection: list[str] | None = None, cover: dict[str, str] | None = None) -> list[tuple[str, str, str, str, bool]]:
+        """표 줄: (경로, 용량, 수정한 날, 꼬리표, 이미 포함되는가). selection/cover: 같은 갱신에서 이미 구한 값을 다시 계산하지 않으려고 넘긴다."""
+        if not self.files.drops:
+            return []
+        sel = self.data_selection() if selection is None else selection
+        checked = self._checked_keys(sel)
+        cover = self.folder_cover(sel) if cover is None else cover
         rows = []
         for e in self.files.drops:
             if e.is_dir:
                 covered = e.path in cover
             else:
-                covered = any(_under(norm(e.path), c) for c in checked)
+                covered = self._covered_file(norm(e.path), checked)
             tag = T.DP_TAG_COVERED if covered else (T.DP_TAG_FOLDER if e.is_dir else "")
             when = time.strftime("%Y-%m-%d", time.localtime(e.mtime_ns / 1e9)) if e.mtime_ns else ""
             rows.append((e.path, "-" if e.unknown else fmt_bytes(e.size), when, tag, covered))
@@ -99,8 +131,12 @@ class DropMixin:
 
     def drop_notes(self) -> list[str]:
         """상자 아래 안내 줄(겹쳐서 빠질 개수: 직접 추가한 파일·폴더와 안쪽 자동 폴더 모두). 실제 제거는 전송을 시작할 때 다시 계산한다."""
-        n = sum(1 for r in self.drop_rows() if r[4])
-        n += sum(1 for p in self.data_selection() if p in self.folder_cover())  # 직접 추가한 바깥 폴더에 포함돼 빠지는 자동 폴더
+        if not self.files.drops:
+            return []
+        sel = self.data_selection()  # 한 번만 만든다(선택 폴더가 수백 개여도 갱신마다 전체 행을 다시 만들지 않게)
+        cover = self.folder_cover(sel)
+        n = sum(1 for r in self.drop_rows(sel, cover) if r[4])
+        n += sum(1 for p in sel if p in cover)  # 직접 추가한 바깥 폴더에 포함돼 빠지는 자동 폴더
         return [T.DP_OVERLAP.format(n=n)] if n else []
 
     def add_drop_paths(self, paths) -> str:
@@ -114,7 +150,7 @@ class DropMixin:
         if not cleaned:
             raise _guard(T.DP_VIRTUAL)
         f = self.files
-        known = {norm(e.path) for e in f.drops}
+        known = {norm(e.path) for e in f.drops} | {norm(p) for p in f.extra}
         new, dup, bad, system = [], 0, 0, 0
         for p in cleaned:
             k = norm(p)
@@ -166,9 +202,7 @@ class DropMixin:
         self._drops_changed()
 
     def _drops_changed(self) -> None:
-        f = self.files
-        if f.use_selection:  # 이미 복사 화면에 넘긴 선택이 있으면 미리보기/결과는 무효(목록이 달라졌다)
-            f.use_selection, f.transfer_items, f.signature = False, [], ""
+        self._selection_edited()  # 이미 복사 화면에 넘긴 선택이 있으면 끝낸다(transfer_src·미리보기/결과도 정리: 목록이 달라졌다)
         self.emit("files_changed")
 
     # ---- 전송 결과 보조

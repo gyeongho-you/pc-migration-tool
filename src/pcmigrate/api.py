@@ -280,7 +280,7 @@ def run_transfer(src: str | Path, dst: str | Path, *, dry_run: bool = False, inc
                  warn: Callable[[str], None] = lambda m: None, deps: Deps | None = None,
                  progress: Callable[[str], None] | None = None,
                  cancel: Callable[[], bool] | None = None,
-                 progress_info: Callable[[ProgressInfo], None] | None = None,
+                 progress_info: Callable[[ProgressInfo], None] | None = None, preserve_path: str | Path | None = None,
                  verify_only: bool = False, retry_failed: bool = False, workers: int | None = None,
                  chunk: int | None = None, keep_awake: bool = True, manifest_out: str | Path | None = None,
                  use_manifest: str | Path | None = None, verify_dest: bool | None = None,
@@ -296,6 +296,8 @@ def run_transfer(src: str | Path, dst: str | Path, *, dry_run: bool = False, inc
                     log_path=Path(log_path) if log_path else None, warn=warn, strict=strict)
     if state_path:
         kw["state_path"] = Path(state_path)
+    if preserve_path:
+        kw["preserve_path"] = Path(preserve_path)
     if progress:
         kw["progress"] = progress
     if progress_info:

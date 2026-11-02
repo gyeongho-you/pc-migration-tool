@@ -176,10 +176,13 @@ def test_m3_guard_failure_saves_report_and_keeps_old_one(tmp_path):
     rep = tmp_path / "report.json"
     rep.write_text("previous result", encoding="utf-8")
     with pytest.raises(GuardError):
-        c.start_transfer(dry_run=False, write_confirmed=True, report_path=str(rep))  # 미리보기 없이 시작: 가드 실패
-    data = json.loads(rep.read_text(encoding="utf-8"))
-    assert data["aborted"] and "미리보기" in data["reason"]
-    assert (tmp_path / "report.json.bak").read_text(encoding="utf-8") == "previous result"  # 이전 리포트는 보관
+        c.start_transfer(dry_run=False, write_confirmed=True, report_path=str(rep))  # 미리보기 없이 시작: 단순 가드(stage71: 이전 리포트를 중단으로 바꾸지 않는다)
+    assert rep.read_text(encoding="utf-8") == "previous result" and not (tmp_path / "report.json.bak").exists()
+    c.state.transfer_src = str(tmp_path / "없는 폴더")  # 실제로 시작하지 못한 경우(경로 점검 실패)는 중단 리포트 + 이전 리포트 보관
+    with pytest.raises(GuardError):
+        c.start_transfer(dry_run=True, report_path=str(rep))
+    assert json.loads(rep.read_text(encoding="utf-8"))["aborted"]
+    assert (tmp_path / "report.json.bak").read_text(encoding="utf-8") == "previous result"
 
 
 def test_m3_no_report_for_dry_run_busy_or_inside_source(tmp_path):

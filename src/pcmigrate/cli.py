@@ -244,6 +244,10 @@ def _save_abort_report(path, exc: BaseException) -> None:
     try:
         if rep is not None and hasattr(rep, "to_dict"):
             data["partial"] = rep.to_dict()
+        p = Path(path)
+        if p.is_file():  # 이전 실행의 정상 리포트를 중단 리포트로 덮어써 잃지 않게 번호 .bak 으로 보관한다
+            from .copier import _backup_path
+            os.replace(p, _backup_path(p))
         Path(path).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     except (OSError, ValueError, TypeError):
         pass

@@ -31,7 +31,7 @@ from .transfer_verify import _verify_phase
 def transfer(src: Path, dst: Path, *, dry_run: bool = False, include_cloud: bool = False,
              runner: Runner = default_runner, attr_getter: AttrGetter = default_attr_getter,
              log_path: Path | None = None, warn: Callable[[str], None] = lambda m: None,
-             strict: bool = False, state_path: Path | None = None,
+             strict: bool = False, state_path: Path | None = None, preserve_path: Path | None = None,
              progress: Callable[[str], None] | None = None,
              cancel: Callable[[], bool] | None = None,
              progress_info: Callable[[ProgressInfo], None] | None = None,
@@ -230,7 +230,7 @@ def transfer(src: Path, dst: Path, *, dry_run: bool = False, include_cloud: bool
         with KeepAwake(keep_awake, power_set_state, warn) as awake:
             # ---- 1) 복사 단계(robocopy). 검사만/실패한 것만 다시 모드에서는 건너뛴다.
             copy_seconds = 0.0
-            journal = dst / PRESERVE_NAME
+            journal = Path(preserve_path) if preserve_path else dst / PRESERVE_NAME
             report.meta.update(preserved_existing_count=0, preserved_existing=[], preserve_resumed=False)
             if mode == "copy":
                 n_pres, listed, resumed_run = _preserve_existing(plain, src, dst, journal, cancel, say, dscan, warn)
