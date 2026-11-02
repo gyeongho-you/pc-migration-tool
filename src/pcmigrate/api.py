@@ -982,7 +982,8 @@ def _save_partial_import(e: BaseException, package, plan, only, skip, n_extra, r
     partial.meta["programs"] = plan.programs
     partial.meta["interrupted"] = type(e).__name__
     if not isinstance(e, (Cancelled, KeyboardInterrupt)):
-        partial.meta["interrupted_error"] = str(e)[:300]  # 결과 화면/JSON 에서 중단 이유를 보이기 위해(오류 로그는 아래에서 남긴다)
+        from . import errorlog
+        partial.meta["interrupted_error"] = errorlog.tokenize_home(str(e))[:300]  # 사용자 이름이 든 절대 경로는 치환(~)해서 결과 화면/JSON 에서 중단 이유를 보이기 위해(오류 로그는 아래에서 남긴다)
     res = ImportResult(plan, "interrupted", n_extra, partial, only=only, skip=skip)
     try:
         rec = import_record.build_record(package, plan, partial)

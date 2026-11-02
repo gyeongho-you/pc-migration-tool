@@ -3,6 +3,9 @@
 형식은 최신순입니다. 버전은 git 태그(v0.1.0 ~ v0.3.6)와 맞춥니다.
 
 ## v0.3.6 (2026-11-02)
+- 4차 재점검 수정(stage75) `--skip-done-items`/`skip_done`: 저널이 done 이어도 건너뛰기 전에 가볍게 대조(대상 폴더 존재, 대상의 파일 수·용량이 저널 기록 이상, 원본의 파일 수·용량이 끝났을 때 `src_stamp` 와 같음 — 해시는 읽지 않음)하고 어긋나면(대상 파일 삭제, 원본 파일 추가, 옛 기록) 건너뛰지 않고 다시 처리. 건너뛴 폴더는 요약에 '이전 실행의 검사 기록을 믿음, 이번에는 검사하지 않음'으로 따로 표시하고 '검사까지 통과했습니다' 로 말하지 않음(`run_multi(stamp_fn=)` 추가).
+- GUI 결과 리포트 위치: 직접 추가한 '파일'은 그 파일이 든 폴더 직속에만 쓰지 않고(바탕화면 파일 하나로 바탕화면 전체 하위를 막지 않음), 폴더 원본은 하위 전체를 계속 막음. 받은 폴더 놓기: 이번 계획에 없는 이전 실행의 끝나지 못한 `#staged` 저널 항목은 `stale` 로 표시하고 `place` 가 무시(끝나지 못한 항목이 이번 계획에 있으면 기존대로 미검증).
+- 복원이 중간에 멈췄을 때의 오류 문장(`interrupted_error`, CLI JSON `error`, GUI 안내)에서 이 PC 사용자 이름이 든 절대 경로를 `%USERPROFILE%` 로 치환(`errorlog.tokenize_home`).
 - 3차 재점검 수정(stage73) 받은 폴더 놓기(`place`): 같은 폴더의 실제 항목이 done 이어도 직접 고른 파일의 임시 보관 항목(`partial`)이 done 이 아니면(failed/pending/copied) 그 폴더를 미검증으로 보고해 `--include-unverified` 없이는 놓지 않고 받기 폴더의 파일도 지우지 않음(둘 다 done 이면 한 번만 놓고 파일 수도 한 번만 셈, 접미 없는 이전 형식 partial 하나뿐인 저널은 기존 동작).
 - 직접 추가 폴더 거부 기준(`unsafe_data_folder`): 사용자 홈이 드라이브 루트 바로 아래(`D:\이름`)여도 `D:\Projects` 같은 형제 폴더를 오탐하지 않음 — `Users` 전체·다른 사용자 홈·AppData 거부는 홈의 부모 이름이 `Users` 일 때만, 그 밖에는 홈 자체와 그 `AppData` 루트만 거부(자동 찾기 쪽 직접 폴더 추가와 상자 양쪽 시험).
 - 선택 전송 결과(`MultiReport`): `--skip-done-items` 로 끝난 폴더를 건너뛴 정상 재실행이 항상 `success=false`/`verification_complete=false` 이던 것 — 저널의 done(검사까지 통과)을 완료 근거로 인정. `clean_state_files` 가 `.pcmigrate-state-staged.json`·`.pcmigrate-preserve-staged.json` 도 지움.

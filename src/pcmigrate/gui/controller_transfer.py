@@ -223,9 +223,11 @@ class TransferMixin:
     def _report_inside_sources(self, path: str) -> bool:
         """리포트 위치가 원본(고른 폴더·직접 추가한 폴더) 안인가. 안이면 원본에는 아무것도 쓰지 않으므로 리포트를 쓰지 않는다."""
         try:
-            folders = list(self.source_folders())
-            folders += sorted({os.path.dirname(e.path) for e in self.drop_files()})  # 직접 추가한 파일이 든 폴더에도 쓰지 않는다
-            return any(real_api.report_inside(path, folder) for folder in folders if folder)
+            if any(real_api.report_inside(path, folder) for folder in self.source_folders() if folder):
+                return True  # 폴더 원본은 하위 전체에 쓰지 않는다
+            # 직접 추가한 '파일'은 그 파일이 든 폴더 직속에만 쓰지 않는다(상위 폴더 전체 하위를 막으면 바탕화면 파일 하나 때문에 바탕화면 전체에 못 쓴다)
+            here = os.path.normcase(os.path.dirname(os.path.abspath(path)))
+            return any(os.path.normcase(os.path.abspath(os.path.dirname(e.path))) == here for e in self.drop_files())
         except Exception:  # noqa: BLE001 - 판단하지 못하면 쓰지 않는 쪽이 안전하다
             return True
 

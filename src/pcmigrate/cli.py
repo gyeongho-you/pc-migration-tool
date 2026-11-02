@@ -233,6 +233,9 @@ def _chunk_mb(text: str) -> float:
     return v
 
 
+from . import errorlog as _errorlog  # noqa: E402  (사용자 이름이 든 경로를 보고서/JSON 에 남기지 않으려고 tokenize_home 을 쓴다)
+
+
 def _save_abort_report(path, exc: BaseException) -> None:
     """전송이 끝까지 가지 못했어도(취소/드라이브 분리/공간 부족/오류) 결과 리포트(--report)를 남긴다(원본은 읽기만, 리포트는 원본 밖)."""
     if not path:
@@ -783,7 +786,7 @@ def _import_interrupted(args: argparse.Namespace, exc: BaseException, part) -> i
     if args.json:  # 중단된 복원도 JSON 으로: 복원 기록 경로와 여기까지 쓴 파일 목록
         rd = part.report.to_dict()
         _json_out({"dry_run": False, "mode": "interrupted", "written": True, "interrupted": type(exc).__name__,
-                   "error": str(exc)[:300], "summary": rd["summary"], "failed_count": rd["failed_count"], "success": False,
+                   "error": _errorlog.tokenize_home(str(exc))[:300], "summary": rd["summary"], "failed_count": rd["failed_count"], "success": False,
                    "programs": part.plan.programs, "import_record": part.record_path or None,
                    **({"import_record_error": part.record_error} if part.record_error else {}),
                    "written_files": [x.dst for x in part.report.results if x.status == "copied"]})

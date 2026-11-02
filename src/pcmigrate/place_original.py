@@ -734,7 +734,7 @@ def discover(recv: Path, maps: dict[str, str], include_unverified: bool, warn: C
     bad_tops: set[str] = set()  # 저널 항목이 깨진 최상위 폴더(유추로 놓지 않는다)
     real_rels = {str(v.get("rel", "")).lower() for v in items.values() if isinstance(v, dict) and not v.get("partial")}  # 폴더째 보낸 실제 항목
     part_bad = {str(v.get("rel", "")).lower(): v.get("status") for v in items.values()
-                if isinstance(v, dict) and v.get("partial") and v.get("status") != "done"}  # 끝나지 못한 임시 보관(직접 고른 파일) 항목
+                if isinstance(v, dict) and v.get("partial") and v.get("status") not in ("done", "stale")}  # stale: 이번 계획에 없어 낡은 기록  # 끝나지 못한 임시 보관(직접 고른 파일) 항목
     for key, it in items.items():
         meta["journal_items"] += 1
         key_top = str(key).split("\\")[0].lower()

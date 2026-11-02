@@ -210,7 +210,8 @@ class ImportMixin:
         r = self.state.import_result
         if getattr(r, "mode", "") != "interrupted":
             return ""
-        err = str((getattr(getattr(r, "report", None), "meta", None) or {}).get("interrupted_error") or "")
+        from .. import errorlog
+        err = errorlog.tokenize_home(str((getattr(getattr(r, "report", None), "meta", None) or {}).get("interrupted_error") or ""))  # 저장된 값이 옛 것이어도 화면에는 치환해서
         return T.STOP_DONE_APPLY + ("\n" + T.friendly_detail(err) if err else "")  # 취소가 아닌 예외면 중단 이유(오류 문장)를 함께
 
     def backup_folder(self) -> str:

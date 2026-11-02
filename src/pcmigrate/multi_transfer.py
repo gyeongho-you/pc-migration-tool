@@ -262,7 +262,7 @@ def summary_lines(rep: MultiReport, dst: str) -> list[str]:
                  + (f", 클라우드 전용 건너뜀 {c.get('cloud_only', 0)}개" if c.get("cloud_only") else "")]
     lines.append(f"- 폴더별: 성공 {d['items_ok']}개, 실패 {d['items_failed']}개")
     for it in rep.items:
-        mark = {"ok": "OK ", "preview": "미리보기", "skipped_done": "건너뜀(이미 끝남)"}.get(it.status, "실패")
+        mark = {"ok": "OK ", "preview": "미리보기", "skipped_done": "건너뜀(이전 실행의 검사 기록을 믿음, 이번에는 검사하지 않음)"}.get(it.status, "실패")
         extra = ""
         if it.report is not None:
             r = it.report.to_dict()
@@ -285,6 +285,9 @@ def summary_lines(rep: MultiReport, dst: str) -> list[str]:
         lines.append("다음 할 일: 이상 없으면 같은 명령에서 --dry-run 만 빼고 실행하세요.")
     elif d["failed_count"] or d["items_failed"]:
         lines.append("다음 할 일: 원인을 해결한 뒤 같은 명령에 --retry-failed 를 붙여 실패한 파일만 다시 처리하세요(끝난 폴더는 빠르게 지나갑니다).")
+    elif d["verification_complete"] and any(i.status == "skipped_done" for i in rep.items):
+        lines.append("다음 할 일: 이번에 보낸 폴더는 검사까지 통과했습니다. 건너뛴 폴더는 이전 실행의 검사 기록을 믿고 건너뛴 것이라 이번에는 검사하지 않았습니다"
+                     "(확실히 하려면 --skip-done-items 없이 다시 실행하세요). 원본 정리는 충분히 확인한 뒤 판단하세요.")
     elif d["verification_complete"]:
         skipped_any = bool(c.get("cloud_only")) or bool(d.get("junk_excluded")) or any(i.get("skipped_links") for i in d["items"])
         lines.append("다음 할 일: 검사까지 통과했습니다. "
@@ -368,6 +371,56 @@ def precheck_space(plan: Plan, dst: Path, *, dest_info_fn=None, cancel=None, est
             "space_blocked": blocked, "dest_fs": dest.fs, "dest_kind": dest.kind}
 
 
+_PART_RE = re.compile(r"\.pcm\d{3,}$")
+
+
+def _dest_stats(folder: Path, cancel) -> tuple[int, int]:
+    """대상 폴더의 (파일 수, 용량): 이 도구의 기록 파일(.pcmigrate-*)과 .bak 은 빼고, 분할 조각(.pcm001...)은 원본 파일 하나로 센다."""
+    files = total = 0
+    parts: set[str] = set()
+    for root, _d, names in os.walk(folder):
+        if cancel is not None and cancel():
+            raise Cancelled()
+        for n in names:
+            if n.startswith(".pcmigrate-") or n.lower().endswith(".bak") or ".bak." in n.lower():
+                continue
+            try:
+                size = os.path.getsize(os.path.join(root, n))
+            except OSError:
+                continue
+            total += size
+            if _PART_RE.search(n):
+                key = os.path.join(root, _PART_RE.sub("", n))
+                if key not in parts:
+                    parts.add(key)
+                    files += 1
+            else:
+                files += 1
+    return files, total
+
+
+def _skip_still_valid(prior: dict, item_dst: Path, src: str, stamp_fn, cancel) -> bool:
+    """저널이 done 이어도 건너뛰기 전에 가볍게 대조한다(파일을 열어 해시하지 않음): 대상 폴더가 있고 대상의 파일 수·용량이 저널 기록 이상이며,
+    stamp_fn 이 있으면 원본의 (파일 수, 용량)이 끝났을 때 기록과 같을 때만 True. 하나라도 어긋나면 건너뛰지 않고 다시 처리한다."""
+    try:
+        if not item_dst.is_dir():
+            return False
+        want_f, want_b = prior.get("files"), prior.get("bytes")
+        if isinstance(want_f, int) and isinstance(want_b, int):
+            have_f, have_b = _dest_stats(item_dst, cancel)
+            if have_f < want_f or have_b < want_b:
+                return False
+        if stamp_fn is not None:
+            was = prior.get("src_stamp")
+            if not (isinstance(was, list) and len(was) == 2) or tuple(stamp_fn(src)) != tuple(was):
+                return False  # 원본이 바뀌었거나(또는 옛 기록이라 확인할 수 없어) 다시 처리
+        return True
+    except Cancelled:
+        raise
+    except OSError:
+        return False
+
+
 def _scan_bytes(src: str, cancel) -> int:
     return scan_source_info(src, cancel=cancel).total_bytes
 
@@ -383,8 +436,10 @@ def run_multi(selected: Iterable[SelectedItem | str], dst: str | os.PathLike, tr
               progress_info: Callable[[ProgressInfo], None] | None = None,
               on_item: Callable[[int, int, str, str, Report | None], None] | None = None,
               cancel: Callable[[], bool] | None = None, warn: Callable[[str], None] = lambda m: None,
-              dest_info_fn=None, estimate_fn=None) -> MultiReport:
+              dest_info_fn=None, estimate_fn=None, stamp_fn=None) -> MultiReport:
     """여러 원본 폴더를 dst 아래로 전송한다.
+
+    stamp_fn(src) -> (파일 수, 용량): 끝난 폴더의 원본 상태 표식. 있으면 skip_done 이 원본이 바뀌지 않았는지도 대조한다(없으면 대상 대조만).
 
     transfer_fn(src: Path, dst: Path, **item_kwargs_and_per_item) -> Report. 항목별로 progress/progress_info/cancel/warn/manifest_out/
     dry_run/retry_failed/verify_only 를 덧붙여 부른다(그 외 옵션은 item_kwargs 로 그대로 전달).
@@ -414,6 +469,10 @@ def run_multi(selected: Iterable[SelectedItem | str], dst: str | os.PathLike, tr
     journal = {"version": JOURNAL_VERSION, "items": {}} if dry_run else _read_journal(dst)
     prev_keys = set(journal["items"])
     new_keys = {it.rel.lower() + (STAGED_SUFFIX if it.orig else "") for it in plan.items}
+    if not dry_run:  # 이전 실행의 임시 보관(직접 고른 파일) 항목이 끝나지 못한 채 이번 계획에 없으면 낡은 기록으로 표시한다(place 가 계속 미검증으로 막지 않게)
+        for k, v in journal["items"].items():
+            if k.endswith(STAGED_SUFFIX) and k not in new_keys and isinstance(v, dict) and v.get("status") != "done":
+                v["status"] = "stale"
     if prev_keys and prev_keys != new_keys and not dry_run:
         warn("이전 실행과 선택한 폴더 구성이 다릅니다. 같은 대상에 이어서 담습니다(이전에 담은 폴더는 지우지 않습니다).")
     if not dry_run:
@@ -433,7 +492,8 @@ def run_multi(selected: Iterable[SelectedItem | str], dst: str | os.PathLike, tr
         key = it.rel.lower() + (STAGED_SUFFIX if it.orig else "")
         prior = journal["items"].get(key, {})
         partial = {"partial": True} if it.orig else {}  # 임시 보관(직접 고른 일부 파일) 항목: 폴더 전체가 끝났다는 뜻이 아니다
-        if skip_done and not it.orig and not dry_run and not retry_failed and prior.get("status") == "done" and not prior.get("partial"):
+        if (skip_done and not it.orig and not dry_run and not retry_failed and prior.get("status") == "done" and not prior.get("partial")
+                and _skip_still_valid(prior, item_dst, it.src, stamp_fn, cancel)):
             mr.items.append(ItemResult(shown, str(item_dst), "skipped_done"))
             if on_item:
                 on_item(n, total, shown, "skipped_done", None)
@@ -485,6 +545,11 @@ def run_multi(selected: Iterable[SelectedItem | str], dst: str | os.PathLike, tr
             done = not bad and bool(r.get("verification_complete"))
             journal["items"][key] = {"src": shown, "rel": it.rel, "status": "done" if done else "failed" if bad else "copied",
                                      "files": r.get("total_files"), "bytes": r.get("total_bytes"), "failed": len(rep.failures), **partial}
+            if done and not it.orig and stamp_fn is not None:
+                try:
+                    journal["items"][key]["src_stamp"] = list(stamp_fn(it.src))  # 다음 skip_done 때 원본이 그대로인지 대조하는 표식
+                except (OSError, ValueError, TypeError):
+                    pass
             _write_journal(dst, journal)
         if on_item:
             on_item(n, total, shown, status, rep)

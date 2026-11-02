@@ -101,8 +101,18 @@ def run_transfer_selection(selection, dst: str | Path, *, dry_run: bool = False,
                 o = {**opts, "exclude_junk": False, "junk_backup_copies": False}
         return run_transfer(src, d, deps=deps, **o, **kw)
 
+    def stamp(src) -> tuple[int, int]:
+        """끝난 폴더의 원본 상태 표식(파일 수, 용량): 정크 제외/클라우드 옵션을 전송과 같게 적용한 조사 결과. skip_done 때 원본이 바뀌었는지 대조한다."""
+        from .junk import apply_to_scan, make_spec
+        from .scan import scan_source_info
+        sc = scan_source_info(str(src), cancel=cancel)
+        if exclude_junk:
+            apply_to_scan(sc, make_spec(junk_backup_copies))
+        rows = list(sc.entries) + (list(sc.cloud) if include_cloud else [])
+        return len(rows), sum(r[1] for r in rows)
+
     def go(its: list) -> MultiReport:
-        return run_multi(its, dst, one, dry_run=dry_run, manifest_out=manifest_out, skip_done=skip_done,
+        return run_multi(its, dst, one, dry_run=dry_run, manifest_out=manifest_out, skip_done=skip_done, stamp_fn=stamp,
                          retry_failed=retry_failed, verify_only=verify_only, progress=progress, progress_info=progress_info,
                          on_item=on_item, cancel=cancel, warn=warn, dest_info_fn=dest_info_fn, estimate_fn=estimate_fn)
 
