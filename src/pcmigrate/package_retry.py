@@ -293,7 +293,7 @@ def _retry_once(out: Path, rules: list[Rule], expand: Expand, progress_info, not
                     if zi.filename == MANIFEST:
                         continue
                     _copy_raw_entry(old, zi, fobj, zf, lambda n: (tracker.add(n, 0), emit()))
-                new_manifest = dict(manifest)
+                new_manifest = {k: v for k, v in manifest.items() if k != "_programs_unverified"}  # 읽은 결과에만 붙는 표시는 저장하지 않는다
                 new_manifest["files"] = list(manifest["files"]) + new_files
                 new_manifest["failed"] = [f for f in old_failed if not f.get("reason")] + keep_failed
                 prev = manifest.get("retries") if isinstance(manifest.get("retries"), list) else []

@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 import errno
+import hashlib
 import json
 import os
 import shutil
@@ -309,12 +310,16 @@ def _export_once(rules, out, programs, winget_text, expand, winget_list_text, ex
         savepoint()  # 마무리 단계가 실패해도 담은 파일은 다시 담지 않도록
         journal.close()
         journal = None
-        zf.writestr("programs/registry.json", json.dumps([{k: v for k, v in asdict(p).items() if k not in RECORD_ONLY_FIELDS} for p in programs],
-                                                         ensure_ascii=False, indent=2))
+        prog_texts = {"programs/registry.json": json.dumps([{k: v for k, v in asdict(p).items() if k not in RECORD_ONLY_FIELDS} for p in programs],
+                                                           ensure_ascii=False, indent=2)}
         if winget_text:
-            zf.writestr("programs/winget.json", winget_text)
+            prog_texts["programs/winget.json"] = winget_text
         if winget_list_text:
-            zf.writestr("programs/winget-list.txt", winget_list_text)
+            prog_texts["programs/winget-list.txt"] = winget_list_text
+        for name, text in prog_texts.items():
+            zf.writestr(name, text)
+        # 프로그램 목록(변조되면 checklist/설치 확인/winget import 가 속는다)도 manifest 에 해시를 남긴다(M6). 옛 패키지는 이 키가 없다
+        manifest["programs_sha256"] = {n: hashlib.sha256(t.encode("utf-8")).hexdigest() for n, t in prog_texts.items()}
         zf.writestr(MANIFEST, json.dumps(manifest, ensure_ascii=False, indent=2))
         zf.close()
         fobj.flush()

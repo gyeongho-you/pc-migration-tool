@@ -33,6 +33,7 @@ WILDCARD = set("*?[")
 # 압축 폭탄/거대 패키지 방어(B-5). deflate 는 압축비가 약 1000:1 을 넘을 수 없으므로 압축 방식을 제한하고 선언 크기를 지킨다.
 MAX_MANIFEST_BYTES = 256 * 1024 * 1024
 MAX_ENTRIES = 1_000_000
+MAX_TOTAL_BYTES = 1024 ** 4  # 패키지 files 의 선언 크기 합 상한(1 TiB). 넘으면 dry-run/verify 단계에서 거부한다(L5)
 ALLOWED_COMPRESSION = (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED)
 # 복원 거부 목록(B-1/B-7/F-1): 규칙/extra 모두에 적용한다. 다음 로그인/실행 때 코드가 실행될 수 있는 파일들이다.
 # 확장자는 규칙 path 의 마지막 패턴이 그 확장자를 직접 적어 둔 경우(예: "*.exe")에만 그 규칙에서 허용한다.
@@ -45,7 +46,11 @@ DENY_EXTENSIONS = frozenset({".exe", ".scr", ".com", ".pif", ".bat", ".cmd", ".p
                              # S2: 다음 실행 때 프로그램이 읽어 코드를 돌리는 플러그인/매크로/스크립트(SketchUp .rb, AutoCAD .lsp/.fas/.vlx/.arx/.mnl,
                              # Rhino/Grasshopper .rhp/.gha, Revit .addin, Node 네이티브 .node, AutoHotkey .ahk, VS Code .vsix, Gradle 초기화 .gradle).
                              # 규칙 path 가 확장자를 명시하거나(마지막 패턴 "*.rb") allow_extensions 로 적은 경우에만 그 규칙에서 허용한다.
-                             ".rb", ".lsp", ".fas", ".vlx", ".arx", ".mnl", ".node", ".gha", ".rhp", ".addin", ".ahk", ".vsix", ".gradle"})
+                             ".rb", ".lsp", ".fas", ".vlx", ".arx", ".mnl", ".node", ".gha", ".rhp", ".addin", ".ahk", ".vsix", ".gradle",
+                             # 68(L1): 다음 실행/열기 때 코드를 돌리거나 설정을 바꾸는 형식(Ruby 암호화 .rbe/.rbs, AutoCAD .dvb VBA, Lua/Vim 스크립트, VSTO,
+                             # 매크로 문서 .docm/.xlsm, 테마 .theme, 원격 연결 .rdp, 탐색기 셸 명령 .scf/.library-ms, 네이티브 .so).
+                             # 규칙이 allow_extensions 나 마지막 패턴("*.dvb")으로 명시하면 그 규칙에서는 기존처럼 허용된다.
+                             ".rbe", ".rbs", ".dvb", ".lua", ".vim", ".vsto", ".docm", ".xlsm", ".theme", ".rdp", ".scf", ".library-ms", ".so"})
 # 폴더 이름(소문자)이 경로 어디에 있어도 막는다: Excel 이 시작할 때 자동으로 여는 폴더
 DENY_DIR_NAMES = frozenset({"xlstart"})
 # 사용자 홈 바로 아래(%USERPROFILE%)에서 도구가 읽어 명령을 실행하거나 비밀을 담는 점 파일(소문자 이름). .gitconfig 는 흔히 쓰므로 허용한다.
@@ -58,7 +63,8 @@ HOME_DENY_SUBFILES = frozenset({(".kube", "config"), (".docker", "config.json"),
 HOME_DENY_DIRS = frozenset({(".config", "git"), (".emacs.d",), (".vim",), (".vscode", "extensions"), (".gradle", "init.d")})
 # 셸/SSH 가 시작할 때 읽어 실행하는 설정(소문자 파일 이름 / 폴더 이름)
 DENY_FILE_NAMES = frozenset({".bashrc", ".bash_profile", ".bash_login", ".bash_logout", ".profile", ".zshrc", ".zprofile",
-                             ".zshenv", ".zlogin", ".cshrc", ".kshrc", "authorized_keys"})
+                             ".zshenv", ".zlogin", ".cshrc", ".kshrc", "authorized_keys",
+                             "desktop.ini"})  # desktop.ini: 폴더 아이콘/셸 확장(InfoTip, 바로가기 대상)을 지정할 수 있다
 # .ssh 아래에서는 개인키가 아니라 접속 때 명령을 실행시킬 수 있는 파일(ProxyCommand 등)만 막는다
 SSH_DENY_FILES = frozenset({"config", "rc", "environment", "authorized_keys2"})
 _DEVICE_NAMES = frozenset({"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$",

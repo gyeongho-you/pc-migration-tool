@@ -24,7 +24,7 @@ N = 6
 def make_rule(version="7", rid="demo"):
     return parse_rule({
         "id": rid, "name": "Demo", "version": version, "detect": {"display_name_patterns": ["Demo"]},
-        "paths": [{"path": "%ROAM%\\Vendor\\Demo\\Support", "dest": "demo/support", "kind": "dir"}],
+        "paths": [{"path": "%APPDATA%\\Vendor\\Demo\\Support", "dest": "demo/support", "kind": "dir"}],
         "manual_warnings": ["재로그인 필요"]})
 
 
@@ -37,7 +37,7 @@ def env(tmp_path):
         (sup / f"f{i}.cfg").write_bytes((f"file-{i}-" * 200).encode())
     (sup / "pic.jpg").write_bytes(os.urandom(5000))
     return SimpleNamespace(tmp=tmp_path, old=old, sup=sup, out=tmp_path / "out" / "p.zip",
-                           expand=lambda s: s.replace("%ROAM%", str(old)))
+                           expand=lambda s: s.replace("%APPDATA%", str(old)))
 
 
 def run(env, out=None, rules=None, **kw):
@@ -337,7 +337,7 @@ def test_resumed_package_imports_normally(env, monkeypatch):
     run(env)
     new = env.tmp / "new"
     new.mkdir()
-    plan = plan_import(env.out, [make_rule()], expand=lambda s: s.replace("%ROAM%", str(new)))
+    plan = plan_import(env.out, [make_rule()], expand=lambda s: s.replace("%APPDATA%", str(new)))
     assert plan.problems == []
     rep = apply_import(env.out, plan)
     assert all(r.status in ("copied", "verified") for r in rep.results)
@@ -409,7 +409,7 @@ def test_import_handles_both_methods(env, mode):
     run(env, out=out, compress=mode)
     new = env.tmp / "new"
     new.mkdir()
-    plan = plan_import(out, [make_rule()], expand=lambda s: s.replace("%ROAM%", str(new)))
+    plan = plan_import(out, [make_rule()], expand=lambda s: s.replace("%APPDATA%", str(new)))
     assert plan.problems == []
     rep = apply_import(out, plan)
     assert all(r.status in ("copied", "verified") for r in rep.results)
@@ -457,7 +457,7 @@ def _rules_dir(env):
     d.mkdir()
     (d / "demo.json").write_text(json.dumps({
         "id": "demo", "name": "Demo", "version": "7", "detect": {"display_name_patterns": ["Demo"]},
-        "paths": [{"path": "%ROAM%\\Vendor\\Demo\\Support", "dest": "demo/support", "kind": "dir"}],
+        "paths": [{"path": "%APPDATA%\\Vendor\\Demo\\Support", "dest": "demo/support", "kind": "dir"}],
         "manual_warnings": []}), encoding="utf-8")
     return d
 
@@ -465,7 +465,7 @@ def _rules_dir(env):
 def test_api_run_export_resume_flag_and_compress_validation(env, monkeypatch):
     monkeypatch.setenv("ROAM", str(env.old))
     from pcmigrate import envpaths
-    monkeypatch.setattr(envpaths, "expand_env", lambda s: s.replace("%ROAM%", str(env.old)))
+    monkeypatch.setattr(envpaths, "expand_env", lambda s: s.replace("%APPDATA%", str(env.old)))
     patch_pkg(monkeypatch, "expand_env", envpaths.expand_env)
     seen = {}
 

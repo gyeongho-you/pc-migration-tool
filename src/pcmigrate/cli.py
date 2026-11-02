@@ -760,6 +760,22 @@ def _cmd_export(args: argparse.Namespace) -> int:
     return 1 if r.hard_failures else 0  # 읽지 못한 파일은 안내만 하고 성공으로 끝낸다(패키지는 검증을 통과했다)
 
 
+def _import_interrupted(args: argparse.Namespace, exc: BaseException, part) -> int:
+    """복원이 취소/예외로 중간에 멈췄을 때: 지금까지의 결과 리포트를 저장하고 기록 위치를 알린다."""
+    _err(f"[중단] 복원이 중간에 멈췄습니다({type(exc).__name__}: {exc}). 여기까지의 결과를 보고합니다.")
+    if part.record_path:
+        _err(f"[기록] 복원 기록을 저장했습니다(pcmigrate undo-import 로 되돌릴 수 있습니다): {part.record_path}")
+    if part.record_error:
+        _err(f"[주의] 복원 기록을 저장하지 못했습니다({part.record_error}). undo-import 로 되돌릴 수 없습니다. --record-dir 로 쓸 수 있는 폴더를 지정하세요.")
+    if args.report:
+        try:
+            part.report.write(Path(args.report))
+        except OSError as e:
+            _write_failed(args.report, e)
+    _print_lines(summary.import_lines(part, args.package, part.report))
+    return 1
+
+
 def _cmd_import(args: argparse.Namespace) -> int:
     if _unexpanded(package=args.package, report=args.report):
         return 1
@@ -775,6 +791,11 @@ def _cmd_import(args: argparse.Namespace) -> int:
                        allow_install_dir=args.allow_install_dir)
     except ApiError as e:
         return _fail(e)
+    except (Exception, KeyboardInterrupt) as e:  # 복원 중 중단: 부분 결과와 되돌리기 기록을 알리고(M1), 그 밖의 예외는 그대로 둔다
+        part = getattr(e, "partial_result", None)
+        if part is None:
+            raise
+        return _import_interrupted(args, e, part)
     if r.mode == "blocked":
         if args.json:
             _json_out(r.preview_dict(), indent=2)

@@ -10,7 +10,7 @@ import zlib
 from pathlib import Path
 
 from .cancel import checkpoint
-from .package_base import ALLOWED_COMPRESSION, CHUNK, FORMAT_VERSION, MANIFEST, MAX_ENTRIES, MAX_MANIFEST_BYTES, PackageError, _safe_rel
+from .package_base import ALLOWED_COMPRESSION, CHUNK, FORMAT_VERSION, MANIFEST, MAX_ENTRIES, MAX_MANIFEST_BYTES, MAX_TOTAL_BYTES, PackageError, _safe_rel
 
 
 def _hash_entry(zf: zipfile.ZipFile, name: str, limit: int | None = None) -> tuple[int, str]:
@@ -44,6 +44,42 @@ def _manifest_shape_problems(manifest: object) -> list[str]:
             isinstance(w, dict) and isinstance(w.get("items", []), list)
             and all(isinstance(i, str) for i in w.get("items", [])) for w in warns):
         problems.append("manifest 오류: manual_warnings 형식이 올바르지 않음")
+    return problems
+
+
+PROGRAM_ENTRIES = ("programs/registry.json", "programs/winget.json", "programs/winget-list.txt")
+MAX_PROGRAMS_BYTES = 64 * 1024 * 1024  # 프로그램 목록 한 파일의 상한(그보다 크면 거부)
+
+
+def _programs_problems(zf: zipfile.ZipFile, names: list[str], manifest: dict) -> list[str]:
+    """programs/* 의 무결성(M6). manifest 에 programs_sha256 이 있으면 모든 항목의 해시를 맞춰 보고, 없으면(옛 패키지) 기존처럼 읽되
+    manifest['_programs_unverified']=True 로 표시한다(저장되는 값이 아니라 읽은 결과에만 붙는 표시)."""
+    present = [n for n in PROGRAM_ENTRIES if n in names]
+    for n in present:
+        if zf.getinfo(n).file_size > MAX_PROGRAMS_BYTES:
+            return [f"프로그램 목록이 너무 큽니다(> {MAX_PROGRAMS_BYTES // 1024 // 1024}MB): {n}"]
+    declared = manifest.get("programs_sha256")
+    if declared is None:
+        if present:
+            manifest["_programs_unverified"] = True
+        return []
+    if not isinstance(declared, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in declared.items()):
+        return ["manifest 오류: programs_sha256 형식이 올바르지 않음"]
+    problems = []
+    for n in present:
+        if n not in declared:
+            problems.append(f"프로그램 목록 해시가 manifest 에 없음(바뀌었을 수 있음): {n}")
+            continue
+        try:
+            size, digest = _hash_entry(zf, n, MAX_PROGRAMS_BYTES)
+        except (zipfile.BadZipFile, zlib.error, RuntimeError, NotImplementedError, OSError):
+            problems.append(f"프로그램 목록을 읽을 수 없음(손상): {n}")
+            continue
+        if digest != declared[n]:
+            problems.append(f"프로그램 목록 해시 불일치(바뀌었거나 손상): {n}")
+    for n in declared:
+        if n not in names:
+            problems.append(f"프로그램 목록이 패키지에 없음: {n}")
     return problems
 
 
@@ -99,6 +135,9 @@ def verify_package(path: Path) -> tuple[dict | None, list[str]]:
         shape = _manifest_shape_problems(manifest)
         if shape:
             return None, shape
+        declared_total = sum(f["size"] for f in manifest["files"] if _file_entry_ok(f))
+        if declared_total > MAX_TOTAL_BYTES:  # 선언 크기의 합이 비정상적으로 크면 해시를 계산하느라 시간/디스크를 쓰기 전에 거부한다(L5)
+            return None, [f"패키지가 선언한 파일 크기의 합이 너무 큽니다({declared_total:,}바이트 > {MAX_TOTAL_BYTES:,}바이트). 손상되었거나 안전하지 않은 패키지입니다"]
         listed = set()
         for f in manifest["files"]:
             if not _file_entry_ok(f):
@@ -128,8 +167,8 @@ def verify_package(path: Path) -> tuple[dict | None, list[str]]:
                 continue
             if n != size or h != digest:
                 problems.append(f"크기/해시 불일치: {arc}")
-        extra = set(names) - listed - {MANIFEST, "programs/registry.json", "programs/winget.json",
-                                        "programs/winget-list.txt"}
+        problems += _programs_problems(zf, names, manifest)
+        extra = set(names) - listed - {MANIFEST, *PROGRAM_ENTRIES}
         for e in sorted(extra):
             problems.append(f"manifest 에 없는 엔트리: {e}")
     return manifest, problems

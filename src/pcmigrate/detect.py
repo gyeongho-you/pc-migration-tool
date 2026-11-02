@@ -173,12 +173,15 @@ def winget_install_command(winget_id: str, version: str = "", locale: str = DEFA
 
 
 def parse_winget_export(text: str) -> list[Program]:
+    """winget export JSON → Program 목록. 모양이 이상한 항목(목록이 아님, 객체가 아님, id 가 문자열이 아님)은 건너뛴다(손상/변조 방어)."""
     data = json.loads(text)
     programs: list[Program] = []
-    for source in data.get("Sources", []):
-        for pkg in source.get("Packages", []):
-            pid = pkg.get("PackageIdentifier", "")
-            if pid:
+    sources = data.get("Sources", []) if isinstance(data, dict) else []
+    for source in sources if isinstance(sources, list) else []:
+        pkgs = source.get("Packages", []) if isinstance(source, dict) else []
+        for pkg in pkgs if isinstance(pkgs, list) else []:
+            pid = pkg.get("PackageIdentifier", "") if isinstance(pkg, dict) else ""
+            if pid and isinstance(pid, str):
                 programs.append(Program(pid, str(pkg.get("Version") or ""),
                                         source="winget", winget_id=pid))
     return programs

@@ -173,7 +173,7 @@ def build(env_, rules=None):
 
 def test_restore_outside_rule_pattern_rejected(env, tmp_path):
     _, old, new, expand_for = env
-    base = "%ROAM%\\Vendor"
+    base = "%APPDATA%\\Vendor"
     bad = forge_pkg(tmp_path / "bad.zip", [("demo", base, "WindowsPowerShell/anything.txt", b"x")])
     plan = plan_import(bad, [make_rule()], expand_for(new))
     assert plan.items == [] and any("패턴" in p for p in plan.problems)
@@ -184,24 +184,24 @@ def test_restore_outside_rule_pattern_rejected(env, tmp_path):
 
 def test_restore_inside_rule_pattern_allowed(env, tmp_path):
     _, old, new, expand_for = env
-    ok = forge_pkg(tmp_path / "ok.zip", [("demo", "%ROAM%\\Vendor", "Demo 2024/R1/Support/sub/a.cfg", b"x"),
-                                          ("demo", "%ROAM%\\Vendor", "prefs.json", b"{}")])
+    ok = forge_pkg(tmp_path / "ok.zip", [("demo", "%APPDATA%\\Vendor", "Demo 2024/R1/Support/sub/a.cfg", b"x"),
+                                          ("demo", "%APPDATA%\\Vendor", "prefs.json", b"{}")])
     plan = plan_import(ok, [make_rule()], expand_for(new))
     assert plan.problems == [] and len(plan.items) == 2
 
 
 def test_file_rule_requires_exact_name(env, tmp_path):
     _, old, new, expand_for = env
-    bad = forge_pkg(tmp_path / "bad.zip", [("demo", "%ROAM%\\Vendor", "prefs.json/evil.txt", b"x")])
+    bad = forge_pkg(tmp_path / "bad.zip", [("demo", "%APPDATA%\\Vendor", "prefs.json/evil.txt", b"x")])
     assert plan_import(bad, [make_rule()], expand_for(new)).problems
 
 
 def test_dangerous_names_rejected_even_inside_pattern(env, tmp_path):
     _, old, new, expand_for = env
-    rule = make_rule(paths=[{"path": "%ROAM%\\Docs\\*", "dest": "demo/docs", "kind": "dir"}])
+    rule = make_rule(paths=[{"path": "%APPDATA%\\Docs\\*", "dest": "demo/docs", "kind": "dir"}])
     for rel in ("WindowsPowerShell/profile.ps1", "PowerShell/Microsoft.PowerShell_profile.ps1", "x/run.bat",
                 "x/a.lnk", "x/a.exe", "Start Menu/Programs/Startup/a.txt", ".ssh/config", "x/.bashrc"):
-        bad = forge_pkg(tmp_path / "bad.zip", [("demo", "%ROAM%\\Docs", rel, b"x")], rules=[rule])
+        bad = forge_pkg(tmp_path / "bad.zip", [("demo", "%APPDATA%\\Docs", rel, b"x")], rules=[rule])
         plan = plan_import(bad, [rule], expand_for(new))
         # 19a: 패키지 전체를 막지 않고 그 파일만 '복원 안 함'(denied). 대상에는 쓰지 않는다
         assert plan.problems == [] and [i["status"] for i in plan.items] == ["denied"], rel
@@ -212,8 +212,8 @@ def test_dangerous_names_rejected_even_inside_pattern(env, tmp_path):
 
 def test_rule_that_names_extension_explicitly_may_restore_it(env, tmp_path):
     _, old, new, expand_for = env
-    rule = make_rule(paths=[{"path": "%ROAM%\\Tools\\*.exe", "dest": "demo/tools", "kind": "file"}])
-    ok = forge_pkg(tmp_path / "ok.zip", [("demo", "%ROAM%\\Tools", "helper.exe", b"MZ")], rules=[rule])
+    rule = make_rule(paths=[{"path": "%APPDATA%\\Tools\\*.exe", "dest": "demo/tools", "kind": "file"}])
+    ok = forge_pkg(tmp_path / "ok.zip", [("demo", "%APPDATA%\\Tools", "helper.exe", b"MZ")], rules=[rule])
     assert plan_import(ok, [rule], expand_for(new)).problems == []
 
 
@@ -448,14 +448,14 @@ def test_too_many_entries_rejected(env, tmp_path, monkeypatch):
 
 
 def test_unsupported_compression_rejected(tmp_path):
-    bad = forge_pkg(tmp_path / "bz.zip", [("demo", "%ROAM%\\Vendor", "prefs.json", b"x" * 1000)],
+    bad = forge_pkg(tmp_path / "bz.zip", [("demo", "%APPDATA%\\Vendor", "prefs.json", b"x" * 1000)],
                     compress=zipfile.ZIP_BZIP2)
     assert any("압축 방식" in p for p in verify_package(bad)[1])
 
 
 def test_entry_larger_than_declared_stops_early(tmp_path, monkeypatch):
     big = b"A" * 5000
-    bad = forge_pkg(tmp_path / "lie.zip", [("demo", "%ROAM%\\Vendor", "prefs.json", big)],
+    bad = forge_pkg(tmp_path / "lie.zip", [("demo", "%APPDATA%\\Vendor", "prefs.json", big)],
                     manifest_edit=lambda m: m["files"][0].update(size=10))
     read = []
     orig = package._hash_entry
@@ -490,7 +490,7 @@ def test_duplicate_zip_entries_rejected(tmp_path):
                                  "Demo 2024/a|b", "Demo 2024/LPT3"])
 def test_windows_unsafe_names_rejected(env, tmp_path, rel):
     _, old, new, expand_for = env
-    bad = forge_pkg(tmp_path / "bad.zip", [("demo", "%ROAM%\\Vendor", rel, b"x")])
+    bad = forge_pkg(tmp_path / "bad.zip", [("demo", "%APPDATA%\\Vendor", rel, b"x")])
     manifest, problems = verify_package(bad)
     assert problems, rel
     with pytest.raises(PackageError):
@@ -518,8 +518,8 @@ def test_export_skips_files_with_windows_unsafe_names(env):
 
 def test_case_only_duplicate_targets_rejected(env, tmp_path):
     _, old, new, expand_for = env
-    bad = forge_pkg(tmp_path / "dup.zip", [("demo", "%ROAM%\\Vendor", "Demo 2024/R1/Support/F.txt", b"1"),
-                                            ("demo", "%ROAM%\\Vendor", "demo 2024/r1/support/f.TXT", b"2")])
+    bad = forge_pkg(tmp_path / "dup.zip", [("demo", "%APPDATA%\\Vendor", "Demo 2024/R1/Support/F.txt", b"1"),
+                                            ("demo", "%APPDATA%\\Vendor", "demo 2024/r1/support/f.TXT", b"2")])
     plan = plan_import(bad, [make_rule()], expand_for(new))
     assert any("같은 대상" in p for p in plan.problems)
     with pytest.raises(PackageError):
@@ -529,9 +529,10 @@ def test_case_only_duplicate_targets_rejected(env, tmp_path):
 @pytest.mark.parametrize("name", ["k.lic ", "k.lic.", "k.LIC", "k.lic. ."])
 def test_license_exclusion_cannot_be_bypassed(env, tmp_path, name):
     _, old, new, expand_for = env
-    bad = forge_pkg(tmp_path / "lic.zip", [("demo", "%ROAM%\\Vendor", f"Demo 2024/R1/Support/{name}", b"LICENSE")])
+    bad = forge_pkg(tmp_path / "lic.zip", [("demo", "%APPDATA%\\Vendor", f"Demo 2024/R1/Support/{name}", b"LICENSE")])
     plan = plan_import(bad, [make_rule()], expand_for(new))
-    assert plan.items == [] and plan.problems
+    # stage68(H1): 이름이 안전하지 않은 변형은 구조 위반으로 전체 거부, 대소문자만 다른 k.LIC 는 그 파일만 '복원 안 함'(패키지 전체는 막지 않음)
+    assert (plan.items == [] and plan.problems) or (not plan.problems and all(i["status"] == "denied" for i in plan.items))
     assert not list((new / "Vendor").rglob("*")) if (new / "Vendor").exists() else True
 
 

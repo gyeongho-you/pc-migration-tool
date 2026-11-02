@@ -194,12 +194,12 @@ def test_export_prints_hint_and_import_dry_run_shows_manifest_warnings(tmp_path,
     base.mkdir(parents=True)
     (base / "prefs.json").write_text("{}", encoding="utf-8")
     rule = {"id": "demo", "name": "Demo", "detect": {"display_name_patterns": ["Demo"]},
-            "paths": [{"path": "%ROAM%\\Vendor\\prefs.json", "dest": "demo/prefs.json", "kind": "file"}],
+            "paths": [{"path": "%APPDATA%\\Vendor\\prefs.json", "dest": "demo/prefs.json", "kind": "file"}],
             "manual_warnings": ["데모 재로그인"]}
     (rules_dir / "demo.json").write_text(json.dumps(rule), encoding="utf-8")
     patch_detection(monkeypatch, [Program("Demo App")], WINGET)
-    old_expand = lambda s: s.replace("%ROAM%", str(tmp_path / "old"))
-    new_expand = lambda s: s.replace("%ROAM%", str(tmp_path / "new"))
+    old_expand = lambda s: s.replace("%APPDATA%", str(tmp_path / "old"))
+    new_expand = lambda s: s.replace("%APPDATA%", str(tmp_path / "new"))
     real_export = cli.export_package
     monkeypatch.setattr(cli, "export_package", lambda *a, **k: real_export(*a, expand=old_expand, **k))
     pkg = tmp_path / "pkg.zip"

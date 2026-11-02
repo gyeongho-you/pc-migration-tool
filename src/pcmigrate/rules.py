@@ -30,6 +30,7 @@ detect 조건은 하나 이상 있어야 하며, paths 는 백업과 복원에 �
 from __future__ import annotations
 
 import json
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -87,15 +88,48 @@ def _check_dest(dest: str, where: str) -> None:
         raise RuleError(f"{where}: dest '{dest}' 는 안전한 상대 경로여야 합니다")
 
 
+# 규칙 path 의 첫 요소로 쓸 수 있는 환경변수(대소문자 무시). 그 밖의 변수(%WINDIR%, %SystemRoot%, %ProgramFiles% 등)와 정의되지 않은 변수는 거부한다(M3).
+# 기록 모드/가져오기/내보내기가 쓰는 루트(discover_data.ROOTS)와 같은 범위다.
+ALLOWED_PATH_ENVS = frozenset({"appdata", "localappdata", "userprofile", "programdata", "onedrive", "onedrivecommercial", "onedriveconsumer"})
+# 규칙이 allow_extensions 로 풀 수 없는 확장자: 실행 파일/스크립트/라이브러리/설치 파일. 플러그인 확장자(.rb, .lsp, .addin 등)는 규칙이 명시하면 허용된다.
+NEVER_ALLOW_EXTENSIONS = frozenset({".exe", ".scr", ".com", ".pif", ".bat", ".cmd", ".ps1", ".psm1", ".psd1", ".vbs", ".vbe", ".js", ".jse",
+                                    ".wsf", ".wsh", ".hta", ".lnk", ".url", ".reg", ".msi", ".msp", ".cpl", ".dll", ".ocx", ".sys", ".jar",
+                                    ".msc", ".inf", ".appref-ms", ".application", ".gadget", ".settingcontent-ms", ".mof", ".sct", ".wsc"})
+_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+RESERVED_IDS = frozenset({"extra", "install"})  # 패키지 manifest 에서 규칙 없는 항목/설치 폴더 항목이 쓰는 id
+_ENV_ELEM = re.compile(r"^%([^%\/:*?\"<>|]+)%$")
+
+
+def _wildcard_only(part: str) -> bool:
+    """'*', '*.*', '?', '**' 처럼 와일드카드(와 점/공백)만 있는 요소."""
+    return bool(part) and not part.strip("*?. ")
+
+
 def _check_rule_path(path: str, where: str) -> None:
-    """규칙 path 는 %환경변수% 로 시작하는 사용자 폴더 기준 경로여야 한다: 상위 폴더(..), 드라이브 절대 경로, 네트워크(UNC), 루트 상대 경로는 거부(R1-15)."""
-    win = PureWindowsPath(path.replace("/", "\\"))
-    if ".." in win.parts:
-        raise RuleError(f"{where}: path '{path}' 에 상위 폴더(..)가 있습니다. 규칙 경로는 사용자 폴더 안이어야 합니다")
+    """규칙 path 는 허용된 %환경변수% 로 시작하는 사용자 폴더 기준 경로여야 한다: 상위 폴더(..)/'.' 요소, 드라이브 절대 경로, 네트워크(UNC),
+    루트 상대 경로, 환경변수 없는 상대 경로, 허용 목록 밖 환경변수, 요소 1개(루트 전체), 와일드카드만 있는 요소, ':'(대체 데이터 스트림)는 거부(R1-15, M3)."""
+    raw = path.replace("/", "\\")
+    win = PureWindowsPath(raw)
+    parts = raw.split("\\")
+    if ".." in parts or "." in parts:
+        raise RuleError(f"{where}: path '{path}' 에 상위 폴더(..) 또는 '.' 요소가 있습니다. 규칙 경로는 사용자 폴더 안이어야 합니다")
     if path.startswith(("\\\\", "//")):
         raise RuleError(f"{where}: path '{path}' 는 네트워크(UNC) 경로입니다. 규칙 경로는 %환경변수% 로 시작해야 합니다")
     if win.drive or win.root or path.startswith(("\\", "/")):
         raise RuleError(f"{where}: path '{path}' 는 절대 경로입니다. 규칙 경로는 %환경변수% 로 시작해야 합니다")
+    if any(not p for p in parts):
+        raise RuleError(f"{where}: path '{path}' 에 빈 경로 요소가 있습니다")
+    m = _ENV_ELEM.match(parts[0])
+    if not m:
+        raise RuleError(f"{where}: path '{path}' 는 %환경변수% 로 시작해야 합니다(환경변수 없는 상대 경로는 현재 폴더로 새어 나갈 수 있습니다)")
+    if m.group(1).lower() not in ALLOWED_PATH_ENVS:
+        raise RuleError(f"{where}: path '{path}' 의 환경변수 %{m.group(1)}% 는 허용되지 않습니다(허용: " + ", ".join(sorted(ALLOWED_PATH_ENVS)) + ")")
+    if len(parts) < 2:
+        raise RuleError(f"{where}: path '{path}' 는 루트 폴더 전체입니다. 그 아래 프로그램 폴더/파일까지 적어야 합니다")
+    if any(":" in p or "%" in p for p in parts[1:]):
+        raise RuleError(f"{where}: path '{path}' 에 ':' 또는 '%' 가 있습니다(대체 데이터 스트림/미확장 변수는 허용하지 않습니다)")
+    if _wildcard_only(parts[1]):  # 루트 바로 아래 요소는 프로그램 폴더 이름이어야 한다(안쪽 '*' 폴더는 버전 폴더 등에 쓰므로 허용)
+        raise RuleError(f"{where}: path '{path}' 의 루트 바로 아래 요소가 와일드카드뿐입니다. 프로그램 폴더 이름을 적어야 합니다")
 
 
 def parse_rule(data: object, source: str = "<rule>") -> Rule:
@@ -104,6 +138,9 @@ def parse_rule(data: object, source: str = "<rule>") -> Rule:
     for key in ("id", "name"):
         if not isinstance(data.get(key), str) or not data[key].strip():
             raise RuleError(f"{source}: '{key}' 문자열이 필요합니다")
+    rid = data["id"]
+    if not _ID_RE.match(rid) or rid.lower() in RESERVED_IDS:
+        raise RuleError(f"{source}: id '{rid}' 형식이 올바르지 않습니다(영문/숫자/_/- 만, 64자 이내, 'extra'/'install' 은 예약어)")
     detect = data.get("detect")
     if not isinstance(detect, dict):
         raise RuleError(f"{source}: 'detect' 객체가 필요합니다")
@@ -118,6 +155,7 @@ def parse_rule(data: object, source: str = "<rule>") -> Rule:
     if not isinstance(raw_paths, list):
         raise RuleError(f"{source}: 'paths' 는 배열이어야 합니다")
     paths = []
+    seen_dest: set[str] = set()
     for i, p in enumerate(raw_paths):
         where = f"{source}: paths[{i}]"
         if not isinstance(p, dict):
@@ -133,6 +171,12 @@ def parse_rule(data: object, source: str = "<rule>") -> Rule:
         allow = _str_list(p, "allow_extensions", where)
         if any(not a.startswith(".") or a != a.lower() or "*" in a or "\\" in a or "/" in a for a in allow):
             raise RuleError(f"{where}: allow_extensions 는 '.rb' 처럼 점으로 시작하는 소문자 확장자여야 합니다")
+        if any(a in NEVER_ALLOW_EXTENSIONS for a in allow):
+            raise RuleError(f"{where}: allow_extensions 에 실행/라이브러리 확장자({', '.join(a for a in allow if a in NEVER_ALLOW_EXTENSIONS)})는 쓸 수 없습니다")
+        dkey = PurePosixPath(p["dest"].replace("\\", "/")).as_posix().casefold().strip("/")
+        if dkey in seen_dest:
+            raise RuleError(f"{where}: dest '{p['dest']}' 가 같은 규칙의 다른 path 와 겹칩니다(복원 때 서로 덮어씁니다)")
+        seen_dest.add(dkey)
         paths.append(PathRule(p["path"], p["dest"], kind, str(p.get("description", "")), allow))
 
     warnings = _str_list(data, "manual_warnings", source)
@@ -143,6 +187,8 @@ def parse_rule(data: object, source: str = "<rule>") -> Rule:
     if not isinstance(version, str) or not version.strip():
         raise RuleError(f"{source}: 'version' 은 비어 있지 않은 문자열이어야 합니다")
     exclude = _str_list(data, "exclude", source)
+    if any(_wildcard_only(x) for x in exclude):
+        raise RuleError(f"{source}: exclude 에 '*' 처럼 와일드카드만 있는 패턴은 쓸 수 없습니다(모든 파일이 제외됩니다)")
     return Rule(data["id"], data["name"], patterns, install_paths, reg_keys,
                 tuple(paths), warnings, notes, version, exclude,
                 exclude_display_name_patterns=exclude_patterns)

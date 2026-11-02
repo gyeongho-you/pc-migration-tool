@@ -9,8 +9,9 @@ from pathlib import Path, PurePosixPath
 from typing import Callable
 
 from . import coverage
+from .checklist_data import common_warning_pairs
 from . import failure, fs
-from .copier import DENIED, REJECTED, SKIPPED_SAME, WOULD_COPY, WOULD_OVERWRITE, _backup_path, sha256_file
+from .copier import DENIED, FAILED, REJECTED, SKIPPED_SAME, WOULD_COPY, WOULD_OVERWRITE, _backup_path, sha256_file
 from .detect import Program
 from .discover_data import EXTRA_ROOTS, ROOTS
 from .envpaths import expand_env
@@ -91,7 +92,10 @@ class ImportPlan:
 
     @property
     def warnings(self) -> list[dict]:
-        return self.manifest.get("manual_warnings", [])
+        w = list(self.manifest.get("manual_warnings", []))
+        for name, items in common_warning_pairs(self.manifest):  # 규칙 공통 한 줄(구 PC 경로 안내 등)
+            w.append({"rule": "common", "name": name, "items": items})
+        return w
 
     @property
     def git_config_warning(self) -> str:
@@ -131,10 +135,23 @@ def _rejected_item(f: dict, target: Path, link: str, is_extra: bool, base_path: 
             "error": f"{failure.REASONS[failure.LINK_IN_PATH].text} ({link})"}
 
 
-def _denied_item(f: dict, target: Path, why: str, is_extra: bool, base_path: Path) -> dict:
-    return {"entry": f["arc"], "target": str(target), "status": DENIED, "backup": "", "size": f["size"],
-            "base_dir": str(base_path), "sha256": f["sha256"], "extra": is_extra, "reason": DENIED,
-            "error": f"복원 안 함: {why}"}
+def _denied_item(f: dict, target: Path, why: str, is_extra: bool, base_path: Path, kind: str = "") -> dict:
+    d = {"entry": f["arc"], "target": str(target), "status": DENIED, "backup": "", "size": f["size"],
+         "base_dir": str(base_path), "sha256": f["sha256"], "extra": is_extra, "reason": DENIED,
+         "error": f"복원 안 함: {why}"}
+    if kind:  # 보안 거부(빈 값)와 구분: 'env'(복원 위치를 알 수 없음) / 'excluded'(규칙 제외 대상). 패키지 전체는 막지 않는다(H1)
+        d["skip_kind"] = kind
+    return d
+
+
+ENV_UNKNOWN_HINT = "pcmigrate --env 이름=값 import … 처럼 환경변수를 지정하면 복원할 수 있습니다"
+
+
+def _skipped_item(f: dict, target: Path, why: str, kind: str, is_extra: bool, base_path: Path, pkey: str, selected: bool) -> dict:
+    """패키지 전체를 막지 않고 이 항목만 '복원 안 함'으로 남긴다(선택에서 뺀 프로그램이면 '선택 제외'로 남긴다)."""
+    if not selected:
+        return _not_selected_item(f, target, is_extra, base_path, pkey)
+    return _denied_item(f, target, why, is_extra, base_path, kind) | {"program": pkey}
 
 
 def _not_selected_item(f: dict, target: Path, is_extra: bool, base_path: Path, pkey: str) -> dict:
@@ -220,12 +237,13 @@ def _plan_import_inner(path: Path, rules: list[Rule], expand: Expand, only: list
             plan.problems.append(f"규칙 {rid} 에 선언된 경로 패턴 밖의 파일(복원 거부): {f['rel']}")
             continue
         base_path = Path(expand(base))
-        if not _usable_base(base_path):
-            plan.problems.append(f"복원 위치의 환경변수를 확장할 수 없거나 상대 경로임: {base}")
-            continue
-        target = base_path.joinpath(*PurePosixPath(f["rel"]).parts)
         pkey = program_key(f)
         selected = (not only or any(program_matches(t, pkey) for t in only)) and not any(program_matches(t, pkey) for t in skip)
+        target = base_path.joinpath(*PurePosixPath(f["rel"]).parts)
+        if not _usable_base(base_path):  # 이 PC 에 없는 환경변수(예: OneDrive): 그 항목만 복원 안 함, 나머지는 진행(H1). 구조 위반이 아니다
+            plan.items.append(_skipped_item(f, target, f"이 PC 에서 복원 위치({base})를 알 수 없음(환경변수가 없음). {ENV_UNKNOWN_HINT}",
+                                            "env", is_extra, base_path, pkey, selected))
+            continue
         link = fs.reparse_in_chain(base_path, target)  # 복원 위치가 링크/정션을 거치면 링크 너머에 쓰게 되므로 따라가지 않는다(F-5)
         if link:
             plan.items.append(_rejected_item(f, target, link, is_extra, base_path) | {"program": pkey} if selected
@@ -236,8 +254,9 @@ def _plan_import_inner(path: Path, rules: list[Rule], expand: Expand, only: list
             continue
         if LOCK_NAMES and _excluded(target.name, None, LOCK_NAMES):
             continue  # 이전 버전이 만든 패키지에 든 잠금 파일: 복원하지 않고 조용히 건너뜀
-        if _excluded(target.name, None if is_extra else by_id[rid], RESTORE_EXCLUDE):
-            plan.problems.append(f"복원 제외 대상(라이선스 등): {f['rel']}")
+        if _excluded(target.name, None if is_extra else by_id[rid], RESTORE_EXCLUDE):  # 옛 도구가 담은 라이선스/비밀번호 저장소 등: 그 파일만 복원 안 함(H1)
+            plan.items.append(_skipped_item(f, target, "복원 제외 대상(라이선스·비밀번호 저장소 등 규칙이 제외한 파일)",
+                                            "excluded", is_extra, base_path, pkey, selected))
             continue
         key = os.path.normcase(str(target))
         if key in seen_targets:  # 대소문자만 다른 경로 등 같은 파일로 가는 두 항목: 뒤 항목이 앞 항목을 .bak 으로 밀어낸다(B-6)
@@ -254,6 +273,11 @@ def _plan_import_inner(path: Path, rules: list[Rule], expand: Expand, only: list
         backup = ""
         if target.is_file() and target.stat().st_size == f["size"] and sha256_file(target) == f["sha256"]:
             status = SKIPPED_SAME
+        elif target.is_dir():  # 같은 이름의 폴더: 실제 복원도 실패하므로 미리보기도 같은 결과를 보인다(M5). 폴더는 지우지 않는다
+            plan.items.append({"entry": f["arc"], "target": str(target), "status": FAILED, "backup": "", "size": f["size"],
+                               "sha256": f["sha256"], "extra": is_extra, "base_dir": str(base_path), "program": pkey,
+                               "reason": failure.DEST_IS_DIR, "error": failure.REASONS[failure.DEST_IS_DIR].text})
+            continue
         elif target.exists():
             status = WOULD_OVERWRITE
             backup = str(_backup_path(target))

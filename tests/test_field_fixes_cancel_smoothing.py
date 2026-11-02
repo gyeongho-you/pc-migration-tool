@@ -331,7 +331,7 @@ def test_discover_tree_scan_stops_on_cancel(tmp_path):
 
 def make_rule(rid="demo"):
     return parse_rule({"id": rid, "name": "Demo", "version": "7", "detect": {"display_name_patterns": ["Demo"]},
-                       "paths": [{"path": "%ROAM%\\Vendor\\Demo\\Support", "dest": "demo/support", "kind": "dir"}],
+                       "paths": [{"path": "%APPDATA%\\Vendor\\Demo\\Support", "dest": "demo/support", "kind": "dir"}],
                        "manual_warnings": []})
 
 
@@ -343,7 +343,7 @@ def pk(tmp_path):
     for i in range(6):
         (sup / f"f{i}.cfg").write_bytes((f"file-{i}-" * 300).encode())
     return SimpleNamespace(tmp=tmp_path, old=old, sup=sup, out=tmp_path / "out" / "p.zip",
-                           expand=lambda s: s.replace("%ROAM%", str(old)))
+                           expand=lambda s: s.replace("%APPDATA%", str(old)))
 
 
 def leftovers(out: Path):
@@ -419,14 +419,14 @@ def test_package_check_and_preview_stop_on_cancel(pk):
         with pytest.raises(Cancelled):
             verify_package(out)  # 가져오기 검사
         with pytest.raises(Cancelled):
-            plan_import(out, [make_rule()], expand=lambda s: s.replace("%ROAM%", str(pk.tmp / "new")))  # 미리보기
+            plan_import(out, [make_rule()], expand=lambda s: s.replace("%APPDATA%", str(pk.tmp / "new")))  # 미리보기
     assert out.read_bytes() == before
 
 
 def test_apply_cancel_between_files_leaves_no_half_written_files(pk):
     out = build_package(pk)
     new = pk.tmp / "new"
-    exp = lambda s: s.replace("%ROAM%", str(new))  # noqa: E731
+    exp = lambda s: s.replace("%APPDATA%", str(new))  # noqa: E731
     plan = plan_import(out, [make_rule()], expand=exp)
     assert not plan.problems
     tok = CancelToken()

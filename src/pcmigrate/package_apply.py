@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 import hashlib
+import os
 import shutil
 import tempfile
 import time
@@ -47,55 +48,76 @@ def apply_import(path: Path, plan: ImportPlan,
         tracker.note(categorize(res.status, res.reason), res.dst or res.src)
         emit()
 
-    with zipfile.ZipFile(path) as zf, tempfile.TemporaryDirectory() as tmp:
-        for it in plan.items:
-            checkpoint()  # 파일 사이에서만 멈춘다: 이미 바꾼 파일은 .bak 으로 되돌릴 수 있고, 지금 파일은 건드리지 않는다
-            tracker.set_current(it["target"])
-            if it["status"] == SKIPPED_SAME:
-                done(FileResult(it["entry"], it["target"], SKIPPED_SAME, it["size"], it["sha256"]))
-                continue
-            target = Path(it["target"])
-            if it["status"] == NOT_SELECTED:  # 선택에서 제외된 프로그램: 패키지에서 꺼내지도, 대상에 쓰지도 않는다
-                done(FileResult(it["entry"], it["target"], NOT_SELECTED, it["size"], it["sha256"], error=NOT_SELECTED_TEXT,
-                                reason=NOT_SELECTED))
-                continue
-            if it["status"] == DENIED:  # 거부 항목은 패키지에서 꺼내지도, 대상에 쓰지도 않는다
-                done(FileResult(it["entry"], it["target"], DENIED, it["size"], it["sha256"], error=it["error"], reason=DENIED))
-                continue
-            link = it["error"] if it["status"] == REJECTED else ""
-            if not link and it.get("base_dir"):  # 계획 이후에 링크가 생겼을 수도 있으니 쓰기 직전에 다시 확인한다
-                found = fs.reparse_in_chain(it["base_dir"], target)
-                link = f"{failure.REASONS[failure.LINK_IN_PATH].text} ({found})" if found else ""
-            if link:
-                done(FileResult(it["entry"], it["target"], REJECTED, it["size"], it["sha256"], error=link,
-                                reason=failure.LINK_IN_PATH))
-                continue
-            if it.get("install"):  # 설치 폴더: 쓰기 직전 마지막 확인(허용 확장자/대상 폴더 존재). 새 폴더는 만들지 않는다
-                from . import install_dir
-                why = install_dir.recheck_before_write(it)
-                if why:
-                    done(FileResult(it["entry"], it["target"], FAILED, it["size"], it["sha256"], error=why, reason=failure.OTHER))
+    try:  # 취소/예외로 중간에 멈춰도 여기까지의 결과(부분 report)를 예외에 붙여 호출자가 보고·되돌리기 기록을 남길 수 있게 한다(M1)
+        with zipfile.ZipFile(path) as zf, tempfile.TemporaryDirectory() as tmp:
+            for it in plan.items:
+                checkpoint()  # 파일 사이에서만 멈춘다: 이미 바꾼 파일은 .bak 으로 되돌릴 수 있고, 지금 파일은 건드리지 않는다
+                tracker.set_current(it["target"])
+                if it["status"] == SKIPPED_SAME:
+                    done(FileResult(it["entry"], it["target"], SKIPPED_SAME, it["size"], it["sha256"]))
                     continue
-            staged = Path(tmp) / "entry"
-            try:
-                bad = _stage_entry(zf, it, staged, tmp)
-                if bad is not None:  # 해시/크기가 다르면 대상은 건드리지 않는다(B-4)
-                    res = bad
-                else:
-                    res = copy_file(staged, target)
-                    if res.status != FAILED and res.sha256 != it["sha256"]:
-                        res.status, res.error = FAILED, "manifest 해시와 불일치"
-                    res.src = it["entry"]
-            except OSError as e:
-                res = FileResult(it["entry"], it["target"], FAILED, error=f"{type(e).__name__}: {e}",
-                                 reason=failure.classify(e, it["target"]).code)
-            except (KeyError, zipfile.BadZipFile, zlib.error, RuntimeError, NotImplementedError) as e:
-                res = FileResult(it["entry"], it["target"], FAILED, error=f"패키지에서 읽을 수 없음({type(e).__name__}): manifest 해시와 불일치할 수 있음",
-                                 reason=failure.OTHER)
-            done(res)
-            staged.unlink(missing_ok=True)
+                target = Path(it["target"])
+                if it["status"] == NOT_SELECTED:  # 선택에서 제외된 프로그램: 패키지에서 꺼내지도, 대상에 쓰지도 않는다
+                    done(FileResult(it["entry"], it["target"], NOT_SELECTED, it["size"], it["sha256"], error=NOT_SELECTED_TEXT,
+                                    reason=NOT_SELECTED))
+                    continue
+                if it["status"] == DENIED:  # 거부 항목은 패키지에서 꺼내지도, 대상에 쓰지도 않는다
+                    done(FileResult(it["entry"], it["target"], DENIED, it["size"], it["sha256"], error=it["error"], reason=DENIED))
+                    continue
+                if it["status"] == FAILED:  # 계획 단계에서 이미 실패로 판정(대상 이름 자리에 폴더가 있음 등): 쓰지 않는다(M5)
+                    done(FileResult(it["entry"], it["target"], FAILED, it["size"], it["sha256"], error=it["error"],
+                                    reason=it.get("reason", failure.OTHER)))
+                    continue
+                link = it["error"] if it["status"] == REJECTED else ""
+                if not link and it.get("base_dir"):  # 계획 이후에 링크가 생겼을 수도 있으니 쓰기 직전에 다시 확인한다
+                    found = fs.reparse_in_chain(it["base_dir"], target)
+                    link = f"{failure.REASONS[failure.LINK_IN_PATH].text} ({found})" if found else ""
+                if link:
+                    done(FileResult(it["entry"], it["target"], REJECTED, it["size"], it["sha256"], error=link,
+                                    reason=failure.LINK_IN_PATH))
+                    continue
+                if it.get("install"):  # 설치 폴더: 쓰기 직전 마지막 확인(허용 확장자/대상 폴더 존재). 새 폴더는 만들지 않는다
+                    from . import install_dir
+                    why = install_dir.recheck_before_write(it)
+                    if why:
+                        done(FileResult(it["entry"], it["target"], FAILED, it["size"], it["sha256"], error=why, reason=failure.OTHER))
+                        continue
+                staged = Path(tmp) / "entry"
+                try:
+                    bad = _stage_entry(zf, it, staged, tmp)
+                    if bad is not None:  # 해시/크기가 다르면 대상은 건드리지 않는다(B-4)
+                        res = bad
+                    else:
+                        _restore_mtime(zf, it["entry"], staged)  # 복원 파일의 수정 시각을 zip 에 담긴 원본 시각으로(copy_file 이 복사본에 이어 준다)
+                        res = copy_file(staged, target)
+                        if res.status != FAILED and res.sha256 != it["sha256"]:
+                            res.status, res.error = FAILED, "manifest 해시와 불일치"
+                        res.src = it["entry"]
+                except OSError as e:
+                    res = FileResult(it["entry"], it["target"], FAILED, error=f"{type(e).__name__}: {e}",
+                                     reason=failure.classify(e, it["target"]).code)
+                except (KeyError, zipfile.BadZipFile, zlib.error, RuntimeError, NotImplementedError) as e:
+                    res = FileResult(it["entry"], it["target"], FAILED, error=f"패키지에서 읽을 수 없음({type(e).__name__}): manifest 해시와 불일치할 수 있음",
+                                     reason=failure.OTHER)
+                done(res)
+                staged.unlink(missing_ok=True)
+    except BaseException as e:
+        e.partial_report = report  # type: ignore[attr-defined]
+        raise
     emit(True)
     return report
+
+
+def _restore_mtime(zf: zipfile.ZipFile, entry: str, staged: Path) -> None:
+    """임시 파일의 수정 시각을 zip 엔트리에 기록된 원본 시각으로 맞춘다(L4). 기록이 없거나(1980 하한으로 잘린 값) 실패하면 그냥 둔다."""
+    try:
+        dt = zf.getinfo(entry).date_time
+        if dt[0] <= 1980:
+            return
+        ts = time.mktime((*dt, 0, 0, -1))
+        os.utime(staged, (ts, ts))
+    except (OSError, OverflowError, ValueError, KeyError):
+        pass
 
 
 def _stage_entry(zf: zipfile.ZipFile, it: dict, staged: Path, tmp: str) -> FileResult | None:

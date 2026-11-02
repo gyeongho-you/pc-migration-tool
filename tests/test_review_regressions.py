@@ -29,7 +29,7 @@ NOW = lambda: datetime(2030, 1, 1)  # noqa: E731
 
 def make_rule(**over):
     data = {"id": "demo", "name": "Demo", "version": "7", "detect": {"display_name_patterns": ["Demo"]},
-            "paths": [{"path": "%ROAM%\\Vendor\\Demo", "dest": "demo/cfg", "kind": "dir"}],
+            "paths": [{"path": "%APPDATA%\\Vendor\\Demo", "dest": "demo/cfg", "kind": "dir"}],
             "manual_warnings": ["재로그인 필요"]}
     data.update(over)
     return parse_rule(data)
@@ -45,8 +45,8 @@ def env(tmp_path):
     new = tmp_path / "new"
     new.mkdir()
     return SimpleNamespace(tmp=tmp_path, old=old, demo=demo, new=new, out=tmp_path / "out" / "pkg.zip",
-                           expand=lambda s: s.replace("%ROAM%", str(old)),
-                           expand_new=lambda s: s.replace("%ROAM%", str(new)))
+                           expand=lambda s: s.replace("%APPDATA%", str(old)),
+                           expand_new=lambda s: s.replace("%APPDATA%", str(new)))
 
 
 def export(env, rules=None, out=None, **kw):
@@ -75,7 +75,7 @@ def forge(path, entries, rules=None):
             arc = f"data/demo/cfg/{rel}"
             zf.writestr(arc, data)
             files.append({"arc": arc, "size": len(data), "sha256": hashlib.sha256(data).hexdigest(), "rule": "demo",
-                          "base": "%ROAM%\\Vendor", "rel": f"Demo/{rel}"})
+                          "base": "%APPDATA%\\Vendor", "rel": f"Demo/{rel}"})
         zf.writestr("manifest.json", json.dumps({"format": 1, "rules": [{"id": "demo"}], "files": files, "manual_warnings": []}))
     return path
 
@@ -98,7 +98,7 @@ def test_package_with_denied_entries_restores_rest_and_never_writes_denied(env, 
 
 
 def test_rule_that_names_extension_still_restores_it(env, tmp_path):
-    rule = make_rule(paths=[{"path": "%ROAM%\\Vendor\\Demo\\*.dll", "dest": "demo/dll", "kind": "file"}])
+    rule = make_rule(paths=[{"path": "%APPDATA%\\Vendor\\Demo\\*.dll", "dest": "demo/dll", "kind": "file"}])
     (env.demo / "ok.dll").write_bytes(b"dll")
     (env.demo / "x.exe").write_bytes(b"MZ")
     m = export(env, rules=[rule])
@@ -114,7 +114,7 @@ def test_cli_export_warns_denied_and_import_summary_lists_them(env, tmp_path, mo
     monkeypatch.setattr(cli, "winget_export_raw", lambda: None)
     monkeypatch.setattr(cli, "winget_list_raw", lambda: None)
     (rd / "demo.json").write_text(json.dumps({"id": "demo", "name": "Demo", "detect": {"display_name_patterns": ["Demo"]},
-                                              "paths": [{"path": "%ROAM%\\Vendor\\Demo", "dest": "demo/cfg"}]}), encoding="utf-8")
+                                              "paths": [{"path": "%APPDATA%\\Vendor\\Demo", "dest": "demo/cfg"}]}), encoding="utf-8")
     monkeypatch.setattr(cli, "export_package", lambda *a, **k: export_package(*a, **{**k, "expand": env.expand}))
     assert cli.main(["export", "--output", str(env.out), "--rules", str(rd)]) == 0
     cap = capsys.readouterr()
@@ -566,7 +566,7 @@ def _cli_patch_detection(monkeypatch, winget=None):
 def _demo_rules_dir(tmp_path):
     rd = make_rules_dir(tmp_path / "rules")
     (rd / "demo.json").write_text(json.dumps({"id": "demo", "name": "Demo", "detect": {"display_name_patterns": ["Demo"]},
-                                              "paths": [{"path": "%ROAM%\\Vendor\\Demo", "dest": "demo/cfg"}]}), encoding="utf-8")
+                                              "paths": [{"path": "%APPDATA%\\Vendor\\Demo", "dest": "demo/cfg"}]}), encoding="utf-8")
     return rd
 
 

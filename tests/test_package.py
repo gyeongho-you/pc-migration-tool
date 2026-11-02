@@ -19,8 +19,8 @@ def make_rule(**over):
         "id": "demo", "name": "Demo", "version": "7",
         "detect": {"display_name_patterns": ["Demo"]},
         "paths": [
-            {"path": "%ROAM%\\Vendor\\Demo *\\R*\\Support", "dest": "demo/support", "kind": "dir"},
-            {"path": "%ROAM%\\Vendor\\prefs.json", "dest": "demo/prefs.json", "kind": "file"},
+            {"path": "%APPDATA%\\Vendor\\Demo *\\R*\\Support", "dest": "demo/support", "kind": "dir"},
+            {"path": "%APPDATA%\\Vendor\\prefs.json", "dest": "demo/prefs.json", "kind": "file"},
         ],
         "manual_warnings": ["재로그인 필요"],
         "exclude": ["*.tmp"],
@@ -31,7 +31,7 @@ def make_rule(**over):
 
 @pytest.fixture
 def env(tmp_path):
-    """가짜 사용자 폴더(old)와 새 PC 폴더(new). 환경변수 %ROAM% 은 expand 로 주입."""
+    """가짜 사용자 폴더(old)와 새 PC 폴더(new). 환경변수 %APPDATA% 은 expand 로 주입."""
     old, new = tmp_path / "old", tmp_path / "new"
     v = old / "Vendor"
     (v / "Demo 2024" / "R1" / "Support").mkdir(parents=True)
@@ -44,7 +44,7 @@ def env(tmp_path):
     new.mkdir()
 
     def expand_for(root):
-        return lambda s: s.replace("%ROAM%", str(root))
+        return lambda s: s.replace("%APPDATA%", str(root))
     return tmp_path, old, new, expand_for
 
 
@@ -222,7 +222,8 @@ def test_forged_manifest_unknown_rule_and_license_rejected(env):
     bad = forge_manifest(out, rules, lambda m: m["files"][0].update(rule="nope"))
     assert any("알 수 없는" in p for p in plan_import(bad, rules, expand_for(new)).problems)
     bad2 = forge_manifest(out, rules, lambda m: m["files"][0].update(rel="Demo 2024/R1/Support/k.lic"))
-    assert plan_import(bad2, rules, expand_for(new)).problems
+    plan2 = plan_import(bad2, rules, expand_for(new))  # stage68(H1): 라이선스 파일은 패키지 전체를 막지 않고 그 항목만 '복원 안 함'
+    assert plan2.problems == [] and plan2.items[0]["status"] == "denied"
 
 
 def test_not_a_zip_and_missing_manifest(tmp_path):
@@ -242,8 +243,8 @@ def test_cli_import_dry_run_and_apply(env, monkeypatch, capsys):
     (rules_dir / "demo.json").write_text(json.dumps({
         "id": "demo", "name": "Demo", "version": "7",
         "detect": {"display_name_patterns": ["Demo"]},
-        "paths": [{"path": "%ROAM%\\Vendor\\Demo *\\R*\\Support", "dest": "demo/support"},
-                  {"path": "%ROAM%\\Vendor\\prefs.json", "dest": "demo/prefs.json", "kind": "file"}],
+        "paths": [{"path": "%APPDATA%\\Vendor\\Demo *\\R*\\Support", "dest": "demo/support"},
+                  {"path": "%APPDATA%\\Vendor\\prefs.json", "dest": "demo/prefs.json", "kind": "file"}],
         "exclude": ["*.tmp"]}), encoding="utf-8")
     monkeypatch.setattr(cli, "plan_import", lambda p, r: plan_import(p, r, expand_for(new)))
     assert cli.main(["import", str(out), "--dry-run", "--rules", str(rules_dir), "--json"]) == 0

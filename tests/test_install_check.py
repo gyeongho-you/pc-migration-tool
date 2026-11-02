@@ -143,7 +143,7 @@ def make_pkg(tmp_path, programs=OLD_REG, winget_text=None, list_text=None):
     old.mkdir(parents=True, exist_ok=True)
     (old / "a.cfg").write_bytes(b"cfg")
     out = tmp_path / "out" / "pkg.zip"
-    export_package([make_rule()], out, list(programs), winget_text, expand=lambda s: s.replace("%ROAM%", str(tmp_path / "old")),
+    export_package([make_rule()], out, list(programs), winget_text, expand=lambda s: s.replace("%APPDATA%", str(tmp_path / "old")),
                    now=NOW, winget_list_text=list_text)
     return out
 

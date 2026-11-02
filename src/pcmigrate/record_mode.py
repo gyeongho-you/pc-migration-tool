@@ -63,8 +63,8 @@ _RESERVED = frozenset({"con", "prn", "aux", "nul", *(f"com{i}" for i in range(10
 
 
 def slug(text: str) -> str:
-    s = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
-    if s in _RESERVED:  # CON/NUL/COM1 같은 Windows 장치 이름은 폴더 이름으로 쓸 수 없어 접미사를 붙인다
+    s = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:64].strip("-")  # 규칙 id 형식(64자 이내, rules.parse_rule)
+    if s in _RESERVED or s in ("extra", "install"):  # CON/NUL/COM1 같은 Windows 장치 이름은 폴더 이름으로 쓸 수 없고, 'extra'/'install' 은 패키지 manifest 의 예약 id 라 접미사를 붙인다
         s += "-record"
     return s or "recorded-" + hashlib.sha1(text.encode("utf-8")).hexdigest()[:8]
 
@@ -635,7 +635,7 @@ def build_rule(a: Analysis, min_conf: str = LOW, rule_id: str | None = None, tod
     ok = [c for c in a.candidates if not c.masked and not c.noise_like and not c.removed and c.size <= BIG_CANDIDATE
           and not c.secret and not c.nonconfig
           and (RANK[c.confidence] >= RANK[min_conf] if selected is None else c.path in selected)
-          and "*" not in c.path and "?" not in c.path]
+          and not any(ch in c.path for ch in "*?[]")]  # 이름에 * ? [ ] 가 든 파일은 규칙 glob 으로 오인되므로 담지 않는다(L6)
     a.outside = [c.path for c in ok if not c.path.startswith("%")]  # 규칙 경로가 될 수 없는 위치(다른 드라이브 등)
     pick = [c for c in ok if c.path.startswith("%")]
     left = [c for c in a.candidates if c not in pick]

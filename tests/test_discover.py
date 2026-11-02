@@ -363,7 +363,6 @@ def test_extra_import_rejects_forged_manifest(env, rules, tmp_path):
         (lambda m: m["files"][0].update(base="C:\\Windows\\System32"), "허용되지 않은"),
         (lambda m: m["files"][0].update(rel="../../evil.txt"), None),
         (lambda m: m["files"][0].update(base="%USERPROFILE%", rel="Documents/x.txt"), "점으로"),
-        (lambda m: m["files"][0].update(rel="Foo Bar/license.lic"), "제외"),
     ]
     for mut, word in cases:
         plan = plan_import(forge(out, mut), rules, new.expand)
@@ -371,6 +370,9 @@ def test_extra_import_rejects_forged_manifest(env, rules, tmp_path):
         if word:
             assert any(word in p for p in plan.problems), (word, plan.problems)
     assert not any(new.appdata.rglob("*.bat"))
+    # stage68(H1): 라이선스 파일은 패키지 전체를 막지 않고 그 항목만 '복원 안 함'
+    plan = plan_import(forge(out, lambda m: m["files"][0].update(rel="Foo Bar/license.lic")), rules, new.expand)
+    assert plan.problems == [] and [i["status"] for i in plan.items] == ["denied"]
     # 시작 프로그램 위치로 위조한 항목은 패키지를 막지 않고 그 항목만 '복원 안 함'(대상에 쓰지 않는다)
     plan = plan_import(forge(out, lambda m: m["files"][0].update(rel="Microsoft/Windows/Start Menu/Programs/Startup/run.bat")),
                        rules, new.expand)
