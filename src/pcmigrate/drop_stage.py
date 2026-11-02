@@ -37,6 +37,7 @@ from .transfer import SPACE_MARGIN, TransferError
 MARKER_NAME = ".pcmigrate-staging.json"
 STAGING_DIR = r"%LOCALAPPDATA%\pcmigrate\staging"  # 시험은 이 값을 임시 폴더로 바꾼다
 STALE_SECONDS = 24 * 3600  # 표식 파일이 이보다 오래 갱신되지 않은 폴더는 비정상 종료 잔여물로 본다(전송 중에는 표식을 계속 갱신)
+MAX_DROP_FILES = 20000  # 직접 고른 파일 수 상한(폴더를 통째로 놓아 파일이 늘어나는 경우 포함). 넘으면 시작 전에 오류로 멈춘다
 MAX_LISTED = 200  # 리포트에 적는 항목 수 상한(개수는 따로 센다)
 
 
@@ -147,6 +148,9 @@ def plan_drops(entries: list[DropEntry], checked: list[str], *, cancel: Callable
             plan.changed.append({"path": path, "old_size": expect.size, "new_size": st.st_size})
         seen.add(k)
         plan.files.append((path, st.st_size, st.st_mtime_ns, top))
+        if len(plan.files) > MAX_DROP_FILES:
+            raise TransferError(f"직접 고른 파일이 너무 많습니다(최대 {MAX_DROP_FILES:,}개). 폴더째 옮길 것은 '폴더 추가'(선택한 폴더)로 보내고, "
+                                "직접 고르는 파일은 그보다 적게 줄여 주세요. 아무것도 보내지 않았고 원본은 그대로입니다.")
 
     for e in entries:
         checkpoint()

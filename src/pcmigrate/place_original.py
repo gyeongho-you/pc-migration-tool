@@ -907,6 +907,7 @@ class _Placer:
         self.unit_counts: dict[str, int] = {}
         self._real_cache: dict[str, bool] = {}
         self._recv_real = os.path.normcase(os.path.realpath(recv))
+        self.nested_roots: set[str] = set()  # 저널의 단위 폴더들(다른 단위 안에 든 단위는 바깥 단위가 건너뛴다)
         self.gather_mode = False  # True 면 대상은 '모은 폴더'(보호 위치 검사 없음, 보고 경로는 실제 경로)
 
     # ---- 보조
@@ -1017,6 +1018,8 @@ class _Placer:
                 if self.phase == "apply":
                     self._fail(src_dir / e.name, flog, failure.OTHER, type(ex).__name__, ex)
         for d in dirs:
+            if self.nested_roots and os.path.normcase(str(src_dir / d)) in self.nested_roots:
+                continue  # 다른 저널 항목(단위)의 폴더: 그 단위가 따로 처리한다(중복 계산/중복 처리 방지, stage63)
             self.walk(src_dir / d, parts + (d,), letter, root)
         if st_dir is not None and _isdir(phys):
             self._copy_dir_meta(src_dir, phys, st_dir)  # 우리가 새로 만든 폴더에만 속성/수정 시각을 옮긴다(기존 폴더는 건드리지 않음)
@@ -1496,6 +1499,7 @@ def _place_impl(rep: PlaceReport, recv: Path, apply: bool, keep: bool, no_overwr
                 warn(f"모으는 폴더가 드라이브 전체({u.letter}:)를 놓는 위치 안에 있습니다. 같은 이름의 폴더가 있으면 섞일 수 있습니다.")
     p = _Placer(recv, dry_run=not apply, keep=keep, no_overwrite=no_overwrite, drive_root_fn=drive_root_fn,
                 same_volume_fn=same_volume_fn, cancel=cancel, progress_info=progress_info, report=rep)
+    p.nested_roots = {os.path.normcase(str(u.current)) for u in units}
     ready: list[tuple[Unit, Path, str]] = []
     # ---- 1) 사전 점검: 드라이브 존재/쓰기 가능, 수량, 용량
     p.phase = "scan"

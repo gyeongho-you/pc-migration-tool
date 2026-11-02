@@ -208,6 +208,11 @@ pcmigrate.exe find-data --output-selection C:\이전기록\선택.json
 ```
 pcmigrate.exe transfer --from-selection C:\이전기록\선택.json E:\이전 --exclude-junk --manifest-out C:\이전기록\목록.jsonl
 ```
+구 PC: 선택한 폴더 밖의 파일도 몇 개 더 보내기
+```
+pcmigrate.exe transfer --from-selection C:\이전기록\선택.json E:\이전 --extra-file D:\메모\현장사진.zip --extra-file D:\프로젝트\B\도면모음
+```
+--extra-file 은 선택한 폴더 밖의 파일이나 폴더를 몇 개 더 보낼 때 씁니다(--from-selection 과 함께만, 여러 번 쓸 수 있음, 최대 20,000개). 이미 선택한 폴더 안에 있는 것과 같은 파일이 두 번 들어온 것은 빼고, 남은 것만 임시 폴더(%LOCALAPPDATA%\pcmigrate\staging)에 같은 경로 구조로 모아 (같은 드라이브면 하드 링크, 아니면 검증 복사) 폴더들과 함께 보낸 뒤 지웁니다. 원본은 읽기만 합니다. 없어졌거나 읽을 수 없는 파일은 그 파일만 실패로 기록하고 계속하며, OneDrive 클라우드 전용 파일은 내려받지 않고 제외합니다. 결과 리포트(--report)의 drop_stage 에 제외·실패·정리 결과가 남습니다.
 --exclude-junk 는 Thumbs.db, desktop.ini, ~$ Office 잠금, *.tmp, CAD 잠금(*.dwl 등)을 복사하지 않습니다(기본은 제외 안 함). *.bak 와 Revit 백업 사본은 기본으로 복사하며, --exclude-backup-copies 를 더하면 Revit 백업 사본도 뺍니다. find-data 는 Windows, Program Files, AppData, 휴지통을 자동으로 뺍니다. OneDrive 클라우드 전용 파일은 내려받지 않고 개수만 따로 셉니다.
 원본을 건드리는 robocopy 옵션(/MIR, /PURGE, /MOV)은 이 도구가 쓰지 않습니다. 복사가 끝나면 대상 폴더에 .pcmigrate-state.json과 로그 파일이 남습니다. 외장 2단계(--use-manifest)와 랜선 1단계(--manifest-out)는 화면의 단계 안내를 따르는 편이 안전합니다.
 **이 도구의 exe는 서명이 없습니다.** 처음 실행하면 "Windows의 PC 보호" 창이 뜰 수 있습니다. 받은 빌드와 함께 전달받은 SHA-256 값이 아래 명령 결과와 같은지 확인한 뒤 "추가 정보, 실행"을 누르세요.

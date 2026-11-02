@@ -270,3 +270,17 @@ def test_cli_extra_file(tmp_path, capsys):
                      "--extra-file", str(base / "A" / "a1.dwg"), "--report", str(tmp_path / "r.json")])
     out = capsys.readouterr().out
     assert code == 0 and "이미 선택한 폴더에 포함되어 빼고 보냅니다" in out and leftovers() == []
+
+
+def test_too_many_dropped_files_stops_with_clear_error_and_report(tmp_path, monkeypatch):
+    base = tree(tmp_path)
+    monkeypatch.setattr(ds, "MAX_DROP_FILES", 3)
+    for i in range(5):
+        put(base / "many" / f"f{i}.txt", b"z")
+    rpt = tmp_path / "abort.json"
+    with pytest.raises(TransferError, match="너무 많습니다"):
+        run([], [base / "many"], tmp_path / "o", abort_report=rpt)
+    data = json.loads(rpt.read_text(encoding="utf-8"))
+    assert data["aborted"] and not data["success"] and "너무 많습니다" in data["reason"]
+    assert leftovers() == [] and not (tmp_path / "o").exists()
+    assert len(ds.plan_drops([ds.describe(base / "A")], []).files) == 2  # 상한 이하는 그대로
