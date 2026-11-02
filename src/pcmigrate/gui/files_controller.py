@@ -24,7 +24,7 @@ from ..progress import fmt_bytes
 from . import state as S
 from . import texts as T
 from .files_flow import (FIND_CATEGORIES, FIND_TIME_LIMIT, DataRow, FilesState, lan_error_text, norm, row_from_item, row_from_manual,
-                         row_visible, signature_of)
+                         row_visible, signature_of, unsafe_data_folder)
 
 # 현황 카드의 단계 표시(작업 이름 -> {진행 이벤트 phase -> 몇 번째 단계})
 _status.PHASE_MAP[T.TASK_FIND_DATA] = {"find": 0, "scan": 0, "done": 1}
@@ -72,6 +72,12 @@ class FilesMixin:
         if f.use_selection and screen not in (S.TRANSFER, S.METHOD, S.LAN_RECV, S.LAN_SEND, S.FIND, S.PLACE):  # stage50: 놓기 화면에 다녀와도 고른 목록은 유지
             self._end_selection_mode()
 
+    def _selection_edited(self) -> None:
+        """폴더 체크/제외/추가/정크 토글처럼 '보낼 목록'을 바꾸는 편집: 이미 복사 화면에 넘긴 선택 스냅샷은 낡았으므로 끝낸다.
+        (그대로 두면 찾기 화면으로 돌아와 체크를 바꾼 뒤 LAN 으로 보낼 때 화면과 다른 폴더가 보내진다)"""
+        if self.files.use_selection:
+            self._end_selection_mode()
+
     def _end_selection_mode(self) -> None:
         f, s = self.files, self.state
         f.use_selection = False
@@ -99,6 +105,7 @@ class FilesMixin:
             f.result = res
             f.find_error, f.find_cancelled = "", False
             known = {norm(p) for p in f.extra}
+            self._selection_edited()  # 새로 찾으면 체크가 바뀐다: 앞서 복사 화면에 넘긴 선택은 낡은 것
             f.selected = {k for k in f.selected if k in known}  # 자동 선택 없음: 직접 추가한 폴더의 선택만 남긴다
             self.emit("find_data_done", res)
 
@@ -147,6 +154,8 @@ class FilesMixin:
         if not any(norm(r.path) == k for r in self.data_rows(visible_only=False)):
             raise _guard(T.G_NOT_IN_LIST)
         f = self.files
+        if (k in f.selected) != bool(on):
+            self._selection_edited()
         (f.selected.add if on else f.selected.discard)(k)
         self.emit("files_changed")
 
@@ -158,6 +167,8 @@ class FilesMixin:
         n = 0
         for r in self.data_rows():
             k = norm(r.path)
+            if (k in f.selected) != bool(on):
+                self._selection_edited()
             if on and k not in f.selected:
                 f.selected.add(k)
                 n += 1
@@ -198,21 +209,27 @@ class FilesMixin:
         p = _clean(path)
         if not p or not os.path.isdir(p):
             raise _guard(T.G_FD_NOT_FOLDER)
+        if unsafe_data_folder(p):  # 드라이브 루트·Windows·Program Files·ProgramData·사용자 홈 루트는 자동 찾기도 뺀다: 같은 기준
+            raise _guard(T.G_FD_SYSTEM_FOLDER)
         k = norm(p)
         f = self.files
         known = {norm(r.path): r for r in self.data_rows(visible_only=False)}
         if k in known:
             if known[k].selected:
                 raise _guard(T.G_FD_ALREADY)
+            self._selection_edited()
             f.selected.add(k)
             self.emit("files_changed")
             return known[k].path
+        self._selection_edited()
         f.extra.append(p)
         f.selected.add(k)
         self.emit("files_changed")
         return p
 
     def set_data_junk(self, on: bool) -> None:
+        if bool(on) != self.files.junk:
+            self._selection_edited()
         self.files.junk = bool(on)
         self.emit("files_changed")
 
@@ -891,7 +908,13 @@ class FilesMixin:
     def lan_send_items(self) -> list:
         """보낼 폴더 목록(복사 화면에 넘긴 선택이 있으면 그것, 없으면 지금 체크한 폴더)."""
         f = self.files
-        return list(f.transfer_items) if f.use_selection and f.transfer_items else self.data_selected_items()
+        current = self.data_selected_items()
+        if f.use_selection and f.transfer_items:
+            # 복사 화면에 넘긴 스냅샷은 지금 체크한 목록과 같을 때만 쓴다(다르면 화면의 체크가 우선: 다른 폴더가 보내지면 안 된다)
+            sig = signature_of([i.path for i in current] + ["drop:" + norm(e.path) for e in f.drops], f.junk)
+            if sig == f.signature:
+                return list(f.transfer_items)
+        return current
 
     def lan_send_problem(self, target: str, code: str) -> str:
         """보내기를 시작할 수 없는 이유(빈 문자열이면 시작해도 됨)."""

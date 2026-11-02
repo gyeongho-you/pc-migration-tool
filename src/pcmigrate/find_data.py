@@ -114,6 +114,7 @@ USERS_LEVEL_SKIP = frozenset({"default", "default user", "all users", "defaultus
 USER_FOLDER_KEYS: tuple[str, ...] = ("documents", "desktop", "pictures", "videos", "downloads", "music")
 USER_FOLDER_LABELS = {"documents": "문서", "desktop": "바탕화면", "pictures": "사진", "videos": "동영상", "downloads": "다운로드", "music": "음악"}
 
+CHECK_EVERY = 1000  # 한 폴더 안에서 이만큼 항목마다 취소/시간/진행을 확인한다
 MAX_ERRORS_LISTED = 200
 MAX_EXCLUDED_EXAMPLES = 30
 MAX_RECURSION = 120  # 이보다 깊은 폴더는 따라 내려가지 않는다(파이썬 재귀 한계 보호)
@@ -424,7 +425,11 @@ class _Finder:
             total.errors += 1
             return total, []
         subdirs: list[str] = []
-        for e in items:
+        for i, e in enumerate(items):
+            if i and i % CHECK_EVERY == 0:  # 파일이 아주 많은 폴더 하나에서도 취소·시간 상한·진행 표시가 동작하게 한다
+                self._tick(path)
+                if self._check():
+                    break
             name = e.name
             if name.startswith(".pcmigrate-"):
                 continue

@@ -577,10 +577,16 @@ class App(tk.Tk):
                 pass
 
     def _close(self) -> None:
-        if self.c.state.busy:
-            msg = T.CLOSE_BUSY if self.c.can_cancel else T.CLOSE_BUSY_NO_CANCEL
+        receiving = self.c.lan_receive_active()  # 새 PC 에서 받는 중(대기·연결·수신): 작업 스레드가 없어도 닫으면 받기가 끊긴다
+        if self.c.state.busy or receiving:
+            msg = T.CLOSE_BUSY if (self.c.can_cancel or not self.c.state.busy) else T.CLOSE_BUSY_NO_CANCEL
             if not messagebox.askyesno(T.CLOSE_TITLE, msg, icon="warning", parent=self):
                 return
+        if receiving:
+            try:
+                self.c.lan_receive_stop()  # 받기를 멈추고 정리한다(이더넷 주소 복구 안내 경로는 그대로)
+            except Exception as e:  # noqa: BLE001 - 멈추다 난 오류가 창 닫기를 막지 않게
+                errorlog.record(e, "창 닫기: 받기 멈춤")
         self.c.cancel()
         self.destroy()
 
