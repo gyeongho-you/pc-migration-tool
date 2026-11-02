@@ -51,6 +51,13 @@ def make_rules_dir(path):
 
 
 @pytest.fixture(autouse=True)
+def _isolated_drop_staging(tmp_path_factory, monkeypatch):
+    """끌어다 놓은 파일의 임시 폴더(%LOCALAPPDATA%/pcmigrate/staging)가 실제 위치를 쓰지 않게 한다(stage63)."""
+    from pcmigrate import drop_stage
+    monkeypatch.setattr(drop_stage, "STAGING_DIR", str(tmp_path_factory.mktemp("drop-staging")))
+
+
+@pytest.fixture(autouse=True)
 def _isolated_net_state(tmp_path_factory, monkeypatch):
     """이더넷 주소 복구 기록(%LOCALAPPDATA%/pcmigrate/net-restore.json)을 실제 위치가 아닌 임시 폴더로 돌린다(stage39). 시험은 가짜 runner 만 쓴다."""
     from pcmigrate import net_setup

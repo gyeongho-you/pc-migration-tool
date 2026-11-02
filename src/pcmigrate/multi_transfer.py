@@ -73,6 +73,7 @@ class PlanItem:
     rel: str  # 대상 아래 상대 경로(역슬래시)
     estimate: int | None = None  # 선택 파일에 적힌 용량(없으면 None)
     custom: bool = False  # dest_rel 로 지정한 이름이면 True(LAN 전송에서 레이아웃과 무관하게 이 이름을 쓴다)
+    orig: str = ""  # 임시 폴더(끌어다 놓은 파일, drop_stage)에서 보내는 항목이면 원래 폴더 경로. 기록/표시/대상 구조는 이 경로 기준
 
 
 @dataclass
@@ -128,11 +129,11 @@ def plan_items(selected: Iterable[SelectedItem | str], dst: str | os.PathLike, *
                 raise TransferError(f"항목의 대상 폴더 이름이 올바르지 않습니다({it.path}): {e}") from e
             custom_keys.add(rel.lower())
         else:
-            rel = dest_rel(it.path)
+            rel = dest_rel(getattr(it, "orig_dir", "") or it.path)
         if rel.lower() in rels:  # 이름 변환이 겹치는 경우(실제로는 거의 없음): 조용히 합치지 않고 거부
             raise TransferError(f"대상 폴더 이름이 겹칩니다: {it.path} 와 {rels[rel.lower()]}")
         rels[rel.lower()] = it.path
-        plan.items.append(PlanItem(it.path, rel, it.total_bytes, custom))
+        plan.items.append(PlanItem(it.path, rel, it.total_bytes, custom, getattr(it, "orig_dir", "")))
     if custom_keys:  # 지정한 이름이 다른 항목의 <드라이브>\... 구조 안쪽/바깥쪽과 겹치는 경우도 거부
         for ck in custom_keys:
             for other in rels:
@@ -184,8 +185,13 @@ class MultiReport:
         return [it for it in self.items if it.status == "error"]
 
     @property
+    def drop_stage(self) -> dict:
+        """끌어다 놓은 파일(drop_stage)의 처리 결과. 없으면 빈 dict."""
+        return self.meta.get("drop_stage") or {}
+
+    @property
     def failed_total(self) -> int:
-        return len(self.failures) + len(self.item_errors)
+        return len(self.failures) + len(self.item_errors) + len(self.drop_stage.get("failed", []))
 
     def to_dict(self) -> dict:
         counts: dict[str, int] = {}
@@ -205,6 +211,7 @@ class MultiReport:
             j = r.get("junk_excluded") or {}
             junk_f += j.get("files", 0)
             junk_b += j.get("bytes", 0)
+        cloud += len(self.drop_stage.get("cloud_only", []))
         d = {"dry_run": self.dry_run, "mode": "multi", "summary": counts, "total_items": len(self.items),
              "items_ok": sum(1 for i in self.items if i.status in ("ok", "skipped_done", "preview")),
              "items_failed": sum(1 for i in self.items if i.status in ("failed", "error")),
@@ -243,6 +250,9 @@ def summary_lines(rep: MultiReport, dst: str) -> list[str]:
             extra = f" {r.get('total_files', 0):,}개 / {fmt_bytes(r.get('total_bytes') or 0)}" + (
                 f", 실패 {r['failed_count']}개" if r["failed_count"] else "")
         lines.append(f"  [{mark}] {fs.plain_path_text(it.src)} → {fs.plain_path_text(it.dest)}{extra}" + (f"  ({it.error})" if it.error else ""))
+    if rep.drop_stage:
+        from .drop_stage import summary_lines as _drop_lines
+        lines += _drop_lines(rep.drop_stage)
     if rep.dropped:
         lines.append(f"- 선택에서 뺀 폴더 {len(rep.dropped)}개(중복/부모 폴더에 포함):")
         lines += [f"    · {x['path']} — {x['reason']}" for x in rep.dropped[:10]]
@@ -391,16 +401,17 @@ def run_multi(selected: Iterable[SelectedItem | str], dst: str | os.PathLike, tr
         if cancel is not None and cancel():
             raise Cancelled()
         item_dst = dst / it.rel
-        label = f"[{n}/{total}] {it.src}"
+        shown = it.orig or it.src  # 임시 폴더에서 온 항목은 원래 경로로 표시/기록
+        label = f"[{n}/{total}] {shown}"
         key = it.rel.lower()
         prior = journal["items"].get(key, {})
-        if skip_done and not dry_run and not retry_failed and prior.get("status") == "done":
-            mr.items.append(ItemResult(it.src, str(item_dst), "skipped_done"))
+        if skip_done and not it.orig and not dry_run and not retry_failed and prior.get("status") == "done":
+            mr.items.append(ItemResult(shown, str(item_dst), "skipped_done"))
             if on_item:
-                on_item(n, total, it.src, "skipped_done", None)
+                on_item(n, total, shown, "skipped_done", None)
             continue
         if on_item:
-            on_item(n, total, it.src, "start", None)
+            on_item(n, total, shown, "start", None)
         kw = dict(item_kwargs or {})
         kw.update(dry_run=dry_run, cancel=cancel, warn=(lambda m, _l=label: warn(f"{_l}: {m}")))
         if retry_failed:
@@ -414,7 +425,7 @@ def run_multi(selected: Iterable[SelectedItem | str], dst: str | os.PathLike, tr
         if item_dir is not None and not dry_run:
             kw["manifest_out"] = item_dir / f"{n:04d}.jsonl"
         if not dry_run:
-            journal["items"][key] = {"src": it.src, "rel": it.rel, "status": "pending"}
+            journal["items"][key] = {"src": shown, "rel": it.rel, "status": "pending"}
             _write_journal(dst, journal)
         try:
             rep = transfer_fn(Path(it.src), item_dst, **kw)
@@ -423,26 +434,26 @@ def run_multi(selected: Iterable[SelectedItem | str], dst: str | os.PathLike, tr
         except DriveDisconnected:
             raise
         except (TransferError, OSError, ValueError) as e:
-            res = ItemResult(it.src, str(item_dst), "error", error=str(e))
+            res = ItemResult(shown, str(item_dst), "error", error=str(e))
             if not dry_run:
-                journal["items"][key] = {"src": it.src, "rel": it.rel, "status": "failed", "error": str(e)}
+                journal["items"][key] = {"src": shown, "rel": it.rel, "status": "failed", "error": str(e)}
                 _write_journal(dst, journal)
             mr.items.append(res)
             warn(f"{label}: 이 폴더는 처리하지 못했습니다 — {e}")
             if on_item:
-                on_item(n, total, it.src, "error", None)
+                on_item(n, total, shown, "error", None)
             continue
         bad = bool(rep.failures)
         status = "preview" if dry_run else ("failed" if bad else "ok")
-        mr.items.append(ItemResult(it.src, str(item_dst), status, rep))
+        mr.items.append(ItemResult(shown, str(item_dst), status, rep))
         if not dry_run:
             r = rep.to_dict()
             done = not bad and bool(r.get("verification_complete"))
-            journal["items"][key] = {"src": it.src, "rel": it.rel, "status": "done" if done else "failed" if bad else "copied",
+            journal["items"][key] = {"src": shown, "rel": it.rel, "status": "done" if done else "failed" if bad else "copied",
                                      "files": r.get("total_files"), "bytes": r.get("total_bytes"), "failed": len(rep.failures)}
             _write_journal(dst, journal)
         if on_item:
-            on_item(n, total, it.src, status, rep)
+            on_item(n, total, shown, status, rep)
     mr.meta["seconds"] = round(time.monotonic() - t0, 1)
     if final_manifest is not None and not dry_run:
         _merge_manifests(mr, plan, final_manifest, item_dir)

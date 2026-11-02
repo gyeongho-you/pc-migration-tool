@@ -245,6 +245,9 @@ def _cmd_transfer(args: argparse.Namespace) -> int:
     if args.exclude_backup_copies and not args.exclude_junk:
         _err("--exclude-backup-copies 는 --exclude-junk 와 함께만 쓸 수 있습니다")
         return 2
+    if args.extra_file:
+        _err("--extra-file 은 --from-selection 과 함께만 쓸 수 있습니다(직접 고른 파일은 선택한 폴더들과 같은 구조로 보냅니다)")
+        return 2
     if _unexpanded(src=args.src, dst=args.dst, report=args.report, log=args.log, state_file=args.state_file,
                    manifest_out=args.manifest_out, use_manifest=args.use_manifest):
         return 1
@@ -381,7 +384,8 @@ def _cmd_transfer_selection(args: argparse.Namespace) -> int:
             retry_failed=args.retry_failed, workers=args.workers, chunk=_chunk_bytes(args.chunk_mb),
             keep_awake=not args.no_keep_awake, manifest_out=args.manifest_out, verify_dest=args.verify_dest,
             copy_mode=args.copy_mode, copy_threads=args.copy_threads, split_large=args.split_large,
-            exclude_junk=args.exclude_junk, junk_backup_copies=args.exclude_backup_copies, skip_done=args.skip_done_items)
+            exclude_junk=args.exclude_junk, junk_backup_copies=args.exclude_backup_copies, skip_done=args.skip_done_items,
+            extra_files=args.extra_file or None, abort_report=args.report if args.extra_file else None)
     except ApiError as e:
         return _fail(e)
     except TransferError as e:
@@ -401,7 +405,7 @@ def _cmd_transfer_selection(args: argparse.Namespace) -> int:
     if args.json:
         keys = ("dry_run", "mode", "summary", "total_items", "items_ok", "items_failed", "failed_count", "total_files",
                 "total_bytes", "cloud_only_count", "verification_complete", "success", "dropped", "junk_excluded",
-                "required_bytes", "dest_free_bytes", "manifest_out")
+                "required_bytes", "dest_free_bytes", "manifest_out", "drop_stage")
         out = {k: d.get(k) for k in keys}
         out["items"] = [{k: i.get(k) for k in ("src", "dest", "status", "failed_count", "total_files", "total_bytes", "error")}
                         for i in d["items"]]
@@ -413,6 +417,8 @@ def _cmd_transfer_selection(args: argparse.Namespace) -> int:
              "새 PC 에서: pcmigrate verify --manifest <목록> --target <대상 폴더>")
     for _it, r in rep.failures[:50]:
         _err(f"실패: {r.src} -> {r.error}")
+    for f in rep.drop_stage.get("failed", [])[:50]:
+        _err(f"실패(직접 고른 파일): {f['path']} -> {f['reason']}")
     if args.clean_state and not rep.dry_run and not rep.failed_total and d.get("verification_complete"):
         n = sum(len(clean_state_files(i.dest)) for i in rep.items)
         _err(f"[정리] 기록 파일 {n}개를 지웠습니다. 복사한 데이터는 그대로입니다.")
@@ -1219,6 +1225,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="find-data 가 만든 선택 파일(include:true 인 폴더 여러 개)을 <대상>\\<드라이브 문자>\\<경로> 구조로 한 번에 전송. 이 경우 src 자리에 대상만 적음")
     t.add_argument("--skip-done-items", action="store_true",
                    help="--from-selection: 지난 실행에서 끝난 폴더는 다시 확인하지 않고 건너뜀(기본은 모든 폴더를 다시 확인하며 파일 단위로 이어받음)")
+    t.add_argument("--extra-file", action="append", type=_path_arg, metavar="경로",
+                   help="--from-selection 과 함께: 선택한 폴더 밖의 파일/폴더를 추가로 보냄(여러 번 지정 가능). 선택한 폴더에 이미 든 것과 중복은 뺍니다. "
+                        "임시 폴더(%%LOCALAPPDATA%%\\pcmigrate\\staging)에 링크/검증 복사로 담아 보낸 뒤 지웁니다. OneDrive 클라우드 전용 파일은 제외")
     t.set_defaults(func=_cmd_transfer)
 
     fdp = sub.add_parser("find-data", help="내 파일 자동 찾기: 고정 드라이브를 읽기 전용으로 훑어 도면/사진/영상/문서 폴더 후보 목록을 보여 줌")

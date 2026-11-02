@@ -75,12 +75,15 @@ def run_transfer_selection(selection, dst: str | Path, *, dry_run: bool = False,
                            manifest_out: str | Path | None = None, verify_dest: bool | None = None,
                            copy_mode: str = "restartable", copy_threads: int | None = None, split_large: bool = False,
                            exclude_junk: bool = False, junk_backup_copies: bool = False, skip_done: bool = False,
-                           dest_info_fn=None, estimate_fn=None) -> MultiReport:
+                           dest_info_fn=None, estimate_fn=None, extra_files: Iterable[str | os.PathLike] | None = None,
+                           abort_report: str | Path | None = None, drop_kwargs: dict | None = None) -> MultiReport:
     """선택 파일(또는 항목 목록)의 여러 원본 폴더를 dst 아래에 <드라이브>\\<경로> 구조로 전송한다.
 
     include 가 true 인 항목만 옮긴다. 옵션은 run_transfer 와 같다(항목마다 적용). 항목 하나의 실패는 나머지를 막지 않는다.
     TransferError(대상이 원본 안, 용량 부족, 선택 없음 등)는 그대로 전파한다. 취소하면 Cancelled.
     on_item(번호, 전체, 원본, 상태, 리포트): GUI 가 항목별 진행 표시에 쓸 수 있다.
+    extra_files: 직접 고른 파일/폴더(drop_stage). 없으면(기본) 동작이 이전과 완전히 같다. 있으면 전송 시작 때 겹침을 빼고 임시 폴더에 담아
+    폴더들과 함께 보낸 뒤 임시 폴더를 지운다. 중단/예외 때도 abort_report(있으면)에 리포트를 저장한다. drop_kwargs: 시험용 주입.
     """
     deps = deps or Deps()
     items = load_selected(selection)
@@ -93,9 +96,17 @@ def run_transfer_selection(selection, dst: str | Path, *, dry_run: bool = False,
     def one(src: Path, d: Path, **kw) -> Report:
         return run_transfer(src, d, deps=deps, **opts, **kw)
 
-    return run_multi(items, dst, one, dry_run=dry_run, manifest_out=manifest_out, skip_done=skip_done,
-                     retry_failed=retry_failed, verify_only=verify_only, progress=progress, progress_info=progress_info,
-                     on_item=on_item, cancel=cancel, warn=warn, dest_info_fn=dest_info_fn, estimate_fn=estimate_fn)
+    def go(its: list) -> MultiReport:
+        return run_multi(its, dst, one, dry_run=dry_run, manifest_out=manifest_out, skip_done=skip_done,
+                         retry_failed=retry_failed, verify_only=verify_only, progress=progress, progress_info=progress_info,
+                         on_item=on_item, cancel=cancel, warn=warn, dest_info_fn=dest_info_fn, estimate_fn=estimate_fn)
+
+    if not extra_files:
+        return go(items)
+    from . import drop_stage
+    return drop_stage.run_with_extras(items, [os.fspath(x) if not isinstance(x, drop_stage.DropEntry) else x for x in extra_files],
+                                      dst, go, dry_run=dry_run, cancel=cancel, warn=warn, progress=progress,
+                                      abort_report=abort_report, **(drop_kwargs or {}))
 
 
 def preview_plan(selection, dst: str | Path):
