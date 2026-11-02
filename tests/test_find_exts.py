@@ -38,7 +38,8 @@ def test_normalize_rejects(raw):
 def test_normalize_category():
     assert fx.normalize_category("Design") == "design" and fx.normalize_category("설계") == "design"
     assert fx.normalize_category(" 압축 ") == "archive"
-    for bad in ("other", "", "기타 큰 파일", None):
+    assert fx.normalize_category("other") == "misc" and fx.normalize_category("기타") == "misc" and fx.normalize_category("MISC") == "misc"
+    for bad in ("zzz", "", "기타 큰 파일", None):
         with pytest.raises(ValueError):
             fx.normalize_category(bad)
 
@@ -82,7 +83,7 @@ def test_add_new_and_duplicate():
     with pytest.raises(ValueError):
         fx.add(cfg, "*.zep", "design")
     with pytest.raises(ValueError):
-        fx.add(cfg, ".zep", "other")
+        fx.add(cfg, ".zep", "zzz")
 
 
 def test_remove_default_and_user_added():
@@ -171,7 +172,7 @@ def test_save_rejects_invalid_cfg(d):
     with pytest.raises(ValueError):
         fx.save(fx.ExtConfig(added={"bad ext": "design"}), d)
     with pytest.raises(ValueError):
-        fx.save(fx.ExtConfig(added={".zep": "other"}), d)
+        fx.save(fx.ExtConfig(added={".zep": "zzz"}), d)
     assert not d.exists()
 
 
@@ -305,3 +306,45 @@ def test_describe_structure():
 def test_module_size_limit():
     src = Path(fx.__file__).read_text(encoding="utf-8")
     assert len(src.splitlines()) <= 800
+
+
+# ------------------------------------------------------------------ '기타'(misc) 분류
+def test_misc_category_key_is_distinct_from_find_data_other():
+    assert fx.MISC == "misc" and fx.MISC in fx.EXT_CATEGORIES and "other" not in fx.EXT_CATEGORIES
+    assert fx.CATEGORY_LABELS["misc"] == "기타" and fd.CATEGORY_LABELS["other"] == "기타 큰 파일"
+    assert fd.CATEGORY_LABELS["misc"] != fd.CATEGORY_LABELS["other"] and "misc" not in fd.CATEGORIES
+    assert fd.DEFAULT_CATEGORIES == ("design", "photo", "video", "doc", "archive")
+
+
+def test_add_misc_effective_table_grade_b_and_describe():
+    ch = fx.add(fx.ExtConfig(), ".zep", "기타")
+    assert ch.changed and ch.cfg.added == {".zep": "misc"} and "기타" in ch.message
+    t = fx.effective_table(ch.cfg)
+    assert t[".zep"] == ("misc", "B") and fx.user_exts(ch.cfg) == {".zep"}
+    d = fx.describe(ch.cfg)
+    assert [c["category"] for c in d["categories"]][-1] == "misc" and d["categories"][-1]["label"] == "기타"
+    assert d["categories"][-1]["exts"] == [{"ext": ".zep", "grade": "B", "origin": "user"}]
+    assert sum(c["count"] for c in d["categories"]) == d["total"]
+    # 사용자가 넣은 것이 없으면 기본 표시는 예전처럼 5개 묶음(기존 화면 불변), 명령줄은 비어 있어도 '기타' 를 보여 준다
+    assert len(fx.describe(fx.ExtConfig())["categories"]) == 5
+    assert fx.describe(fx.ExtConfig(), show_empty_misc=True)["categories"][-1] == {"category": "misc", "label": "기타", "count": 0, "exts": []}
+    assert fx.add(ch.cfg, ".zep", "other").changed is False  # other 도 같은 '기타' 로 봐서 중복 안내
+    assert fx.add(ch.cfg, ".zep", "design").cfg.added == {".zep": "design"}  # 분류 바꾸기
+
+
+def test_misc_roundtrip_save_load_and_backward_compat(d):
+    fx.save(fx.add(fx.ExtConfig(), ".zep", "other").cfg, d)
+    assert saved(d)["added"] == {".zep": "misc"}  # 파일에는 misc 로 저장
+    assert fx.load(d).added == {".zep": "misc"}
+    # 기타가 없는 예전 설정 파일은 그대로 읽힌다
+    (d / fx.FILE_NAME).write_text(json.dumps({"version": 1, "added": {".zep": "design"}, "removed": [".svg"]}), encoding="utf-8")
+    cfg = fx.load(d)
+    assert not cfg.notes and cfg.added == {".zep": "design"} and cfg.removed == [".svg"]
+    # 파일 안의 'other' 는 허용하지 않는다(키는 misc)
+    (d / fx.FILE_NAME).write_text(json.dumps({"version": 1, "added": {".zep": "other"}, "removed": []}), encoding="utf-8")
+    assert fx.load(d).added == {} and any("잘못된 항목" in n for n in fx.load(d).notes)
+
+
+def test_misc_dangerous_ext_still_warns():
+    ch = fx.add(fx.ExtConfig(), ".exe", "기타")
+    assert ch.changed and ch.warnings and "프로그램 파일" in ch.warnings[0]

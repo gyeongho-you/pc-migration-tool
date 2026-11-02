@@ -228,7 +228,7 @@ def test_cli_add_remove_reset_flow(capsys):
 
 
 def test_cli_invalid_input_exit_2_and_no_file(capsys):
-    for argv in (["add", "*.dwg", "--category", "design"], ["add", ".a b", "--category", "design"], ["add", ".zep", "--category", "other"],
+    for argv in (["add", "*.dwg", "--category", "design"], ["add", ".a b", "--category", "design"], ["add", ".zep", "--category", "zzz"],
                  ["add", "", "--category", "design"], ["remove", "a/b"]):
         assert cli.main(["find-exts", *argv]) == 2, argv
         assert capsys.readouterr().err.strip()
@@ -280,3 +280,49 @@ def test_cli_output_has_no_home_path(capsys, monkeypatch, tmp_path):
     assert cli.main(["find-exts", "list", "--json"]) == 0
     out = capsys.readouterr().out
     assert home not in out and "%USERPROFILE%" in out  # 경로를 보여 줄 때 사용자 이름이 새지 않는다
+
+
+# ------------------------------------------------------------------ '기타'(misc) 분류와 찾기
+def test_misc_single_file_folder_is_candidate_and_shown(tmp_path):
+    r = tree(tmp_path)
+    cfg = fx.add(fx.ExtConfig(), ".zep", "기타").cfg
+    res = run(r, ext_config=cfg)
+    assert "Drone/proj1" in names(res, r)
+    item = next(p for p in res.projects if p.path.endswith("proj1"))
+    assert item.categories == {"misc": {"files": 1, "bytes": 10}} and ".zep" in item.top_extensions
+    assert "기타(직접 추가) 1개" in item.basis and "사용자 추가 형식: .zep 1개" in item.basis
+    assert list(res.categories) == list(fd.DEFAULT_CATEGORIES)  # 결과가 되울리는 선택 분류는 그대로
+    assert res.drives[0]["categories"]["misc"]["files"] == 1
+    # 찾기 화면 행: 모든 종류가 켜진 기본 보기에서는 보이고, 설계만 켜면 빠진다(기타 칩은 화면안에서 승인 후 추가)
+    from pcmigrate.gui.files_flow import row_from_item, row_visible
+    row = row_from_item(item, False)
+    assert row_visible(row, {"design", "photo", "video", "doc"}) and not row_visible(row, {"design"})
+
+
+def test_misc_beats_excluded_list_and_large_other_rule(tmp_path):
+    r = tmp_path / "pc"
+    put(r / "Tools" / "x.exe", b"x" * 300)
+    res = run(r, ext_config=fx.add(fx.ExtConfig(), ".exe", "기타").cfg, other_large_bytes=100)
+    assert names(res, r) == ["Tools"] and list(res.projects[0].categories) == ["misc"]  # 큰 기타("other")가 아니라 misc
+
+
+def test_without_misc_results_are_unchanged(tmp_path):
+    r = tree(tmp_path)
+    base = fd.find_data([r], user_folders={}, exclude_paths=[], clock=lambda: 0.0)
+    assert '"misc"' not in json.dumps(base.to_dict())
+    assert json.dumps(run(r).to_dict(), sort_keys=True) == json.dumps(base.to_dict(), sort_keys=True)
+
+
+def test_cli_misc_input_both_languages_and_list(capsys):
+    assert cli.main(["find-exts", "add", ".zep", "--category", "기타"]) == 0
+    assert cli.main(["find-exts", "add", ".kdc", "--category", "other"]) == 0
+    capsys.readouterr()
+    assert fx.load().added == {".zep": "misc", ".kdc": "misc"}
+    assert cli.main(["find-exts", "list"]) == 0
+    assert "[기타] 2개: +.kdc +.zep" in capsys.readouterr().out or "[기타] 2개: +.zep +.kdc" in capsys.readouterr().out
+    assert cli.main(["find-exts", "list", "--json"]) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["categories"][-1]["category"] == "misc" and data["categories"][-1]["count"] == 2
+    fx.reset()
+    assert cli.main(["find-exts", "list"]) == 0
+    assert "[기타] 0개" in capsys.readouterr().out

@@ -30,9 +30,14 @@ MAX_EXT_LEN = 16  # 점을 포함한 길이
 USER_GRADE = "B"
 USER_LABEL = "사용자 추가"
 
-EXT_CATEGORIES: tuple[str, ...] = ("design", "photo", "video", "doc", "archive")
-CATEGORY_LABELS = {c: fd.CATEGORY_LABELS[c] for c in EXT_CATEGORIES}
+# 분류 키: 설계/사진/영상/문서/압축은 기본 표의 분류이고, "misc" 는 사용자가 '기타' 로 직접 넣는 분류다(기본 표에는 없음).
+# find_data 의 "other"(용량 기준 '기타 큰 파일')와 다른 분류이므로 키를 "misc" 로 구분한다. 명령줄에서는 other/기타/misc 모두 misc 로 받는다.
+MISC = fd.MISC_CATEGORY
+EXT_CATEGORIES: tuple[str, ...] = ("design", "photo", "video", "doc", "archive", MISC)
+CATEGORY_LABELS = {c: fd.CATEGORY_LABELS[c] for c in EXT_CATEGORIES[:-1]}
+CATEGORY_LABELS[MISC] = "기타"
 _LABEL_TO_CATEGORY = {v: k for k, v in CATEGORY_LABELS.items()}
+_ALIASES = {"other": MISC, "etc": MISC, "기타(직접 추가)": MISC}
 
 # 프로그램/설치/시스템 성격 확장자(추가하려 하면 경고만 하고 막지는 않는다)
 PROGRAM_EXT = frozenset({".exe", ".dll", ".msi", ".msu", ".sys", ".drv", ".ocx", ".bat", ".cmd", ".com", ".scr", ".ps1", ".psm1",
@@ -81,7 +86,9 @@ def normalize_category(text: str) -> str:
         return t
     if t in _LABEL_TO_CATEGORY:
         return _LABEL_TO_CATEGORY[t]
-    raise FindExtsError("분류는 설계(design), 사진(photo), 영상(video), 문서(doc), 압축(archive) 중에서 고르세요.")
+    if t in _ALIASES:
+        return _ALIASES[t]
+    raise FindExtsError("분류는 설계(design), 사진(photo), 영상(video), 문서(doc), 압축(archive), 기타(other) 중에서 고르세요.")
 
 
 def warnings_for(ext: str) -> list[str]:
@@ -289,12 +296,16 @@ def user_exts(cfg: ExtConfig | None) -> frozenset[str]:
     return frozenset(cfg.added) if cfg else frozenset()
 
 
-def describe(cfg: ExtConfig) -> dict:
-    """화면/명령줄 표시용: 분류별 확장자(origin: default|user)와 삭제한 기본 확장자."""
+def describe(cfg: ExtConfig, show_empty_misc: bool = False) -> dict:
+    """화면/명령줄 표시용: 분류별 확장자(origin: default|user)와 삭제한 기본 확장자.
+
+    '기타' 묶음은 사용자가 넣은 것이 있을 때만(또는 show_empty_misc 이면 비어 있어도) 나온다 — 기본 상태의 목록은 5개 묶음 그대로다."""
     table = effective_table(cfg)
     users = user_exts(cfg)
     cats = []
     for c in EXT_CATEGORIES:
+        if c == MISC and not show_empty_misc and not any(table[e][0] == MISC for e in users):
+            continue
         exts = [{"ext": e, "grade": g, "origin": "user" if e in users else "default"}
                 for e, (cc, g) in table.items() if cc == c and e not in users]
         exts += [{"ext": e, "grade": USER_GRADE, "origin": "user"} for e in sorted(users) if table[e][0] == c]

@@ -1312,7 +1312,7 @@ def build_parser() -> argparse.ArgumentParser:
     from . import record_cli
     record_cli.add_parsers(sub, _path_arg)
     from . import find_exts_cli
-    find_exts_cli.add_parsers(sub)
+    find_exts_cli.add_parsers(sub, _path_arg)
     return p
 
 

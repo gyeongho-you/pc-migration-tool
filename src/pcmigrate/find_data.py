@@ -78,6 +78,11 @@ ARCHIVE_EXT: dict[str, str] = {".zip": "B", ".7z": "B", ".rar": "B", ".tar": "C"
 CATEGORIES: tuple[str, ...] = ("design", "photo", "video", "doc", "archive", "other")
 CATEGORY_LABELS = {"design": "설계", "photo": "사진", "video": "영상", "doc": "문서", "archive": "압축", "other": "기타 큰 파일"}
 DEFAULT_CATEGORIES: tuple[str, ...] = ("design", "photo", "video", "doc", "archive")  # 'other' 는 고를 때만 후보 조건에 쓴다
+# 사용자가 '기타' 로 직접 추가한 확장자의 분류 키(find_exts). 'other'(용량 기준 '기타 큰 파일')와 다른 분류다: 기본 표에는 없고,
+# 사용자 설정이 있을 때만 생긴다. --categories 로 고르는 분류가 아니라 항상 후보 조건에 쓰인다(직접 넣은 형식이므로).
+MISC_CATEGORY = "misc"
+CATEGORY_LABELS[MISC_CATEGORY] = "기타(직접 추가)"
+RESULT_CATEGORIES: tuple[str, ...] = CATEGORIES + (MISC_CATEGORY,)
 EXT_TABLE: dict[str, tuple[str, str]] = {}  # 확장자 -> (분류, 등급)
 for _cat, _tbl in (("design", DESIGN_EXT), ("photo", PHOTO_EXT), ("video", VIDEO_EXT), ("doc", DOC_EXT), ("archive", ARCHIVE_EXT)):
     for _e, _g in _tbl.items():
@@ -329,7 +334,7 @@ def _qualifies_direct(a: _Agg, cats: Iterable[str] = DEFAULT_CATEGORIES) -> bool
     c, cats = a.cats, tuple(cats)
     if "other" in c and "other" in cats:
         return True
-    if any(k in cats and n > 0 for k, n in a.user_cats.items()):  # 사용자가 직접 추가한 형식은 분류와 상관없이 파일 1개로도 후보
+    if any((k in cats or k == MISC_CATEGORY) and n > 0 for k, n in a.user_cats.items()):  # 사용자가 직접 추가한 형식은 분류와 상관없이 파일 1개로도 후보
         return True
     for k in ("design", "photo", "video"):  # 등급 C 형식(.svg 등)만 있으면 파일 1개로는 후보가 아니다(문서/압축과 같은 3개 이상 기준)
         if k in c and k in cats and c[k][0] > a.weak.get(k, 0):
@@ -342,6 +347,7 @@ class _Finder:
     def __init__(self, categories, min_size, max_depth, time_limit, cancel, progress, progress_info, clock, attr_getter,
                  exclude_paths, user_paths, other_large, report_every, ext_table=None, user_exts=()):
         self.categories, self.min_size, self.max_depth = tuple(categories), min_size, max_depth
+        self.want = self.categories + (MISC_CATEGORY,)  # 후보 판정에 쓰는 분류: 선택한 분류 + 사용자가 '기타' 로 추가한 형식(결과의 categories 에는 넣지 않는다)
         self.cancel, self.progress, self.progress_info, self.clock = cancel, progress, progress_info, clock
         self.attr_getter, self.other_large, self.report_every = attr_getter, other_large, report_every
         self.table = None if ext_table is None else dict(ext_table)  # 시작할 때 한 번 복사: 훑는 도중 설정이 바뀌어도 일관
@@ -465,22 +471,22 @@ class _Finder:
                     break
         elif subdirs and depth >= MAX_RECURSION:
             self._err(path, OSError("폴더가 너무 깊습니다"))
-        unit = force_unit or (not is_drive_root and (depth >= self.max_depth or _qualifies_direct(direct, self.categories)))
+        unit = force_unit or (not is_drive_root and (depth >= self.max_depth or _qualifies_direct(direct, self.want)))
         if unit and self._wanted(total, force_unit):
             why = ("사용자 기본 폴더" if force_unit else
-                   "폴더에 데이터 파일이 직접 있음" if _qualifies_direct(direct, self.categories) else f"깊이 {self.max_depth} 한도에서 묶음")
+                   "폴더에 데이터 파일이 직접 있음" if _qualifies_direct(direct, self.want) else f"깊이 {self.max_depth} 한도에서 묶음")
             return total, [self._item(path, total, "user_folder" if force_unit else "project", why)]
         return total, child_units
 
     def _wanted(self, a: _Agg, force: bool) -> bool:
         if force:
             return a.files > 0 or a.cloud_n > 0
-        n = sum(a.cats.get(c, [0])[0] for c in self.categories)
-        b = sum(a.cats.get(c, [0, 0])[1] for c in self.categories)
+        n = sum(a.cats.get(c, [0])[0] for c in self.want)
+        b = sum(a.cats.get(c, [0, 0])[1] for c in self.want)
         return n > 0 and b >= self.min_size
 
     def _item(self, path: str, a: _Agg, kind: str, why: str, label: str = "") -> FolderItem:
-        cats = {c: {"files": a.cats[c][0], "bytes": a.cats[c][1]} for c in CATEGORIES if c in a.cats}
+        cats = {c: {"files": a.cats[c][0], "bytes": a.cats[c][1]} for c in RESULT_CATEGORIES if c in a.cats}
         latest = datetime.fromtimestamp(a.latest, timezone.utc).isoformat(timespec="seconds") if a.latest else ""
         bits = [f"{CATEGORY_LABELS[c]} {v['files']}개" for c, v in cats.items()]
         exts = [e for e, _n in a.exts.most_common(5)]
@@ -558,7 +564,7 @@ def find_data(roots: Iterable[str | os.PathLike] | None = None, *, user_folders:
     res.projects.sort(key=lambda p: -p.total_bytes)
     for drive, (rs, a) in sorted(drive_aggs.items()):
         res.drives.append({"drive": drive, "roots": rs, "files": a.files, "bytes": a.bytes,
-                           "categories": {c: {"files": a.cats[c][0], "bytes": a.cats[c][1]} for c in CATEGORIES if c in a.cats},
+                           "categories": {c: {"files": a.cats[c][0], "bytes": a.cats[c][1]} for c in RESULT_CATEGORIES if c in a.cats},
                            "cloud_only_files": a.cloud_n, "cloud_only_bytes": a.cloud_b})
         res.cloud_only_files += a.cloud_n
         res.cloud_only_bytes += a.cloud_b
