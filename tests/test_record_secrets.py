@@ -136,3 +136,51 @@ def test_z2_dir_not_bundled_when_clue_extension_inside(fake):
     s = _rounds(fake, [fake.put(d / "a.ini", "1"), fake.put(d / "b.ini", "1"), fake.put(d / "server.pem", "1")])
     rule = rm.write_draft(s)[1]
     assert all(p["kind"] == "file" for p in rule["paths"])
+
+
+LOGIN_NAMES = ["LoginState.xml", "login.json", "account.json", "userinfo.xml", "identity.json", "signin.xml", "authdata.json",
+               "passphrase.ini", "SingleSignOn.xml", "AdskIdentityManager.xml", "sign-in.xml", "loginstate.xml", "MyAccount.json", "oauth_state.json"]
+NORMAL_NAMES = ["settings.ini", "accounting.xml", "author.ini", "authors.json", "Accountability.xml", "accountant.xml", "singleton.xml",
+                "design.json", "signature.xml", "logging.xml", "catalog.xml", "dialog.ini", "preferences.json", "keys.xml"]
+
+
+BASE = "%APPDATA%" + chr(92) + "Acme" + chr(92)
+
+
+def test_login_and_account_state_names_are_secret():
+    for n in LOGIN_NAMES:
+        assert rm.secret_reason(BASE + n), n
+    assert rm.secret_reason(BASE + "Identity" + chr(92) + "a.json")  # 폴더 이름 단서도 같다
+    assert rm.secret_reason(BASE + "SignIn" + chr(92) + "a.xml")
+
+
+def test_accidental_matches_are_not_secret():
+    for n in NORMAL_NAMES:
+        assert rm.secret_reason(BASE + n) is None, n
+
+
+def test_login_names_never_reach_draft_and_are_listed_as_secret(fake):
+    d = fake.app / "Acme"
+    ok = fake.put(d / "settings.ini", "1")
+    bad = [fake.put(d / n, "1") for n in ("LoginState.xml", "account.json", "SingleSignOn.xml", "AdskIdentityManager.xml")]
+    s = _rounds(fake, [ok, *bad])
+    a, rule, _out = rm.write_draft(s)
+    by = {c.path.rsplit("\\", 1)[-1]: c for c in a.candidates}
+    assert all(by[b.name].secret and rm.SECRET_REASON in by[b.name].reason for b in bad)
+    assert not by["settings.ini"].secret
+    blob = json.dumps(rule["paths"])
+    assert "settings.ini" in blob and not any(b.name in blob for b in bad)
+    assert not any(c.path.endswith(b.name) for c in a.candidates if not c.secret for b in bad)
+
+
+def test_login_file_prevents_folder_bundling_and_exclude_globs_cover_it(fake):
+    import fnmatch
+    d = fake.app / "Acme"
+    files = [fake.put(d / n, "1") for n in ("a.ini", "b.xml", "LoginState.xml")]
+    s = _rounds(fake, files)
+    rule = rm.write_draft(s)[1]
+    assert all(p["kind"] == "file" for p in rule["paths"]) and "LoginState.xml" not in json.dumps(rule["paths"])
+    for n in ("LoginState.xml", "login.json", "signin.xml", "userinfo.xml", "identity.json", "passphrase.ini", "SingleSignOn.xml",
+              "account.json", "AdskIdentityManager.xml"):
+        assert any(fnmatch.fnmatch(n.lower(), g.lower()) for g in rm.SECRET_EXCLUDES), n
+    assert not any(fnmatch.fnmatch("settings.ini", g.lower()) or fnmatch.fnmatch("accounting.xml", g.lower()) for g in rm.SECRET_EXCLUDES)

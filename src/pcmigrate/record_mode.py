@@ -357,6 +357,13 @@ SECRET_EXTS = frozenset({".pem", ".pfx", ".p12", ".key", ".crt", ".cer", ".ovpn"
 SECRET_NAMES = frozenset({"local state", "key", "wallet.dat"})  # 마지막 값은 확장자 뗀 이름(key.json 등)과 전체 이름 모두 비교
 _AUTH_WORD = re.compile(r"(?<![a-z])(?:o?auth|authn|authz)(?![a-z])")  # author 같은 낱말은 걸리지 않게 낱말 경계로 판정
 _SSO_WORD = re.compile(r"(?<![a-z])sso(?![a-z])")
+# 로그인/계정 상태 파일 이름 단서(낱말 경계 방식): 경로 요소를 camelCase/기호로 낱말로 나눈 뒤 낱말(또는 이웃한 낱말을 이은 것)을 본다.
+# 그래서 LoginState.xml, SingleSignOn.xml, sign-in.xml, AdskIdentityManager.xml 은 걸리고 accounting.xml, author.ini 같은 우연 일치는 걸리지 않는다.
+LOGIN_WORDS = frozenset({"login", "logins", "logon", "signin", "signon", "userinfo", "identity", "passphrase", "account", "accounts", "sso",
+                         "oauth", "auth", "authn", "authz", "singlesignon"})
+LOGIN_PREFIXES = ("login", "logon", "signin", "signon", "userinfo", "passphrase", "singlesignon", "oauth", "authdata", "authtoken", "identity")
+_ACCOUNT_PREFIX = re.compile(r"account(?!ing|ant|abil)")  # accounting/accountant/accountability 는 제외
+_WORD_SPLIT = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|\d+")
 SECRET_REASON = "로그인/라이선스 파일이라 제외했습니다"
 NONCONFIG_REASON = "설정 형식이 아니라 제외했습니다"
 # 규칙의 exclude(파일 이름 glob)에 넣는 안전망: 폴더 묶기 안에 스냅샷에 안 보인 비밀 파일이 있어도 복원 대상에서 빠지게 한다.
@@ -364,11 +371,28 @@ SECRET_EXCLUDES = ("*.lic*", "*.license", "*token*", "*cookie*", "*credential*",
                    "*apikey*", "*api_key*", "*api-key*", "*session*", "*bearer*", "*refresh*", "*serial*", "*activation*", "*dongle*", "*wallet*",
                    "sso.*", "sso_*", "sso-*", "*_sso.*", "*-sso.*", "hasp*", "local state", "*.pem", "*.pfx", "*.p12", "*.key", "*.crt", "*.cer",
                    "*.ovpn", ".env", ".env.*", "*.env", "*.kdbx", "*.jks", "*.keystore", "*.p7b", "*.gpg", "logins.json", "key4.db", "login data",
-                   "id_rsa*", "id_ed25519*", ".netrc", ".git-credentials")
+                   "id_rsa*", "id_ed25519*", ".netrc", ".git-credentials",
+                   "*login*", "*logon*", "*signin*", "*sign-in*", "*sign_in*", "*userinfo*", "*identity*", "*passphrase*", "*singlesignon*",
+                   "*oauth*", "*authdata*", "account.*", "accounts.*", "account[-_]*", "*[-_]account.*", "*[-_]account[-_]*")
 
 
-def _secret_part(part: str) -> bool:
-    """경로 요소(소문자) 하나가 비밀/라이선스 단서인지."""
+def _login_clue(original: str) -> bool:
+    """경로 요소(원래 대소문자)를 낱말로 나눠 로그인/계정 단서 낱말이 있는지(낱말 경계 방식)."""
+    words = [w.lower() for w in _WORD_SPLIT.findall(os.path.splitext(original)[0])]
+    cands = list(words)
+    for n in (2, 3):  # 이웃한 낱말을 이은 것(sign+in, single+sign+on)
+        cands += ["".join(words[i:i + n]) for i in range(len(words) - n + 1)]
+    for w in cands:
+        if w in LOGIN_WORDS or w.startswith(LOGIN_PREFIXES) or _ACCOUNT_PREFIX.match(w):
+            return True
+    return False
+
+
+def _secret_part(original: str) -> bool:
+    """경로 요소 하나가 비밀/라이선스/로그인 단서인지(원래 대소문자를 받는다)."""
+    part = original.lower()
+    if _login_clue(original):
+        return True
     stem, ext = os.path.splitext(part)
     if ext in SECRET_EXTS or ext.startswith(".lic") or part == ".env" or part.startswith(".env."):
         return True
@@ -381,7 +405,7 @@ def _secret_part(part: str) -> bool:
 
 def secret_reason(tok: str) -> str | None:
     """환경변수 표기 경로의 (루트 토큰 아래) 어느 요소라도 비밀/라이선스 단서이면 사유 문장, 아니면 None."""
-    for part in (x.lower() for x in tok.split("\\")[1:]):
+    for part in tok.split("\\")[1:]:
         if _secret_part(part):
             return SECRET_REASON
     return None
