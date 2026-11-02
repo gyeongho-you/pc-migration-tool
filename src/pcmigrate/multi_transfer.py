@@ -374,6 +374,22 @@ def precheck_space(plan: Plan, dst: Path, *, dest_info_fn=None, cancel=None, est
 _PART_RE = re.compile(r"\.pcm\d{3,}$")
 
 
+def is_bak_name(name: str) -> bool:
+    low = name.lower()
+    return low.endswith(".bak") or ".bak." in low
+
+
+def _staged_list(folder: str, limit: int = 5000) -> dict:
+    """임시 보관 폴더에 담은 파일의 상대 경로 목록(저널용). limit 를 넘으면 목록 대신 잘렸다는 표시."""
+    out: list[str] = []
+    for root, _d, names in os.walk(folder):
+        for n in names:
+            out.append(os.path.relpath(os.path.join(root, n), folder).replace("\\", "/"))
+            if len(out) > limit:
+                return {"staged_files_truncated": True}
+    return {"staged_files": out}
+
+
 def _dest_stats(folder: Path, cancel) -> tuple[int, int]:
     """대상 폴더의 (파일 수, 용량): 이 도구의 기록 파일(.pcmigrate-*)과 .bak 은 빼고, 분할 조각(.pcm001...)은 원본 파일 하나로 센다."""
     files = total = 0
@@ -382,8 +398,8 @@ def _dest_stats(folder: Path, cancel) -> tuple[int, int]:
         if cancel is not None and cancel():
             raise Cancelled()
         for n in names:
-            if n.startswith(".pcmigrate-") or n.lower().endswith(".bak") or ".bak." in n.lower():
-                continue
+            if n.startswith(".pcmigrate-") or is_bak_name(n):
+                continue  # (원본에 있던 .bak 은 저널에 따로 기록해 하한을 보정한다)
             try:
                 size = os.path.getsize(os.path.join(root, n))
             except OSError:
@@ -406,14 +422,16 @@ def _skip_still_valid(prior: dict, item_dst: Path, src: str, stamp_fn, cancel) -
         if not item_dst.is_dir():
             return False
         want_f, want_b = prior.get("files"), prior.get("bytes")
+        was = prior.get("src_stamp")
+        new_fmt = isinstance(was, list) and len(was) == 5  # (파일 수, 용량, 해시, .bak 수, .bak 용량)
         if isinstance(want_f, int) and isinstance(want_b, int):
             have_f, have_b = _dest_stats(item_dst, cancel)
-            if have_f < want_f or have_b < want_b:
+            bak_f, bak_b = (was[3], was[4]) if new_fmt else (0, 0)  # 원본의 .bak 은 대상에서도 .bak 이라 세지 않았으므로 기록 값에서 뺀다
+            if have_f < want_f - bak_f or have_b < want_b - bak_b:
                 return False
         if stamp_fn is not None:
-            was = prior.get("src_stamp")
-            if not (isinstance(was, list) and len(was) == 2) or tuple(stamp_fn(src)) != tuple(was):
-                return False  # 원본이 바뀌었거나(또는 옛 기록이라 확인할 수 없어) 다시 처리
+            if not new_fmt or tuple(stamp_fn(src)) != tuple(was):
+                return False  # 원본이 바뀌었거나(파일별 크기·수정 시각 포함) 옛 형식 기록이라 확인할 수 없어 다시 처리
         return True
     except Cancelled:
         raise
@@ -491,7 +509,7 @@ def run_multi(selected: Iterable[SelectedItem | str], dst: str | os.PathLike, tr
         label = f"[{n}/{total}] {shown}"
         key = it.rel.lower() + (STAGED_SUFFIX if it.orig else "")
         prior = journal["items"].get(key, {})
-        partial = {"partial": True} if it.orig else {}  # 임시 보관(직접 고른 일부 파일) 항목: 폴더 전체가 끝났다는 뜻이 아니다
+        partial = {"partial": True, **_staged_list(it.src)} if it.orig else {}  # 임시 보관(직접 고른 일부 파일) 항목: 폴더 전체가 끝났다는 뜻이 아니다(담은 파일 목록도 남긴다)
         if (skip_done and not it.orig and not dry_run and not retry_failed and prior.get("status") == "done" and not prior.get("partial")
                 and _skip_still_valid(prior, item_dst, it.src, stamp_fn, cancel)):
             mr.items.append(ItemResult(shown, str(item_dst), "skipped_done"))

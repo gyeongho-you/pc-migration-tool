@@ -101,15 +101,22 @@ def run_transfer_selection(selection, dst: str | Path, *, dry_run: bool = False,
                 o = {**opts, "exclude_junk": False, "junk_backup_copies": False}
         return run_transfer(src, d, deps=deps, **o, **kw)
 
-    def stamp(src) -> tuple[int, int]:
-        """끝난 폴더의 원본 상태 표식(파일 수, 용량): 정크 제외/클라우드 옵션을 전송과 같게 적용한 조사 결과. skip_done 때 원본이 바뀌었는지 대조한다."""
+    def stamp(src) -> tuple:
+        """끝난 폴더의 원본 상태 표식 (파일 수, 용량, 파일별 (상대 경로, 크기, 수정 시각) 해시, 원본 .bak 개수, 원본 .bak 용량).
+        정크 제외/클라우드 옵션을 전송과 같게 적용한 조사 결과에서 이미 얻은 값만 쓴다(파일 내용은 읽지 않음). skip_done 때 원본이 바뀌었는지 대조한다."""
+        import hashlib
+        from .multi_transfer import is_bak_name
         from .junk import apply_to_scan, make_spec
         from .scan import scan_source_info
         sc = scan_source_info(str(src), cancel=cancel)
         if exclude_junk:
             apply_to_scan(sc, make_spec(junk_backup_copies))
-        rows = list(sc.entries) + (list(sc.cloud) if include_cloud else [])
-        return len(rows), sum(r[1] for r in rows)
+        rows = sorted(list(sc.entries) + (list(sc.cloud) if include_cloud else []))
+        h = hashlib.sha1()
+        for rel, size, mtime in rows:
+            h.update(f"{rel}\0{size}\0{mtime}\n".encode("utf-8", "surrogatepass"))
+        baks = [r for r in rows if is_bak_name(r[0].rsplit("/", 1)[-1])]
+        return len(rows), sum(r[1] for r in rows), h.hexdigest(), len(baks), sum(r[1] for r in baks)
 
     def go(its: list) -> MultiReport:
         return run_multi(its, dst, one, dry_run=dry_run, manifest_out=manifest_out, skip_done=skip_done, stamp_fn=stamp,

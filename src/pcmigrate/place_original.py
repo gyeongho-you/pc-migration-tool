@@ -734,7 +734,13 @@ def discover(recv: Path, maps: dict[str, str], include_unverified: bool, warn: C
     bad_tops: set[str] = set()  # 저널 항목이 깨진 최상위 폴더(유추로 놓지 않는다)
     real_rels = {str(v.get("rel", "")).lower() for v in items.values() if isinstance(v, dict) and not v.get("partial")}  # 폴더째 보낸 실제 항목
     part_bad = {str(v.get("rel", "")).lower(): v.get("status") for v in items.values()
-                if isinstance(v, dict) and v.get("partial") and v.get("status") not in ("done", "stale")}  # stale: 이번 계획에 없어 낡은 기록  # 끝나지 못한 임시 보관(직접 고른 파일) 항목
+                if isinstance(v, dict) and v.get("partial") and v.get("status") not in ("done", "stale")}  # stale: 이번 계획에 없어 낡은 기록
+    for v in items.values():  # 낡은(stale) 임시 보관 항목이라도 그때 담은 파일이 받기 폴더에 남아 있으면(검증 못 한 파일) 그 폴더는 미검증으로 본다
+        if isinstance(v, dict) and v.get("partial") and v.get("status") == "stale" and isinstance(v.get("rel"), str):
+            lst = v.get("staged_files")
+            if v.get("staged_files_truncated") or (isinstance(lst, list) and any(
+                    isinstance(f, str) and os.path.lexists(long_path(recv.joinpath(*v["rel"].split("\\"), *f.split("/")))) for f in lst)):
+                part_bad[v["rel"].lower()] = "stale"  # 끝나지 못한 임시 보관(직접 고른 파일) 항목
     for key, it in items.items():
         meta["journal_items"] += 1
         key_top = str(key).split("\\")[0].lower()

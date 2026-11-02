@@ -175,8 +175,9 @@ def test_m4_users_folder_other_homes_and_appdata_root_are_refused():
 # ---------------------------------------------------------------- R1 임시 보관 항목의 저널/상태 분리
 def rescue_run(tmp_path, skip_done=False):
     src = tmp_path / "pc" / "Proj"
-    put(src / "a.txt", b"A")
-    put(src / "keep.tmp", b"wanted")
+    if not src.exists():  # 2회차에 다시 쓰면 수정 시각이 바뀌어 원본이 바뀐 것으로 본다(stage76 스탬프)
+        put(src / "a.txt", b"A")
+        put(src / "keep.tmp", b"wanted")
     stage_root = tmp_path / "stage"
     stage_root.mkdir(exist_ok=True)
     return src, run_transfer_selection([SelectedItem(str(src), True)], tmp_path / "dst", deps=deps_with(FakeRobo()), keep_awake=False,
