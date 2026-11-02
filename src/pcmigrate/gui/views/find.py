@@ -122,6 +122,9 @@ class FindView(BaseView):
         # ---- 기존 방식 / 새 PC 에서 받기
         self.links = ttk.Frame(body)
         self.links.pack(anchor="w", fill="x", pady=(10, 0))
+        self.exts_btn = ActionButton(self.links, text=T.FX_LINK, kind="link", command=lambda: self.guarded(self._open_exts))  # stage61
+        self.exts_btn.pack(anchor="w", pady=(0, 2))
+        add_tooltip(self.exts_btn, T.FX_TIP)
         self.legacy_btn = ActionButton(self.links, text=T.FD_LEGACY_LINK, kind="link", command=lambda: self.guarded(self.c.files_legacy_transfer))
         self.legacy_btn.pack(anchor="w")
         add_tooltip(self.legacy_btn, T.TIP_FD_LEGACY)
@@ -141,6 +144,7 @@ class FindView(BaseView):
 
     def on_event(self, kind, payload) -> None:
         if kind == "find_data_done":
+            self.c.exts_clear_notice()  # 새로 찾았으니 '저장했습니다, 다음에 반영' 안내는 지운다
             self.bulk_msg.configure(text="")
             self._rebuild()
         elif kind in ("files_changed", "cancelled", "busy"):
@@ -235,6 +239,7 @@ class FindView(BaseView):
             parts.append(f.find_error)
         elif f.find_cancelled and res is None:
             parts.append(T.FD_CANCELLED)
+        parts += self.c.exts_notice_lines(res)  # 찾을 파일 형식 설정: 저장 안내, 적용/손상 안내
         if res is not None:
             if not res.complete:
                 parts.append(T.FD_PARTIAL)
@@ -291,6 +296,11 @@ class FindView(BaseView):
             extra.pack_forget()
 
     # ------------------------------------------------------------------ 동작
+    def _open_exts(self) -> None:
+        """'찾을 파일 형식 설정' 창(모달). 작업 중이면 GuardError 로 안내만 한다."""
+        from .find_exts_dialog import ExtsDialog
+        ExtsDialog(self, self.c)
+
     def _add_folder(self) -> None:
         p = filedialog.askdirectory(parent=self, title=T.FD_ADD_TITLE, mustexist=True)
         if p:

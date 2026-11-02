@@ -3,6 +3,7 @@
 형식은 최신순입니다. 버전은 git 태그(v0.1.0 ~ v0.3.5)와 맞춥니다.
 
 ## Unreleased
+- GUI `찾을 파일 형식 설정` 창(stage61, 승인된 화면 변경안대로): 찾기 화면 맨 아래 링크 한 줄(`찾을 파일 형식 설정(3DF Zephyr 같은 형식 추가) ▸`)에서 여는 모달 창. 설계/사진/영상/문서/압축 칩 목록(× 삭제, 직접 추가 표시, 20개 초과 `더 보기`), 삭제한 기본 형식 `되돌리기`, 추가 줄(Enter 지원), 경고(프로그램·시스템 확장자만), 버튼 `기본값으로 초기화`(확인 뒤 즉시, 이전 설정 보관) / `저장`(저장해야 반영, 저장 뒤 `다음에 다시 찾기를 누르면 반영됩니다` 안내만) / `취소`(바뀐 것이 있으면 닫기 확인). 설정 손상 시 기본 목록으로 열고 안내, 찾기 결과의 `ext_notes`(적용/손상 안내)를 찾기 화면 안내 상자에 표시. 규칙은 모두 `find_exts` 를 부르고 화면에는 중복하지 않음. 새 파일 `gui/controller_exts.py`(ExtsMixin), `gui/views/find_exts_dialog.py`, `gui/texts_exts.py`, `tests/test_gui_find_exts_controller.py`, `tests/test_gui_find_exts_tk.py`. 기존 화면 변경은 `views/find.py` 의 링크 1개와 안내 상자 줄 추가뿐이고, `controller.py`/`texts.py` 는 연결 한두 줄입니다.
 - 내 파일 찾기 `찾을 파일 형식` 설정(백엔드·명령줄, 화면 변경 없음): 사용자가 확장자를 추가·삭제할 수 있게 `find_exts.py` 추가(`%LOCALAPPDATA%\pcmigrate\settings\find-exts.json` 에 기본값과의 차이만 저장, 원자 저장과 `.bak` 한 벌, 초기화는 번호 `.bak` 보관, 입력 정규화·위험 확장자 경고, 파일 1MB/항목 500개 상한, 손상 시 기본값으로 계속 동작하고 오류 로그·원본 보존). 사용자 추가 확장자는 등급 B 로 파일 1개만으로 후보가 되고 `기타 큰 파일`/제외 목록보다 우선하며 근거에 `사용자 추가 형식` 표시. `find_data.classify_name` 에 선택 인자 `table`, `find_data()` 에 `ext_table/user_exts/ext_notes`, `run_find_data` 에 `use_user_exts/ext_config` 추가(설정이 없으면 결과가 이전과 같음). 새 명령 `pcmigrate find-exts list|add|remove|reset [--json]`, `find-data --default-exts`. 설정 기록 모드·`allow_extensions` 와는 무관. 새 파일 `find_exts.py`, `find_exts_cli.py`, `tests/test_find_exts.py`, `tests/test_find_exts_find_data.py`.
 
 ## v0.3.5 (2026-11-02)
