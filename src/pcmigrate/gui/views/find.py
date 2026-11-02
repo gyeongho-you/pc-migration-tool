@@ -10,12 +10,14 @@ from tkinter import filedialog, ttk
 
 from .. import state as S
 from .. import texts as T
+from ..dnd_win import DropHook
 from .common import (FoldLabel, FoldTLabel, MUTED_FG, SUB_FONT, WARN_BG, WARN_FG, ActionButton, BaseView, Collapsible, ExplorerLink, ScrollBody, TreeTooltip, add_tooltip,
                      autowrap, bind_alt, cell_row, clean_path, clear, make_tree)
 
 
 class FindView(BaseView):
     name = S.FIND
+    install_drop_hook = True  # 시험은 False 로 둔다(실제 창에 끌어놓기 후킹을 걸지 않는다). 후킹 자체는 test_gui_drop_dnd 가 가짜 API 로 시험한다
 
     def __init__(self, app, controller) -> None:
         super().__init__(app, controller)
@@ -115,6 +117,8 @@ class FindView(BaseView):
         junk_note.pack(anchor="w", fill="x", padx=(24, 0))
         autowrap(junk_note, 40)
 
+        self._build_drop_box(body)
+
         # ---- 제외 N곳 ▸ / 클라우드 전용 파일 ▸
         self.excluded = Collapsible(body, T.FD_EXCLUDED_TITLE.format(n=0), T.FD_EXCLUDED_TITLE_OPEN.format(n=0))
         self.cloud = Collapsible(body, T.FD_CLOUD_TITLE.format(n=0), T.FD_CLOUD_TITLE_OPEN.format(n=0))
@@ -131,8 +135,10 @@ class FindView(BaseView):
         self.receive_btn = ActionButton(self.links, text=T.FD_RECEIVE_LINK, kind="link", command=lambda: self.guarded(self.c.files_receive_only))
         self.receive_btn.pack(anchor="w", pady=(2, 0))
         add_tooltip(self.receive_btn, T.FD_RECEIVE_NOTE)
-        for b in (self.find_btn, self.add_btn):
+        for b in (self.find_btn, self.add_btn, self.drop_files_btn, self.drop_folder_btn):
             bind_alt(self.app, b, lambda: self.app.current == self.name)
+        self.hook = DropHook(self.drop_box, self._on_drop)  # 끌어다 놓기(실패하면 조용히 꺼지고, 버튼은 그대로 동작)
+        self.after(200, self._install_hook)
         self.finish()
         self._rebuild()
 
@@ -178,7 +184,7 @@ class FindView(BaseView):
         self._notice(rows)
         self.total.configure(text=c.data_total_text())
         self._bundle_sync()
-        n_sel = c.data_total()[0] or int(c.bundle_included())  # 설정 묶음만 보내도 된다
+        n_sel = c.data_total()[0] or int(c.bundle_included()) or c.drop_total()[0]  # 설정 묶음이나 직접 고른 파일만 보내도 된다
         self.next_btn.state(["!disabled"] if n_sel else ["disabled"])
         self.next_btn.emphasize(bool(n_sel))
         self.set_next_reason("" if n_sel else T.WHY_FD_NEED_SELECTION)
@@ -190,6 +196,7 @@ class FindView(BaseView):
         for b in (self.select_all_btn, self.clear_all_btn):
             b.state(["disabled"] if busy or not rows else ["!disabled"])
         self.junk_var.set(f.junk)
+        self._drop_sync()
         for cat, var in self.filter_vars.items():
             var.set(cat in f.filters)
         self._empty_text(rows)
@@ -209,6 +216,120 @@ class FindView(BaseView):
         elif self.bundle_row.winfo_manager():
             self.bundle_row.pack_forget()
             self.bundle_var.set(False)
+
+    # ------------------------------------------------------------------ 직접 고른 파일·폴더(stage63)
+    def _build_drop_box(self, body) -> None:
+        box = ttk.LabelFrame(body, text=T.DP_TITLE, padding=(8, 4))
+        box.pack(fill="x", pady=(8, 0), before=self.junk_cb)
+        self.drop_box = box
+        row = ttk.Frame(box)
+        row.pack(fill="x")
+        self.drop_files_btn = ActionButton(row, text=T.BTN_DP_FILES, kind="plain", command=self._drop_pick_files)
+        self.drop_files_btn.pack(side="left")
+        self.drop_folder_btn = ActionButton(row, text=T.BTN_DP_FOLDER, kind="plain", command=self._drop_pick_folder)
+        self.drop_folder_btn.pack(side="left", padx=(8, 0))
+        self.drop_hint = FoldTLabel(box, text=T.DP_HINT, justify="left", foreground=MUTED_FG)
+        self.drop_hint.pack(anchor="w", fill="x", pady=(2, 2))
+        autowrap(self.drop_hint, 40)
+        add_tooltip(box, T.TIP_DP_TEMP)
+        cols = [("path", T.DP_COLS[0], 380), ("size", T.DP_COLS[1], 80), ("when", T.DP_COLS[2], 100)]
+        frame, self.drop_tree = make_tree(box, cols, height=4, select="extended")
+        self.drop_tree_frame = frame
+        self.drop_iids: dict[str, str] = {}
+        row2 = ttk.Frame(box)
+        self.drop_actions = row2
+        self.drop_remove_btn = ttk.Button(row2, text=T.BTN_DP_REMOVE, command=self._drop_remove)
+        self.drop_clear_btn = ttk.Button(row2, text=T.BTN_DP_CLEAR, command=self._drop_clear)
+        self.drop_remove_btn.pack(side="left")
+        self.drop_clear_btn.pack(side="left", padx=6)
+        self.drop_msg = FoldTLabel(box, text="", justify="left")
+        autowrap(self.drop_msg, 40)
+        self._drop_message = ""
+
+    def _install_hook(self) -> None:
+        try:
+            if self.install_drop_hook and not self.hook.installed and not self.hook.reason:
+                self.hook.install()
+        except Exception:  # noqa: BLE001 - 끌어다 놓기는 덤이다: 실패해도 화면은 정상
+            pass
+        self._drop_sync()
+
+    def _hint_text(self) -> str:
+        r = self.hook.reason
+        if not r and self.hook.installed:
+            return T.DP_HINT
+        if r == "admin":
+            return T.DP_HINT_ADMIN
+        return T.DP_HINT_NO_DROP if r else T.DP_HINT
+
+    def _drop_sync(self) -> None:
+        if not hasattr(self, "drop_box"):
+            return
+        c = self.c
+        self.drop_hint.configure(text=self._hint_text())
+        rows = c.drop_rows()
+        clear(self.drop_tree)
+        self.drop_iids = {}
+        for path, size, when, tag, covered in rows:
+            iid = self.drop_tree.insert("", "end", values=(T.ellipsize_path(path, 56) + (" " + tag if tag else ""), size, when))
+            self.drop_iids[iid] = path
+        if rows:
+            if not self.drop_tree_frame.winfo_manager():
+                self.drop_tree_frame.pack(fill="x", pady=(2, 2), after=self.drop_hint)
+            if not self.drop_actions.winfo_manager():
+                self.drop_actions.pack(anchor="w", pady=(2, 0), after=self.drop_tree_frame)
+        else:
+            self.drop_tree_frame.pack_forget()
+            self.drop_actions.pack_forget()
+        text = "\n".join(([self._drop_message] if self._drop_message else []) + c.drop_notes())
+        self.drop_msg.configure(text=text)
+        if text:
+            self.drop_msg.pack(anchor="w", fill="x", pady=(2, 0))
+        else:
+            self.drop_msg.pack_forget()
+        busy = bool(c.state.busy)
+        for b in (self.drop_files_btn, self.drop_folder_btn):
+            b.state(["disabled"] if busy else ["!disabled"])
+        for b in (self.drop_remove_btn, self.drop_clear_btn):
+            b.state(["disabled"] if busy or not rows else ["!disabled"])
+
+    def _drop_add(self, paths) -> None:
+        self._drop_message = ""
+        try:
+            self._drop_message = self.c.add_drop_paths(paths)
+        except Exception as e:  # noqa: BLE001 - 안내 가드(GuardError)는 한 줄 안내로
+            from ..controller import GuardError
+            if isinstance(e, GuardError):
+                self._drop_message = str(e)
+            else:
+                raise
+        self._drop_sync()
+
+    def _on_drop(self, paths) -> None:
+        """끌어다 놓은 경로 목록(Tk 주 스레드). 이 화면이 보일 때만 받는다."""
+        if getattr(self.app, "current", self.name) != self.name:
+            return
+        self._drop_add(paths)
+
+    def _drop_pick_files(self) -> None:
+        paths = filedialog.askopenfilenames(parent=self, title=T.DP_ADD_FILES_TITLE)
+        if paths:
+            self._drop_add([clean_path(p.replace("/", "\\")) for p in paths])
+
+    def _drop_pick_folder(self) -> None:
+        p = filedialog.askdirectory(parent=self, title=T.DP_ADD_FOLDER_TITLE, mustexist=True)
+        if p:
+            self._drop_add([clean_path(p.replace("/", "\\"))])
+
+    def _drop_remove(self) -> None:
+        sel = [self.drop_iids[i] for i in self.drop_tree.selection() if i in self.drop_iids]
+        if sel:
+            self._drop_message = ""
+            self.guarded(self.c.remove_drop_paths, sel)
+
+    def _drop_clear(self) -> None:
+        self._drop_message = ""
+        self.guarded(self.c.clear_drops)
 
     def _bundle_changed(self) -> None:
         self.guarded(self.c.set_bundle_included, self.bundle_var.get())

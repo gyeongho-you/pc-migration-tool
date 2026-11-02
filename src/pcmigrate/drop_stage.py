@@ -41,6 +41,14 @@ MAX_DROP_FILES = 20000  # 직접 고른 파일 수 상한(폴더를 통째로 �
 MAX_LISTED = 200  # 리포트에 적는 항목 수 상한(개수는 따로 센다)
 
 
+class DropSpaceError(TransferError):
+    """임시 폴더 또는 대상의 여유 공간 부족(kind: "temp" | "dest"). 화면이 쉬운 문구로 바꿔 보여 준다."""
+
+    def __init__(self, message: str, kind: str) -> None:
+        super().__init__(message)
+        self.kind = kind
+
+
 @dataclass(frozen=True)
 class StagedItem(SelectedItem):
     """임시 폴더에서 보내는 항목: path 는 임시 폴더, orig_dir 은 원래 폴더(대상 구조/기록 기준)."""
@@ -55,6 +63,7 @@ class DropEntry:
     size: int = 0
     mtime_ns: int = 0
     error: str = ""  # 담을 때 이미 읽을 수 없었던 이유
+    files: int = 1  # 폴더면 안의 일반 파일 수(상한 MAX_DROP_FILES+1 에서 세기를 멈춘다)
 
 
 def _attrs(st: os.stat_result) -> int:
@@ -67,16 +76,19 @@ def describe(path: str | os.PathLike) -> DropEntry:
     try:
         st = os.lstat(fs.long_path(p))
         if _stat.S_ISDIR(st.st_mode):
-            total = 0
+            total = count = 0
             for root, dirs, files in os.walk(fs.long_path(p)):
                 dirs[:] = [d for d in dirs if not fs.is_reparse(os.path.join(root, d))]
                 checkpoint()
                 for n in files:
+                    count += 1
                     try:
                         total += os.lstat(os.path.join(root, n)).st_size
                     except OSError:
                         pass
-            return DropEntry(p, True, total, st.st_mtime_ns)
+                if count > MAX_DROP_FILES:  # 이미 상한을 넘었으니 더 세지 않는다(화면이 멈추지 않게)
+                    break
+            return DropEntry(p, True, total, st.st_mtime_ns, files=count)
         return DropEntry(p, False, st.st_size, st.st_mtime_ns)
     except OSError as e:
         return DropEntry(p, False, error=f"{type(e).__name__}: {e}")
@@ -354,9 +366,9 @@ def stage_files(plan: StagePlan, stage: Path, *, cancel=None, progress: Callable
     need = sum(t[2] for t in todo)
     free = free_fn(str(stage))
     if todo and free is not None and free < int(need * (1 + SPACE_MARGIN)):
-        raise TransferError(f"임시 폴더가 있는 드라이브의 여유 공간이 부족합니다. 끌어다 놓은 파일을 임시로 담는 데 약 "
+        raise DropSpaceError(f"임시 폴더가 있는 드라이브의 여유 공간이 부족합니다. 끌어다 놓은 파일을 임시로 담는 데 약 "
                             f"{fmt_bytes(int(need * (1 + SPACE_MARGIN)))} 필요, 현재 여유 {fmt_bytes(free)}. "
-                            "파일 수를 줄이거나 폴더로 직접 선택하세요.")
+                            "파일 수를 줄이거나 폴더로 직접 선택하세요.", "temp")
     for n, (src, out, size) in enumerate(todo, 1):
         if cancel is not None and cancel():
             raise Cancelled()
@@ -438,6 +450,8 @@ def run_with_extras(items: list, extras, dst, run_fn: Callable[[list], "object"]
     stage: Path | None = None
     result = err = None
     try:
+        if progress:
+            progress("직접 고른 파일 확인 중…")
         plan = plan_drops(entries, checked, cancel=cancel, attr_fn=attr_fn)
         info = _info(plan, entries)
         if stale:
@@ -446,8 +460,10 @@ def run_with_extras(items: list, extras, dst, run_fn: Callable[[list], "object"]
         if plan.files and not dry_run:
             free = free_fn(os.fspath(dst))
             if free is not None and plan.total_bytes > free:
-                raise TransferError(f"대상 드라이브의 여유 공간이 부족합니다. 직접 고른 파일만 {fmt_bytes(plan.total_bytes)}, 현재 여유 {fmt_bytes(free)}.")
+                raise DropSpaceError(f"대상 드라이브의 여유 공간이 부족합니다. 직접 고른 파일만 {fmt_bytes(plan.total_bytes)}, 현재 여유 {fmt_bytes(free)}.", "dest")
             stage = new_stage_dir(root)
+            if progress:
+                progress("직접 고른 파일을 임시 보관 중…")
             info.update(stage_files(plan, stage, cancel=cancel, progress=progress, free_fn=free_fn, no_link=no_link))
             info.update(_info(plan, entries))
             for top in tops_of(plan):
@@ -463,6 +479,8 @@ def run_with_extras(items: list, extras, dst, run_fn: Callable[[list], "object"]
         if not isinstance(e, Cancelled):
             errorlog.record(e, "drop-stage run")
     if stage is not None:
+        if progress:
+            progress("임시 보관 폴더 정리 중…")
         info["cleanup"] = remove_stage_dir(stage, root)
     if err is not None:
         if abort_report:

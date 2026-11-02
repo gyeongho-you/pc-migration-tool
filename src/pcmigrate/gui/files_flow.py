@@ -60,6 +60,7 @@ class FilesState:
     selected: set = field(default_factory=set)  # norm(path)
     extra: list = field(default_factory=list)  # 직접 추가한 폴더(입력한 그대로)
     junk: bool = False  # 정크 파일 제외(기본 꺼짐)
+    drops: list = field(default_factory=list)  # 직접 고른 파일·폴더(drop_stage.DropEntry: 경로/용량/수정시각만 기억, stage63)
     # ---- 2/4 방법
     method: str = ""  # direct | external | share
     role: str = ""  # send | receive

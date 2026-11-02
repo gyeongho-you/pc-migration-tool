@@ -178,10 +178,14 @@ class FilesMixin:
         n, size, unknown = self.data_total()
         b = self.bundle_item()
         bsize = fmt_bytes(b.total_bytes or 0) if b is not None else ""
+        dn, dsize = self.drop_total()
         if not n:
+            if dn:
+                return T.DP_TOTAL_ONLY.format(n=dn, size=fmt_bytes(dsize)) + (" · " + T.BUNDLE_INCLUDED if b is not None else "")
             return T.FD_TOTAL_ONLY_BUNDLE.format(note=T.BUNDLE_INCLUDED, size=bsize) if b is not None else T.FD_TOTAL_NONE
         text = T.FD_TOTAL.format(n=n, size=fmt_bytes(size))
         text += (" " + T.FD_TOTAL_UNKNOWN.format(k=unknown) if unknown else "")
+        text += (" + " + T.DP_TOTAL.format(n=dn, size=fmt_bytes(dsize)) if dn else "")
         return text + (T.FD_TOTAL_BUNDLE.format(note=T.BUNDLE_INCLUDED, size=bsize) if b is not None else "")
 
     def add_data_folder(self, path: str) -> str:
@@ -348,7 +352,7 @@ class FilesMixin:
 
     def data_has_send(self) -> bool:
         """보낼 것이 있는가(체크한 폴더가 있거나, 설정 묶음만 함께 보내기로 체크했다)."""
-        return bool(self.data_selection()) or self.bundle_item() is not None
+        return bool(self.data_selection()) or self.bundle_item() is not None or bool(self.files.drops)
 
     # ------------------------------------------------------------------ 2/4 방법
     def files_go_method(self) -> None:
@@ -377,6 +381,8 @@ class FilesMixin:
             return T.WHY_MV_NEED_METHOD
         if f.method == T.MV_DIRECT and not f.role:
             return T.WHY_MV_NEED_ROLE
+        if f.method == T.MV_DIRECT and f.role == T.MV_ROLE_SEND and f.drops:
+            return T.DP_LAN_UNSUPPORTED  # 직접 연결(LAN) 보내기는 폴더 단위만 지원한다
         if not (f.method == T.MV_DIRECT and f.role == T.MV_ROLE_RECV) and not self.data_has_send():
             return T.WHY_FD_NEED_SELECTION
         return ""
@@ -408,10 +414,10 @@ class FilesMixin:
     def enter_selection_transfer(self, mode: str) -> None:
         """고른 폴더 목록을 가지고 기존 복사 화면(미리보기 → 복사 → 검사)으로 들어간다."""
         items = self.data_selected_items()
-        if not items:
-            raise _guard(T.G_FD_NEED_SELECTION)
         f, s = self.files, self.state
-        sig = signature_of([i.path for i in items], f.junk)
+        if not items and not f.drops:
+            raise _guard(T.G_FD_NEED_SELECTION)
+        sig = signature_of([i.path for i in items] + ["drop:" + norm(e.path) for e in f.drops], f.junk)
         same = f.use_selection and f.signature == sig and s.transfer_src == sig
         f.use_selection, f.transfer_items, f.signature = True, items, sig
         self.set_transfer_flow(mode, 1)
@@ -425,12 +431,12 @@ class FilesMixin:
     def has_selection(self) -> bool:
         """복사 화면이 '선택 목록' 흐름인가(1단계 복사일 때만. 새 PC 의 2단계/검사는 예전처럼 폴더를 입력한다)."""
         f = self.files
-        return bool(f.use_selection and f.transfer_items and self.state.transfer_stage == 1)
+        return bool(f.use_selection and (f.transfer_items or f.drops) and self.state.transfer_stage == 1)
 
     def sync_selection_src(self) -> None:
         """선택 목록 흐름이면 복사 원본 표식을 맞추고, 2단계로 바꾸면 비운다(화면이 입력칸을 보일 수 있게)."""
         f, s = self.files, self.state
-        if not (f.use_selection and f.transfer_items):
+        if not (f.use_selection and (f.transfer_items or f.drops)):
             return
         if s.transfer_stage == 1:
             if s.transfer_src != f.signature:
@@ -451,6 +457,9 @@ class FilesMixin:
         if len(items) > 6:
             lines.append("  · " + T.TR_SELECTION_MORE.format(n=len(items) - 6))
         lines += self._bundle_lines(self.files.transfer_items)
+        dn, dsize = self.drop_total()
+        if dn:
+            lines.append(T.DP_TOTAL.format(n=dn, size=fmt_bytes(dsize)))
         return "\n".join(lines)
 
     def _bundle_lines(self, items: list) -> list[str]:
@@ -462,7 +471,7 @@ class FilesMixin:
         return out
 
     def transfer_back_screen(self) -> str:
-        return S.METHOD if self.files.use_selection and self.files.transfer_items else S.START
+        return S.METHOD if self.files.use_selection and (self.files.transfer_items or self.files.drops) else S.START
 
     def selection_box_text(self) -> str:
         """복사 화면의 '옮길 폴더' 요약(처음 몇 곳의 경로 포함). 설정 묶음이 있으면 '설정 묶음 1개 포함' 줄."""
@@ -476,6 +485,9 @@ class FilesMixin:
         if len(items) > 4:
             lines.append("  · " + T.TR_SELECTION_MORE.format(n=len(items) - 4))
         lines += ["  · " + t for t in self._bundle_lines(all_items)]
+        dn, dsize = self.drop_total()
+        if dn:
+            lines.append("  · " + T.DP_TOTAL.format(n=dn, size=fmt_bytes(dsize)))
         return "\n".join(lines)
 
     # ---- 보내는 쪽 화면의 한 줄 요약/확인 문구
@@ -521,7 +533,7 @@ class FilesMixin:
         if self.is_verify_flow():
             return [s.verify_target]
         if self.has_selection():
-            return [i.path for i in self.files.transfer_items if not self.is_bundle_item(i)]
+            return [i.path for i in self.files.transfer_items if not self.is_bundle_item(i)] + [e.path for e in self.files.drops if e.is_dir]
         return [s.transfer_src]
 
     def _check_selection_paths(self, dst: str):
@@ -530,7 +542,7 @@ class FilesMixin:
         lines: list[tuple[bool, str]] = []
         items = f.transfer_items
         missing = [i.path for i in items if not self.is_bundle_item(i) and not os.path.isdir(i.path)]  # 설정 묶음 임시 폴더는 시작할 때 만든다
-        if not items:
+        if not items and not f.drops:
             lines.append((False, T.G_FD_NEED_SELECTION))
         elif missing:
             lines.append((False, T.G_FD_SELECTION_MISSING.format(path=missing[0])))
@@ -538,10 +550,10 @@ class FilesMixin:
             lines.append((True, T.G_FD_SELECTION_OK.format(n=len(items))))
         if not dst:
             lines.append((False, T.G_NEED_DEST))
-        elif items and not missing:
+        elif (items or f.drops) and not missing:
             rd = os.path.realpath(dst)
             inside = False
-            for i in items:
+            for i in [*items, *[e for e in f.drops if e.is_dir]]:
                 rs = os.path.realpath(i.path)
                 try:
                     if os.path.commonpath([rs, rd]) == rs:
@@ -564,7 +576,7 @@ class FilesMixin:
                 warnings.append(T.TR_NETWORK_NOTE)
             if d.kind == "cdrom":
                 lines.append((False, T.TR_CDROM_BLOCK))
-        return PathCheck(all(ok for ok, _ in lines) and bool(items) and bool(dst), lines, info, warnings)
+        return PathCheck(all(ok for ok, _ in lines) and bool(items or f.drops) and bool(dst), lines, info, warnings)
 
     @staticmethod
     def _is_multi(rep: Any) -> bool:
@@ -573,14 +585,22 @@ class FilesMixin:
     def _multi_summary(self, rep) -> dict:
         """선택 목록 복사 결과(MultiReport)를 복사 화면이 쓰는 요약 모양으로 바꾼다."""
         d = rep.to_dict()
-        counts = d["summary"]
+        counts = dict(d["summary"])
+        dstage = getattr(rep, "drop_stage", None) or {}
+        if rep.dry_run and dstage:  # 미리보기에서는 직접 고른 파일을 담지 않으므로 보낼 개수만 새로 복사에 더해 보여 준다
+            counts["would_copy"] = counts.get("would_copy", 0) + dstage.get("staged_files", 0)
         failures = [(f.src, T.TR_STATUS_LABELS.get(f.status, f.status), T.friendly_detail(f.error)) for _it, f in rep.failures]
         failures += [(it.src, T.TR_STATUS_LABELS.get("failed", "실패"), T.friendly_detail(it.error)) for it in rep.item_errors]
+        drop = getattr(rep, "drop_stage", None) or {}
+        failures += [(x["path"], T.TR_STATUS_LABELS.get("failed", "실패"), T.friendly_detail(x["reason"])) for x in drop.get("failed", [])]
         cloud = [r.src for it in rep.items if it.report is not None for r in it.report.results if r.status == "cloud_only"]
+        cloud += [x["path"] for x in drop.get("cloud_only", [])]
         repaired = [x["file"] for it in rep.items if it.report is not None for x in it.report.meta.get("repaired", [])]
         return {"dry_run": self.state.transfer_was_dry_run, "counts": counts,
                 "verified": counts.get("verified", 0), "mismatch": counts.get("mismatch", 0), "missing": counts.get("missing", 0),
-                "cloud_only": counts.get("cloud_only", 0), "failed": counts.get("failed", 0) + len(rep.item_errors),
+                "cloud_only": counts.get("cloud_only", 0) + drop.get("cloud_only_total", 0),
+                "failed": counts.get("failed", 0) + len(rep.item_errors) + len(drop.get("failed", [])),
+                "drop_lines": self.drop_result_lines(drop),
                 "failures": failures, "cloud_files": cloud, "repaired": repaired, "pending": counts.get("pending_verify", 0),
                 "added": 0, "mode": "multi", "io": {}, "split": 0, "manifest_complete": True, "manifest_errors": 0,
                 "verification_complete": d.get("verification_complete"), "success": d.get("success"),
@@ -630,12 +650,21 @@ class FilesMixin:
             extra["split_large"] = True
         items = list(f.transfer_items)
         junk = f.junk
+        if f.drops:  # 직접 고른 파일·폴더: 전송을 시작할 때 백엔드가 겹침을 빼고 임시 보관 폴더에 담아 함께 보내고 지운다(중단돼도 리포트 저장)
+            extra["extra_files"] = list(f.drops)
+            if report_path:
+                extra["abort_report"] = report_path
 
         def work(progress, token):
-            with self.bundle_staging(items):  # 설정 묶음이 있으면 임시 폴더에 복사본을 만들고, 끝나면(실패·취소 포함) 지운다
-                return d.run_transfer_selection(items, s.transfer_dst, dry_run=dry_run, include_cloud=include_cloud, strict=strict,
-                                                progress=progress, cancel=token, deps=self.deps, warn=progress, progress_info=progress,
-                                                exclude_junk=junk, **extra)
+            from ..drop_stage import DropSpaceError
+            from ..transfer import TransferError
+            try:
+                with self.bundle_staging(items):  # 설정 묶음이 있으면 임시 폴더에 복사본을 만들고, 끝나면(실패·취소 포함) 지운다
+                    return d.run_transfer_selection(items, s.transfer_dst, dry_run=dry_run, include_cloud=include_cloud, strict=strict,
+                                                    progress=progress, cancel=token, deps=self.deps, warn=progress, progress_info=progress,
+                                                    exclude_junk=junk, **extra)
+            except DropSpaceError as e:  # 시작 전에 막힌 공간 부족: 쉬운 문구 + 숫자
+                raise TransferError((T.DP_TEMP_LOW if e.kind == "temp" else T.DP_DEST_LOW) + " (" + str(e) + ")") from e
 
         def done(rep):
             s.transfer_report, s.transfer_was_dry_run = rep, dry_run

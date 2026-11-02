@@ -32,6 +32,16 @@ def _isolated_find_exts(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_real_drop_hook(monkeypatch):
+    """끌어다 놓기 후킹(ctypes 로 창 프로시저 교체)을 시험 중 실제 창에 걸지 않는다(stage63). 후킹 시험은 가짜 API 를 쓴다."""
+    try:
+        from pcmigrate.gui.views.find import FindView
+    except ImportError:  # tkinter 가 없는 환경
+        return
+    monkeypatch.setattr(FindView, "install_drop_hook", False)
+
+
+@pytest.fixture(autouse=True)
 def _no_real_package_scan(monkeypatch):
     """③ 첫 화면이 열릴 때의 '설정 묶음 자동 찾기'가 실제 바탕화면/드라이브를 훑지 않게 끈다(필요한 시험이 직접 켜고 가짜 위치를 넣는다)."""
     from pcmigrate.gui.controller import Controller

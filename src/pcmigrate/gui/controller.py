@@ -39,6 +39,7 @@ from ..scan import skipped_links_view
 from ..transfer import DriveDisconnected, TransferError
 from . import state as S
 from . import texts as T
+from .files_drop import DropMixin  # stage63: 직접 고른 파일·폴더(끌어다 놓기)
 from .files_controller import FilesMixin  # stage30a: 내 파일 옮기기(찾기/방법/직접 연결) 부분은 별도 파일
 from .net_controller import NetMixin  # stage39: 이더넷 주소 자동 맞추기
 from .runner import Runner
@@ -93,7 +94,7 @@ _WRITING_TASKS = (T.TASK_EXPORT, T.TASK_EXPORT_RETRY, T.TASK_TRANSFER, T.TASK_AP
 FORCE_STOP_AFTER = 15.0  # '중지' 요청 후 이 시간(초)이 지나도 못 멈추면 force_stop_ready() 가 True
 
 
-class Controller(FilesMixin, NetMixin, PackageFindMixin, ScanMixin, ExportMixin, InstallMixin, ImportMixin, TransferMixin, AutoMixin, ConfigMixin, UndoMixin, PlaceMixin, ExtsMixin, RecordMixin):
+class Controller(FilesMixin, DropMixin, NetMixin, PackageFindMixin, ScanMixin, ExportMixin, InstallMixin, ImportMixin, TransferMixin, AutoMixin, ConfigMixin, UndoMixin, PlaceMixin, ExtsMixin, RecordMixin):
     """화면과 api 사이의 중간층. 이벤트는 listener(kind, payload) 로 전달된다."""
 
     def __init__(self, api_mod: Any = None, deps: Any = None, runner: Runner | None = None,
