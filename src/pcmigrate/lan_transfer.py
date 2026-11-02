@@ -957,6 +957,9 @@ def build_send_plan(sources: list[str] | None = None, selection: str | os.PathLi
     except Exception as e:  # TransferError(원본 없음/선택 없음)
         raise LanError(str(e), "bad_sources") from e
     plan = SendPlan(dropped=list(mplan.dropped))
+    for d in mplan.dropped:
+        if d.get("missing"):  # 선택한 폴더가 없어졌다: 그 폴더만 실패로 기록하고 나머지는 계속 보낸다
+            plan.failed.append({"path": d["path"], "reason": "missing", "error": d["reason"]})
     flat = opts.layout == "flat" or (opts.layout == "auto" and not from_selection and len(mplan.items) == 1)
     spec = make_spec(opts.junk_backup_copies) if opts.exclude_junk else None
     excl_total = None

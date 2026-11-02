@@ -102,7 +102,14 @@ def run_transfer_selection(selection, dst: str | Path, *, dry_run: bool = False,
                          on_item=on_item, cancel=cancel, warn=warn, dest_info_fn=dest_info_fn, estimate_fn=estimate_fn)
 
     if not extra_files:
-        return go(items)
+        if not abort_report:
+            return go(items)
+        from . import drop_stage
+        try:
+            return go(items)
+        except BaseException as e:  # noqa: BLE001 - 보낼 것이 없거나 중단돼도 결과 리포트는 저장한다
+            drop_stage._write_abort(abort_report, {}, e)
+            raise
     from . import drop_stage
     return drop_stage.run_with_extras(items, [os.fspath(x) if not isinstance(x, drop_stage.DropEntry) else x for x in extra_files],
                                       dst, go, dry_run=dry_run, cancel=cancel, warn=warn, progress=progress,

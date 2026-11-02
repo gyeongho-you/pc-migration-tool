@@ -66,6 +66,17 @@ class DropEntry:
     files: int = 1  # 폴더면 안의 일반 파일 수(상한 MAX_DROP_FILES+1 에서 세기를 멈춘다)
 
 
+def reason_text(e: BaseException) -> str:
+    """실패 사유를 사용자 문구로(내부 오류 이름/errno 를 보이지 않는다). 자세한 내용은 오류 로그에만 남는다."""
+    if isinstance(e, FileNotFoundError):
+        return "찾을 수 없습니다(없어졌거나 다른 곳으로 옮겨졌습니다)"
+    if isinstance(e, PermissionError):
+        return "읽을 수 없습니다(다른 프로그램이 쓰고 있거나 접근 권한이 없습니다)"
+    if isinstance(e, OSError) and e.errno is not None:
+        return "읽거나 쓸 수 없습니다(자세한 내용은 오류 로그를 보세요)"
+    return str(e)
+
+
 def _attrs(st: os.stat_result) -> int:
     return getattr(st, "st_file_attributes", 0)
 
@@ -91,7 +102,7 @@ def describe(path: str | os.PathLike) -> DropEntry:
             return DropEntry(p, True, total, st.st_mtime_ns, files=count)
         return DropEntry(p, False, st.st_size, st.st_mtime_ns)
     except OSError as e:
-        return DropEntry(p, False, error=f"{type(e).__name__}: {e}")
+        return DropEntry(p, False, error=reason_text(e))
 
 
 def _key(p: str) -> str:
@@ -129,7 +140,7 @@ def plan_drops(entries: list[DropEntry], checked: list[str], *, cancel: Callable
         return next((c for c in ckeys if _under(k, c)), None)
 
     def fail(path: str, e: BaseException | str) -> None:
-        reason = e if isinstance(e, str) else f"{type(e).__name__}: {e}"
+        reason = e if isinstance(e, str) else reason_text(e)
         plan.failed.append({"path": path, "reason": reason})
         if not isinstance(e, str):
             errorlog.record(e if isinstance(e, BaseException) else OSError(reason), f"drop-stage plan {path}")
@@ -357,7 +368,7 @@ def stage_files(plan: StagePlan, stage: Path, *, cancel=None, progress: Callable
             todo.append((src, str(out), size))
             ok_files.append((src, size, _m, top))
         except OSError as e:
-            plan.failed.append({"path": src, "reason": f"{type(e).__name__}: {e}"})
+            plan.failed.append({"path": src, "reason": reason_text(e)})
             errorlog.record(e, f"drop-stage link {src}")
         if i % 200 == 0:
             touch_marker(stage)
@@ -379,7 +390,7 @@ def stage_files(plan: StagePlan, stage: Path, *, cancel=None, progress: Callable
         except Cancelled:
             raise
         except (OSError, ValueError) as e:
-            plan.failed.append({"path": src, "reason": f"{type(e).__name__}: {e}"})
+            plan.failed.append({"path": src, "reason": reason_text(e)})
             errorlog.record(e, f"drop-stage copy {src}")
             ok_files = [f for f in ok_files if f[0] != src]
         if n % 20 == 0:

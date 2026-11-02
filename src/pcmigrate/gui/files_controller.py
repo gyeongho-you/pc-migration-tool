@@ -544,15 +544,18 @@ class FilesMixin:
         lines: list[tuple[bool, str]] = []
         items = f.transfer_items
         missing = [i.path for i in items if not self.is_bundle_item(i) and not os.path.isdir(i.path)]  # 설정 묶음 임시 폴더는 시작할 때 만든다
+        real = [i for i in items if not self.is_bundle_item(i)]
         if not items and not f.drops:
             lines.append((False, T.G_FD_NEED_SELECTION))
-        elif missing:
+        elif missing and len(missing) == len(real) and len(real) == len(items) and not f.drops:  # 보낼 것이 하나도 남지 않음
             lines.append((False, T.G_FD_SELECTION_MISSING.format(path=missing[0])))
+        elif missing:  # 일부만 없어짐: 그 폴더만 제외하고 계속(결과에 실패로 기록)
+            lines.append((True, T.G_FD_SELECTION_PARTIAL.format(n=len(missing))))
         else:
             lines.append((True, T.G_FD_SELECTION_OK.format(n=len(items))))
         if not dst:
             lines.append((False, T.G_NEED_DEST))
-        elif (items or f.drops) and not missing:
+        elif items or f.drops:
             rd = os.path.realpath(dst)
             inside = False
             for i in [*items, *[e for e in f.drops if e.is_dir]]:
@@ -581,6 +584,16 @@ class FilesMixin:
         return PathCheck(all(ok for ok, _ in lines) and bool(items or f.drops) and bool(dst), lines, info, warnings)
 
     @staticmethod
+    def _write_blocked_report(path: str, message: str) -> None:
+        if not path:
+            return
+        import json
+        try:
+            Path(path).write_text(json.dumps({"aborted": True, "success": False, "reason": message}, ensure_ascii=False, indent=2), encoding="utf-8")
+        except OSError:
+            pass
+
+    @staticmethod
     def _is_multi(rep: Any) -> bool:
         return rep is not None and hasattr(rep, "item_errors") and hasattr(rep, "items")
 
@@ -595,13 +608,15 @@ class FilesMixin:
         failures += [(it.src, T.TR_STATUS_LABELS.get("failed", "실패"), T.friendly_detail(it.error)) for it in rep.item_errors]
         drop = getattr(rep, "drop_stage", None) or {}
         failures += [(x["path"], T.TR_STATUS_LABELS.get("failed", "실패"), T.friendly_detail(x["reason"])) for x in drop.get("failed", [])]
+        gone = [d for d in rep.dropped if d.get("missing")]  # 전송 시작 전에 없어진 선택 폴더
+        failures += [(d["path"], T.TR_STATUS_LABELS.get("failed", "실패"), d["reason"]) for d in gone]
         cloud = [r.src for it in rep.items if it.report is not None for r in it.report.results if r.status == "cloud_only"]
         cloud += [x["path"] for x in drop.get("cloud_only", [])]
         repaired = [x["file"] for it in rep.items if it.report is not None for x in it.report.meta.get("repaired", [])]
         return {"dry_run": self.state.transfer_was_dry_run, "counts": counts,
                 "verified": counts.get("verified", 0), "mismatch": counts.get("mismatch", 0), "missing": counts.get("missing", 0),
                 "cloud_only": counts.get("cloud_only", 0) + drop.get("cloud_only_total", 0),
-                "failed": counts.get("failed", 0) + len(rep.item_errors) + len(drop.get("failed", [])),
+                "failed": counts.get("failed", 0) + len(rep.item_errors) + len(drop.get("failed", [])) + len(gone),
                 "drop_lines": self.drop_result_lines(drop),
                 "failures": failures, "cloud_files": cloud, "repaired": repaired, "pending": counts.get("pending_verify", 0),
                 "added": 0, "mode": "multi", "io": {}, "split": 0, "manifest_complete": True, "manifest_errors": 0,
@@ -614,7 +629,9 @@ class FilesMixin:
         s, f = self.state, self.files
         check = self.check_transfer_paths(s.transfer_src, s.transfer_dst)
         if not check.ok:
-            raise _guard(" ".join(t for ok, t in check.lines if not ok))
+            msg = " ".join(t for ok, t in check.lines if not ok)
+            self._write_blocked_report(report_path, msg)  # 시작하지 못해도 결과 리포트는 남긴다
+            raise _guard(msg)
         if report_path:
             for folder in self.source_folders():
                 if real_api.report_inside(report_path, folder):
@@ -652,10 +669,10 @@ class FilesMixin:
             extra["split_large"] = True
         items = list(f.transfer_items)
         junk = f.junk
-        if f.drops:  # 직접 고른 파일·폴더: 전송을 시작할 때 백엔드가 겹침을 빼고 임시 보관 폴더에 담아 함께 보내고 지운다(중단돼도 리포트 저장)
+        if f.drops:  # 직접 고른 파일: 전송을 시작할 때 백엔드가 겹침을 빼고 임시 보관 폴더에 담아 함께 보내고 지운다(중단돼도 리포트 저장)
             extra["extra_files"] = list(f.drops)
-            if report_path:
-                extra["abort_report"] = report_path
+        if report_path and (f.drops or _accepts(d.run_transfer_selection, "abort_report")):
+            extra["abort_report"] = report_path  # 중단/예외/보낼 것이 없을 때도 결과 리포트를 저장한다
 
         def work(progress, token):
             from ..drop_stage import DropSpaceError

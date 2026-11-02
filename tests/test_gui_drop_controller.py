@@ -63,18 +63,18 @@ def sel_folder(c, path):
 
 
 def test_add_files_and_folder_records_path_size_time_only(env):
-    msg = env.add_drop_paths([str(env.work / "loose.txt"), str(env.work / "B")])
+    msg = env.add_drop_paths([str(env.work / "loose.txt"), str(env.work / "B" / "b1.txt")])
     assert "2개" in msg
     n, size = env.drop_total()
     assert n == 2 and size == 8 + 7
     rows = env.drop_rows()
-    assert rows[0][0].endswith("loose.txt") and rows[1][3] == T.DP_TAG_FOLDER and rows[0][2]
+    assert rows[0][0].endswith("loose.txt") and rows[1][0].endswith("b1.txt") and rows[0][2]
     assert (env.work / "loose.txt").read_bytes() == b"x" * 8  # 복사/수정 없음
 
 
 def test_duplicates_and_unreadable_are_reported_not_fatal(env):
     env.add_drop_paths([str(env.work / "loose.txt")])
-    msg = env.add_drop_paths([str(env.work / "LOOSE.TXT"), str(env.work / "nope.bin"), str(env.work / "B")])
+    msg = env.add_drop_paths([str(env.work / "LOOSE.TXT"), str(env.work / "nope.bin"), str(env.work / "B" / "b1.txt")])
     assert T.DP_ALREADY.format(n=1) in msg and T.DP_BAD.format(n=1) in msg and T.DP_ADDED.format(n=1) in msg
     assert env.drop_total()[0] == 2
 
@@ -87,7 +87,7 @@ def test_empty_drop_means_virtual_items(env):
 def test_limit_blocks_all_and_adds_nothing(env, monkeypatch):
     monkeypatch.setattr(ds, "MAX_DROP_FILES", 2)
     with pytest.raises(GuardError, match="너무 많습니다"):
-        env.add_drop_paths([str(env.work)])  # 파일 4개 > 2
+        env.add_drop_paths([str(env.work / "A" / "a1.txt"), str(env.work / "A" / "sub" / "a2.txt"), str(env.work / "loose.txt")])  # 파일 3개 > 2
     assert env.drop_total() == (0, 0)
     env.add_drop_paths([str(env.work / "loose.txt")])
     assert env.drop_total()[0] == 1
@@ -107,7 +107,7 @@ def test_next_button_condition_folders_or_drops(env):
 
 def test_overlap_marking_and_note(env):
     sel_folder(env, env.work / "A")
-    env.add_drop_paths([str(env.work / "A" / "sub" / "a2.txt"), str(env.work / "B")])
+    env.add_drop_paths([str(env.work / "A" / "sub" / "a2.txt"), str(env.work / "B" / "b1.txt")])
     rows = env.drop_rows()
     assert rows[0][4] and rows[0][3] == T.DP_TAG_COVERED and not rows[1][4]
     assert env.drop_notes() == [T.DP_OVERLAP.format(n=1)]
@@ -119,7 +119,7 @@ def test_lan_direct_send_with_drops_is_allowed(env):
     env.set_role(T.MV_ROLE_SEND)
     assert env.files_method_reason() == ""
     assert env.lan_send_problem("192.0.2.1", "123456") == ""
-    assert "직접 고른 1개" in env.tx_selection_text() and "직접 고른 1개" in env.tx_confirm_text("192.0.2.1")
+    assert "직접 고른 파일 1개" in env.tx_selection_text() and "직접 고른 파일 1개" in env.tx_confirm_text("192.0.2.1")
     env.clear_drops()
     assert env.lan_send_problem("192.0.2.1", "123456") == T.G_TX_NEED_SELECTION
 
@@ -127,9 +127,9 @@ def test_lan_direct_send_with_drops_is_allowed(env):
 def test_totals_text_includes_drops(env):
     sel_folder(env, env.work / "A")
     env.add_drop_paths([str(env.work / "loose.txt")])
-    assert "직접 고른 1개" in env.data_total_text()
+    assert "직접 고른 파일 1개" in env.data_total_text()
     env.set_data_selected(str(env.work / "A"), False)
-    assert env.data_total_text().startswith("선택한 폴더 없이 직접 고른 1개")
+    assert env.data_total_text().startswith("선택한 폴더 없이 직접 고른 파일 1개")
 
 
 def start_flow(env, tmp_path, mode=T.MODE_EXTERNAL):
@@ -140,7 +140,7 @@ def start_flow(env, tmp_path, mode=T.MODE_EXTERNAL):
 
 
 def test_drops_only_transfer_preview_then_copy_passes_extra_files_and_result_lines(env, tmp_path):
-    env.add_drop_paths([str(env.work / "loose.txt"), str(env.work / "B")])
+    env.add_drop_paths([str(env.work / "loose.txt"), str(env.work / "B" / "b1.txt")])
     start_flow(env, tmp_path)
     assert env.has_selection() and env.files_stage(S.TRANSFER) == 3
     rpt = str(tmp_path / "rep.json")
@@ -182,7 +182,7 @@ def test_drops_change_invalidates_selection_and_busy_blocks_edits(env, tmp_path)
     env.add_drop_paths([str(env.work / "loose.txt")])
     start_flow(env, tmp_path)
     assert env.files.use_selection
-    env.add_drop_paths([str(env.work / "B")])
+    env.add_drop_paths([str(env.work / "B" / "b1.txt")])
     assert not env.files.use_selection  # 목록이 달라지면 이전 미리보기/선택은 무효
     env.state.busy = True
     for fn, arg in ((env.add_drop_paths, [str(env.work / "A")]), (env.remove_drop_paths, ["x"])):
@@ -194,9 +194,9 @@ def test_drops_change_invalidates_selection_and_busy_blocks_edits(env, tmp_path)
 
 
 def test_remove_and_clear(env):
-    env.add_drop_paths([str(env.work / "loose.txt"), str(env.work / "B")])
+    env.add_drop_paths([str(env.work / "loose.txt"), str(env.work / "B" / "b1.txt")])
     assert env.remove_drop_paths([str(env.work / "LOOSE.txt")]) == 1
-    assert [os.path.basename(e.path) for e in env.drop_entries()] == ["B"]
+    assert [os.path.basename(e.path) for e in env.drop_entries()] == ["b1.txt"]
     env.clear_drops()
     assert env.drop_entries() == []
 
@@ -241,3 +241,36 @@ def test_lan_send_without_drops_passes_nothing_extra(env):
     env.lan_api = lan
     env.lan_send_start("192.0.2.1", "123456", confirmed=True)
     assert lan.kw == {}
+
+
+def test_folders_go_to_folder_table_not_to_drop_list(env):
+    """폴더는 직접 고른 파일이 아니라 위쪽 폴더 표에 '직접 폴더 추가'와 같은 방식(체크된 상태)으로 들어간다. 파일은 목록에."""
+    msg = env.add_drop_paths([str(env.work / "B"), str(env.work / "loose.txt")])
+    assert T.DP_FOLDERS_MOVED.format(n=1) in msg and T.DP_ADDED.format(n=1) in msg
+    assert env.drop_total()[0] == 1 and env.drop_entries()[0].path.endswith("loose.txt")
+    assert env.data_selection() == [str(env.work / "B")]
+    row = next(r for r in env.data_rows(visible_only=False) if r.path == str(env.work / "B"))
+    assert row.manual and row.selected  # 기존 '직접 폴더 추가' 줄과 같은 종류
+    # 폴더만 놓은 경우: 파일 목록은 비어 있고 안내만
+    env.clear_drops()
+    msg = env.add_drop_paths([str(env.work / "A")])
+    assert msg == T.DP_FOLDERS_MOVED.format(n=1) and env.drop_total()[0] == 0
+    assert str(env.work / "A") in env.data_selection()
+    # 같은 폴더를 다시 놓아도 오류 없이(이미 체크됨) 안내만
+    assert T.DP_FOLDERS_MOVED.format(n=1) in env.add_drop_paths([str(env.work / "A")])
+
+
+def test_dropped_folder_is_sent_as_selected_folder_never_as_extra(env, tmp_path):
+    env.add_drop_paths([str(env.work / "B"), str(env.work / "loose.txt")])
+    start_flow(env, tmp_path)
+    env.start_transfer(dry_run=True)
+    d = env.data_api
+    assert [os.path.basename(e.path) for e in d.extra_seen[-1]] == ["loose.txt"]  # 폴더는 extra 로 가지 않는다
+    assert any(c[0] == "transfer" and c[1] == [str(env.work / "B")] for c in d.calls)  # 폴더째(선택한 폴더)
+
+
+def test_folder_table_behaviour_unchanged_without_drops(env):
+    env.add_data_folder(str(env.work / "A"))
+    assert env.data_selection() == [str(env.work / "A")] and env.drop_total() == (0, 0)
+    with pytest.raises(GuardError):
+        env.add_data_folder(str(env.work / "A"))  # 이미 선택됨 안내(기존 동작)

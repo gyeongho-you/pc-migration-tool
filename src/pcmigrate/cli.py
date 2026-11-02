@@ -1226,7 +1226,7 @@ def build_parser() -> argparse.ArgumentParser:
     t.add_argument("--skip-done-items", action="store_true",
                    help="--from-selection: 지난 실행에서 끝난 폴더는 다시 확인하지 않고 건너뜀(기본은 모든 폴더를 다시 확인하며 파일 단위로 이어받음)")
     t.add_argument("--extra-file", action="append", type=_path_arg, metavar="경로",
-                   help="--from-selection 과 함께: 선택한 폴더 밖의 파일/폴더를 추가로 보냄(여러 번 지정 가능). 선택한 폴더에 이미 든 것과 중복은 뺍니다. "
+                   help="--from-selection 과 함께: 선택한 폴더 밖의 파일을 추가로 보냄(여러 번 지정 가능, 폴더째 보낼 것은 --from-selection 의 선택 폴더로 넣는 편이 좋음). 선택한 폴더에 이미 든 것과 중복은 뺍니다. "
                         "임시 폴더(%%LOCALAPPDATA%%\\pcmigrate\\staging)에 링크/검증 복사로 담아 보낸 뒤 지웁니다. OneDrive 클라우드 전용 파일은 제외")
     t.set_defaults(func=_cmd_transfer)
 

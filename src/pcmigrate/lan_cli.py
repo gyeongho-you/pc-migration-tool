@@ -49,7 +49,7 @@ def add_parsers(sub, path_arg) -> None:
     s.add_argument("sources", nargs="*", type=path_arg, help="보낼 원본 폴더(--from-selection 을 쓰면 적지 않음)")
     s.add_argument("--code", help="새 PC 화면에 표시된 숫자 6자리 코드")
     s.add_argument("--extra-file", action="append", type=path_arg, metavar="경로",
-                   help="선택한 폴더 밖의 파일/폴더를 더 보냄(여러 번 가능). 선택한 폴더에 든 것·중복은 빼고, 임시 폴더에 같은 경로 구조로 모아 함께 보낸 뒤 지움(원본은 읽기만)")
+                   help="선택한 폴더 밖의 파일을 더 보냄(여러 번 가능, 폴더째 보낼 것은 선택 폴더/원본 폴더로 넣는 편이 좋음). 선택한 폴더에 든 것·중복은 빼고, 임시 폴더에 같은 경로 구조로 모아 함께 보낸 뒤 지움(원본은 읽기만)")
     s.add_argument("--from-selection", type=path_arg, metavar="선택파일", help="find-data 가 만든 선택 파일(include:true 폴더들)을 <드라이브>\\<경로> 구조로 보냄")
     s.add_argument("--exclude-junk", action="store_true", help="Thumbs.db, ~$ 잠금, *.tmp 등 다시 만들어지는 파일을 보내지 않음(transfer 와 같은 목록)")
     s.add_argument("--exclude-backup-copies", action="store_true", help="--exclude-junk 와 함께: Revit 백업 사본 등도 제외")

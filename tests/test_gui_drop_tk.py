@@ -79,19 +79,19 @@ def tree_rows(tree):
 def test_box_exists_with_buttons_and_hint_and_next_disabled_when_empty(ctx):
     v = find_view(ctx)
     assert v.drop_box.cget("text") == T.DP_TITLE
-    assert str(v.drop_files_btn.cget("text")) == T.BTN_DP_FILES and str(v.drop_folder_btn.cget("text")) == T.BTN_DP_FOLDER
+    assert str(v.drop_files_btn.cget("text")) == T.BTN_DP_FILES and not hasattr(v, "drop_folder_btn") and v.drop_box.cget("text") == "직접 고른 파일"
     assert T.DP_HINT in texts_in(v.drop_box) and not v.drop_tree_frame.winfo_manager()
     assert "disabled" in v.next_btn.state()
 
 
 def test_drop_receive_function_adds_rows_enables_next_and_shows_total(ctx):
     v = find_view(ctx)
-    v._on_drop([str(ctx.work / "loose.txt"), str(ctx.work / "B")])
+    v._on_drop([str(ctx.work / "loose.txt"), str(ctx.work / "B" / "b1.txt")])
     ctx.app.update()
     rows = tree_rows(v.drop_tree)
-    assert len(rows) == 2 and T.DP_TAG_FOLDER in rows[1][0]
+    assert len(rows) == 2 and rows[1][0].endswith("b1.txt")
     assert "disabled" not in v.next_btn.state()
-    assert "직접 고른 2개" in v.total.cget("text")
+    assert "직접 고른 파일 2개" in v.total.cget("text")
     assert T.DP_ADDED.format(n=2) in v.drop_msg.cget("text")
 
 
@@ -121,8 +121,8 @@ def test_buttons_work_via_dialogs_and_remove_and_clear(ctx, monkeypatch):
     v = find_view(ctx)
     monkeypatch.setattr(filedialog, "askopenfilenames", lambda **k: (str(ctx.work / "loose.txt").replace("\\", "/"),))
     v.drop_files_btn.invoke()
-    monkeypatch.setattr(filedialog, "askdirectory", lambda **k: str(ctx.work / "B").replace("\\", "/"))
-    v.drop_folder_btn.invoke()
+    monkeypatch.setattr(filedialog, "askopenfilenames", lambda **k: (str(ctx.work / "B" / "b1.txt").replace("\\", "/"),))
+    v.drop_files_btn.invoke()
     ctx.app.update()
     assert len(tree_rows(v.drop_tree)) == 2
     v.drop_tree.selection_set(v.drop_tree.get_children()[0])
@@ -138,7 +138,7 @@ def test_too_many_shows_message_and_adds_nothing(ctx, monkeypatch):
     from pcmigrate import drop_stage as ds
     monkeypatch.setattr(ds, "MAX_DROP_FILES", 1)
     v = find_view(ctx)
-    v._on_drop([str(ctx.work)])
+    v._on_drop([str(ctx.work / "loose.txt"), str(ctx.work / "B" / "b1.txt")])
     assert "너무 많습니다" in v.drop_msg.cget("text") and ctx.c.drop_total()[0] == 0
 
 
@@ -147,7 +147,7 @@ def test_method_screen_subtitle_with_drops_only(ctx):
     v._on_drop([str(ctx.work / "loose.txt")])
     ctx.c.go(S.METHOD)
     ctx.app.update()
-    assert "직접 고른 1개" in ctx.app.views[S.METHOD].sub.cget("text")
+    assert "직접 고른 파일 1개" in ctx.app.views[S.METHOD].sub.cget("text")
 
 
 # ----------------------------------------------------------------------------- 끌어다 놓기 연결(가짜 API)
@@ -214,7 +214,7 @@ def test_view_shows_admin_and_nodrop_hints_but_buttons_still_work(ctx, monkeypat
     v.hook.reason = dnd_win.REASON_ERROR
     v._drop_sync()
     assert T.DP_HINT_NO_DROP in texts_in(v.drop_box)
-    assert "disabled" not in v.drop_files_btn.state() and "disabled" not in v.drop_folder_btn.state()
+    assert "disabled" not in v.drop_files_btn.state()
     monkeypatch.setattr(filedialog, "askopenfilenames", lambda **k: (str(ctx.work / "loose.txt"),))
     v.drop_files_btn.invoke()
     assert ctx.c.drop_total()[0] == 1
@@ -237,13 +237,23 @@ def test_view_hook_install_failure_leaves_screen_working(ctx, monkeypatch):
 
 def test_transfer_screen_shows_drop_result_lines_after_copy(ctx):
     v = find_view(ctx)
-    v._on_drop([str(ctx.work / "loose.txt"), str(ctx.work / "B")])
+    v._on_drop([str(ctx.work / "loose.txt"), str(ctx.work / "B" / "b1.txt")])
     ctx.c.set_method(T.MV_EXTERNAL)
     ctx.c.files_continue()
     ctx.app.update()
     tv = ctx.app.views[S.TRANSFER]
-    assert "직접 고른 2개" in tv.sel_box.cget("text") or "직접 고른 2개" in " ".join(texts_in(tv))
+    assert "직접 고른 파일 2개" in tv.sel_box.cget("text") or "직접 고른 파일 2개" in " ".join(texts_in(tv))
     ctx.c.state.transfer_dst = str(ctx.tmp / "out")
     ctx.c.start_transfer(dry_run=True)
     ctx.app.update()
     assert T.DP_RESULT.format(n=2, ok=2, skip=2, bad=1) in tv.preview_box.cget("text")
+
+
+def test_dropping_folder_adds_row_to_folder_table_and_hint_line(ctx):
+    v = find_view(ctx)
+    v._on_drop([str(ctx.work / "B"), str(ctx.work / "loose.txt")])
+    ctx.app.update()
+    assert len(tree_rows(v.drop_tree)) == 1  # 파일만 직접 고른 목록에
+    paths = [r.path for r in v.rows.values()]
+    assert str(ctx.work / "B") in paths and ctx.c.data_selection() == [str(ctx.work / "B")]  # 폴더 표에 체크된 줄
+    assert T.DP_FOLDERS_MOVED.format(n=1) in v.drop_msg.cget("text")

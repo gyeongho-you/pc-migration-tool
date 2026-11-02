@@ -579,9 +579,13 @@ def test_multi_rejects_dest_inside_source_and_missing_source(tmp_path):
         run_sel([str(a)], a / "backup")
     with pytest.raises(TransferError, match="원본"):
         run_sel([str(a)], a)
-    with pytest.raises(TransferError, match="없습니다"):
-        run_sel([str(a), str(tmp_path / "nope")], tmp_path / "out")
+    with pytest.raises(TransferError, match="없습니다"):  # 전부 없으면 거부(안내)
+        run_sel([str(tmp_path / "nope2"), str(tmp_path / "nope")], tmp_path / "out")
     assert not (a / "backup").exists() and not (tmp_path / "out").exists()
+    # stage63: 일부만 없으면 없는 폴더만 실패로 기록하고 나머지는 계속한다
+    rep = run_sel([str(a), str(tmp_path / "nope")], tmp_path / "out")
+    d = rep.to_dict()
+    assert d["items_ok"] == 1 and d["failed_count"] == 1 and d["success"] is False and d["dropped"][0]["missing"]
 
 
 def test_multi_space_precheck(tmp_path):

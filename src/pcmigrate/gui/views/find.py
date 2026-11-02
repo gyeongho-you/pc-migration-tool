@@ -135,7 +135,7 @@ class FindView(BaseView):
         self.receive_btn = ActionButton(self.links, text=T.FD_RECEIVE_LINK, kind="link", command=lambda: self.guarded(self.c.files_receive_only))
         self.receive_btn.pack(anchor="w", pady=(2, 0))
         add_tooltip(self.receive_btn, T.FD_RECEIVE_NOTE)
-        for b in (self.find_btn, self.add_btn, self.drop_files_btn, self.drop_folder_btn):
+        for b in (self.find_btn, self.add_btn, self.drop_files_btn):
             bind_alt(self.app, b, lambda: self.app.current == self.name)
         self.hook = DropHook(self.drop_box, self._on_drop)  # 끌어다 놓기(실패하면 조용히 꺼지고, 버튼은 그대로 동작)
         self.after(200, self._install_hook)
@@ -226,8 +226,6 @@ class FindView(BaseView):
         row.pack(fill="x")
         self.drop_files_btn = ActionButton(row, text=T.BTN_DP_FILES, kind="plain", command=self._drop_pick_files)
         self.drop_files_btn.pack(side="left")
-        self.drop_folder_btn = ActionButton(row, text=T.BTN_DP_FOLDER, kind="plain", command=self._drop_pick_folder)
-        self.drop_folder_btn.pack(side="left", padx=(8, 0))
         self.drop_hint = FoldTLabel(box, text=T.DP_HINT, justify="left", foreground=MUTED_FG)
         self.drop_hint.pack(anchor="w", fill="x", pady=(2, 2))
         autowrap(self.drop_hint, 40)
@@ -288,8 +286,7 @@ class FindView(BaseView):
         else:
             self.drop_msg.pack_forget()
         busy = bool(c.state.busy)
-        for b in (self.drop_files_btn, self.drop_folder_btn):
-            b.state(["disabled"] if busy else ["!disabled"])
+        self.drop_files_btn.state(["disabled"] if busy else ["!disabled"])
         for b in (self.drop_remove_btn, self.drop_clear_btn):
             b.state(["disabled"] if busy or not rows else ["!disabled"])
 
@@ -315,11 +312,6 @@ class FindView(BaseView):
         paths = filedialog.askopenfilenames(parent=self, title=T.DP_ADD_FILES_TITLE)
         if paths:
             self._drop_add([clean_path(p.replace("/", "\\")) for p in paths])
-
-    def _drop_pick_folder(self) -> None:
-        p = filedialog.askdirectory(parent=self, title=T.DP_ADD_FOLDER_TITLE, mustexist=True)
-        if p:
-            self._drop_add([clean_path(p.replace("/", "\\"))])
 
     def _drop_remove(self) -> None:
         sel = [self.drop_iids[i] for i in self.drop_tree.selection() if i in self.drop_iids]

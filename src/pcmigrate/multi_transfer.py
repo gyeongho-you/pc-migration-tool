@@ -111,6 +111,15 @@ def plan_items(selected: Iterable[SelectedItem | str], dst: str | os.PathLike, *
         seen[k] = it.path
         kept.append(it)
     missing = [it.path for it in kept if not os.path.isdir(it.path)]
+    if missing and len(missing) < len(kept):  # 일부만 없어졌다(삭제/이동): 그 폴더만 실패로 기록하고 나머지는 계속한다
+        from . import errorlog
+        gone = set(missing)
+        for p in missing:
+            plan.dropped.append({"path": p, "reason": "폴더를 찾을 수 없어 보내지 못했습니다(없어졌거나 다른 곳으로 옮겨졌습니다)", "covered_by": "",
+                                 "missing": True})
+            errorlog.record(FileNotFoundError(f"선택한 폴더를 찾을 수 없음: {p}"), "multi-transfer missing folder")
+        kept = [it for it in kept if it.path not in gone]
+        missing = []
     if missing:
         raise TransferError("원본 폴더가 없습니다: " + ", ".join(missing[:5]) + (f" 외 {len(missing) - 5}개" if len(missing) > 5 else ""))
     d_real = os.path.realpath(dst)
@@ -191,7 +200,8 @@ class MultiReport:
 
     @property
     def failed_total(self) -> int:
-        return len(self.failures) + len(self.item_errors) + len(self.drop_stage.get("failed", []))
+        return (len(self.failures) + len(self.item_errors) + len(self.drop_stage.get("failed", []))
+                + sum(1 for d in self.dropped if d.get("missing")))
 
     def to_dict(self) -> dict:
         counts: dict[str, int] = {}
@@ -254,7 +264,7 @@ def summary_lines(rep: MultiReport, dst: str) -> list[str]:
         from .drop_stage import summary_lines as _drop_lines
         lines += _drop_lines(rep.drop_stage)
     if rep.dropped:
-        lines.append(f"- 선택에서 뺀 폴더 {len(rep.dropped)}개(중복/부모 폴더에 포함):")
+        lines.append(f"- 선택에서 뺀 폴더 {len(rep.dropped)}개(중복·포함·찾을 수 없음):")
         lines += [f"    · {x['path']} — {x['reason']}" for x in rep.dropped[:10]]
     from .junk import summary_line
     lines += summary_line({"junk_excluded": {"files": d["junk_excluded"]["files"], "bytes": d["junk_excluded"]["bytes"],

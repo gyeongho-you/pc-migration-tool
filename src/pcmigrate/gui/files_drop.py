@@ -49,7 +49,7 @@ class DropMixin:
         rows = []
         for e in self.files.drops:
             covered = any(_under(norm(e.path), c) for c in checked)
-            tag = T.DP_TAG_COVERED if covered else (T.DP_TAG_FOLDER if e.is_dir else "")
+            tag = T.DP_TAG_COVERED if covered else ""
             when = ""
             if e.mtime_ns:
                 import time
@@ -63,9 +63,10 @@ class DropMixin:
         return [T.DP_OVERLAP.format(n=n)] if n else []
 
     def add_drop_paths(self, paths) -> str:
-        """'파일 추가'/'폴더 추가'/끌어다 놓기로 받은 경로들을 목록에 담고, 사용자에게 보일 안내 한 줄을 돌려준다.
+        """'파일 추가'/끌어다 놓기로 받은 경로들을 정리해, 파일은 직접 고른 목록에 담고 폴더는 위쪽 폴더 표에 추가한다(체크된 상태, 폴더째 전송).
+        사용자에게 보일 안내 문구를 돌려준다.
 
-        읽을 수 없는 항목은 빼고 나머지는 담는다. 전체가 상한(MAX_DROP_FILES)을 넘으면 아무것도 담지 않고 막는다.
+        읽을 수 없는 항목은 빼고 나머지는 담는다. 파일 수가 상한(MAX_DROP_FILES)을 넘으면 파일은 하나도 담지 않고 막는다(폴더 추가는 이미 처리됨).
         """
         if self.state.busy:
             raise _guard(T.G_BUSY)
@@ -74,8 +75,17 @@ class DropMixin:
             raise _guard(T.DP_VIRTUAL)
         f = self.files
         known = {norm(e.path) for e in f.drops}
-        new, dup, bad = [], 0, 0
+        new, dup, bad, folders = [], 0, 0, 0
         for p in cleaned:
+            if os.path.isdir(p):  # 폴더는 직접 고른 파일이 아니라 폴더 표로: '직접 폴더 추가'와 같은 방식
+                try:
+                    self.add_data_folder(p)
+                except Exception as e:  # noqa: BLE001 - 이미 체크된 폴더 등 안내 가드는 무시
+                    from .controller import GuardError
+                    if not isinstance(e, GuardError):
+                        raise
+                folders += 1
+                continue
             k = norm(p)
             if k in known:
                 dup += 1
@@ -87,10 +97,14 @@ class DropMixin:
                 continue
             new.append(e)
         if sum(e.files for e in f.drops) + sum(e.files for e in new) > ds.MAX_DROP_FILES:
+            if folders:
+                self._drops_changed()
             raise _guard(T.DP_TOO_MANY.format(max=f"{ds.MAX_DROP_FILES:,}"))
         f.drops.extend(new)
         self._drops_changed()
         parts = []
+        if folders:
+            parts.append(T.DP_FOLDERS_MOVED.format(n=folders))
         if new:
             parts.append(T.DP_ADDED.format(n=len(new)))
         if dup:
