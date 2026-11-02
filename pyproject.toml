@@ -12,7 +12,7 @@ license-files = ["LICENSE"]
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest"]
+dev = ["pytest>=8,<10"]
 
 [project.scripts]
 pcmigrate = "pcmigrate.cli:main"

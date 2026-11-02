@@ -41,12 +41,21 @@ DENY_EXTENSIONS = frozenset({".exe", ".scr", ".com", ".pif", ".bat", ".cmd", ".p
                              # 19a: 로드/실행되는 라이브러리·스크립트·도움말·설정 조각(R1-9)
                              ".dll", ".ocx", ".sys", ".jar", ".py", ".pyw", ".cjs", ".mjs", ".xll", ".wll", ".xlam", ".dotm",
                              ".sct", ".wsc", ".msc", ".gadget", ".appref-ms", ".application", ".mof", ".inf", ".chm",
-                             ".settingcontent-ms"})
+                             ".settingcontent-ms",
+                             # S2: 다음 실행 때 프로그램이 읽어 코드를 돌리는 플러그인/매크로/스크립트(SketchUp .rb, AutoCAD .lsp/.fas/.vlx/.arx/.mnl,
+                             # Rhino/Grasshopper .rhp/.gha, Revit .addin, Node 네이티브 .node, AutoHotkey .ahk, VS Code .vsix, Gradle 초기화 .gradle).
+                             # 규칙 path 가 확장자를 명시하거나(마지막 패턴 "*.rb") allow_extensions 로 적은 경우에만 그 규칙에서 허용한다.
+                             ".rb", ".lsp", ".fas", ".vlx", ".arx", ".mnl", ".node", ".gha", ".rhp", ".addin", ".ahk", ".vsix", ".gradle"})
 # 폴더 이름(소문자)이 경로 어디에 있어도 막는다: Excel 이 시작할 때 자동으로 여는 폴더
 DENY_DIR_NAMES = frozenset({"xlstart"})
 # 사용자 홈 바로 아래(%USERPROFILE%)에서 도구가 읽어 명령을 실행하거나 비밀을 담는 점 파일(소문자 이름). .gitconfig 는 흔히 쓰므로 허용한다.
-HOME_DENY_FILES = frozenset({".npmrc", ".yarnrc", ".yarnrc.yml", ".wslconfig", ".condarc", ".netrc", ".git-credentials", ".pypirc"})
-HOME_DENY_SUBFILES = frozenset({(".kube", "config"), (".docker", "config.json")})
+HOME_DENY_FILES = frozenset({".npmrc", ".yarnrc", ".yarnrc.yml", ".wslconfig", ".condarc", ".netrc", ".git-credentials", ".pypirc",
+                             # S2: 셸/편집기가 시작할 때 읽어 명령을 실행할 수 있는 점 파일
+                             ".bash_aliases", ".vimrc", ".gvimrc", ".emacs", ".inputrc"})
+HOME_DENY_SUBFILES = frozenset({(".kube", "config"), (".docker", "config.json"), (".m2", "settings.xml")})
+# 홈 바로 아래의 이 폴더들(의 모든 하위 파일)은 복원을 거부한다: Git 설정(core.sshCommand/alias), 편집기 시작 스크립트, VS Code 확장,
+# Gradle 초기화 스크립트. (.gitconfig 파일은 기존 설계대로 경고 후 허용한다.)
+HOME_DENY_DIRS = frozenset({(".config", "git"), (".emacs.d",), (".vim",), (".vscode", "extensions"), (".gradle", "init.d")})
 # 셸/SSH 가 시작할 때 읽어 실행하는 설정(소문자 파일 이름 / 폴더 이름)
 DENY_FILE_NAMES = frozenset({".bashrc", ".bash_profile", ".bash_login", ".bash_logout", ".profile", ".zshrc", ".zprofile",
                              ".zshenv", ".zlogin", ".cshrc", ".kshrc", "authorized_keys"})

@@ -6,7 +6,7 @@
 
 | 구분 | 내용 |
 |---|---|
-| 확인됨 | 개발과 시험은 Windows 11 한 대에서 했습니다(자동 시험 약 2300개 포함). 요구 조건은 Python 3.10 이상(`pyproject.toml`), 외부 패키지 없음입니다. |
+| 확인됨 | 개발과 시험은 Windows 11 한 대에서 했습니다(자동 시험 포함. `pytest --collect-only -q` 수집 기준 약 2,400개). 요구 조건은 Python 3.10 이상(`pyproject.toml`), 외부 패키지 없음입니다. |
 | 확인됨 | 프로그램 목록은 레지스트리(읽기)와 `winget export`/`winget list` 로 모읍니다. winget 이 없거나 실패하면 winget 쪽 목록은 비어 있게 처리합니다(코드의 `detect.py`). |
 | 확인됨 | 대용량 복사는 Windows 내장 `robocopy` 를 씁니다. |
 | **미확인** | Windows 10 에서 어느 기능이든 실제로 돌려 본 적이 없습니다(exe 포함). 빌드한 exe 를 깨끗한 Windows 설치에서 돌려 본 적도 없습니다. |

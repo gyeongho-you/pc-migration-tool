@@ -38,6 +38,9 @@ from .manifest import ManifestWriter
 from .progress import FAILED_KIND, OK, SKIPPED, UNREADABLE, ProgressInfo, ProgressTracker, fmt_bytes
 from .scan import scan_source_info
 
+MAX_CONNECTIONS = 8  # 동시에 열어 둘 연결 수 상한(초과 연결은 바로 닫는다: 스레드/소켓 고갈 방지)
+PREAUTH_TEXT = "인증이 제한시간(%d초) 안에 끝나지 않아 연결을 닫았습니다."
+PREAUTH_TIMEOUT = 30.0  # 연결마다 '인증이 끝날 때까지' 총 제한시간(초). 글자를 아주 천천히 보내며 붙들고 있는 연결을 끊는다.
 MAX_FILES = 20_000_000
 MAX_BYTES = 1 << 60
 FAT32_LIMIT = 4 * 1024 ** 3 - 1
@@ -106,8 +109,10 @@ class Receiver:
                  on_event: Callable[[dict], None] | None = None, max_files: int = MAX_FILES, max_bytes: int = MAX_BYTES,
                  chunk_max: int = MAX_CHUNK, io_timeout: float = 90.0, takeover_idle: float = 20.0, ttl: float | None = None,
                  window: float | None = None, fail_delay: float | None = None, max_failures: int | None = None,
-                 addresses: list | None = None) -> None:
+                 addresses: list | None = None, max_connections: int = MAX_CONNECTIONS, preauth_timeout: float = PREAUTH_TIMEOUT) -> None:
         self.dest = Path(dest)
+        self.max_connections = max(1, int(max_connections))
+        self.preauth_timeout = preauth_timeout
         self.port = port
         self.bind = bind or "0.0.0.0"
         self.allow_public = allow_public
@@ -253,11 +258,18 @@ class Receiver:
                 continue
             except OSError:
                 return
+            self._threads = [x for x in self._threads if x.is_alive()]
+            if len(self._threads) >= self.max_connections:  # 동시 연결 상한: 초과 연결은 바로 닫는다(프로토콜은 그대로, 송신 쪽은 연결 끊김으로 본다)
+                try:
+                    conn.close()
+                except OSError:
+                    pass
+                continue
             conn.settimeout(15)
             _keepalive(conn)
             t = threading.Thread(target=self._handle, args=(conn, addr), name="pcmigrate-lan-conn", daemon=True)
             t.start()
-            self._threads = [x for x in self._threads if x.is_alive()] + [t]
+            self._threads.append(t)
 
     def _gate(self, ch: Channel):
         with self._cur_lock:
@@ -272,14 +284,36 @@ class Receiver:
     def _handle(self, conn: socket.socket, addr) -> None:
         ch = Channel(conn)
         mine = None
+        authed = threading.Event()
+        timed_out = threading.Event()
+
+        def _preauth_expired() -> None:  # 인증이 제한시간 안에 끝나지 않으면 연결을 닫는다(받기 중인 연결에는 영향 없음)
+            if not authed.is_set():
+                timed_out.set()
+                ch.close()
+
+        timer = None
+        if self.preauth_timeout and self.preauth_timeout > 0:
+            timer = threading.Timer(self.preauth_timeout, _preauth_expired)
+            timer.daemon = True
+            timer.start()
         try:
             try:
                 hello = server_handshake(ch, self.pairing, name=self.name, chunk_max=self.chunk_max, gate=lambda: self._gate(ch),
                                          sleep=self._sleep)
+                authed.set()
+                if timer is not None:
+                    timer.cancel()
             except AuthError as e:
+                if timed_out.is_set():
+                    self._emit("protocol_error", message=PREAUTH_TEXT % int(self.preauth_timeout), peer=addr[0])
+                    return
                 self._emit("auth_failed", message=str(e), peer=addr[0], code=e.code, remaining=e.remaining)
                 return
             except LanError as e:
+                if timed_out.is_set():
+                    self._emit("protocol_error", message=PREAUTH_TEXT % int(self.preauth_timeout), peer=addr[0])
+                    return
                 self._emit("protocol_error", message=str(e), peer=addr[0])
                 return
             with self._cur_lock:
@@ -296,6 +330,8 @@ class Receiver:
         except Exception as e:  # noqa: BLE001
             self._emit("error", message=f"수신 중 예상하지 못한 오류: {type(e).__name__}: {e}", code="internal")
         finally:
+            if timer is not None:
+                timer.cancel()
             with self._cur_lock:
                 if mine is not None and self._cur is mine:
                     self._cur = None

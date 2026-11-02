@@ -45,6 +45,8 @@ class PathRule:
     dest: str
     kind: str = "dir"  # "dir" | "file"
     description: str = ""
+    # 이 경로 폴더 안에서 복원을 허용할 '자동 실행될 수 있는' 확장자(예: SketchUp ".rb"). 기본 거부 확장자(package_base.DENY_EXTENSIONS)를 규칙이 명시적으로 풀 때만 쓴다.
+    allow_extensions: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -128,7 +130,10 @@ def parse_rule(data: object, source: str = "<rule>") -> Rule:
             raise RuleError(f"{where}: kind 는 'dir' 또는 'file' 이어야 합니다")
         _check_rule_path(p["path"], where)
         _check_dest(p["dest"], where)
-        paths.append(PathRule(p["path"], p["dest"], kind, str(p.get("description", ""))))
+        allow = _str_list(p, "allow_extensions", where)
+        if any(not a.startswith(".") or a != a.lower() or "*" in a or "\\" in a or "/" in a for a in allow):
+            raise RuleError(f"{where}: allow_extensions 는 '.rb' 처럼 점으로 시작하는 소문자 확장자여야 합니다")
+        paths.append(PathRule(p["path"], p["dest"], kind, str(p.get("description", "")), allow))
 
     warnings = _str_list(data, "manual_warnings", source)
     notes = data.get("notes", "")

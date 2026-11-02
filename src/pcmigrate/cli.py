@@ -1296,5 +1296,5 @@ def main(argv: list[str] | None = None) -> int:
         path = errorlog.record(e, f"pcmigrate {args.command}")
         _err("예상하지 못한 오류가 났습니다. " + (f"자세한 내용은 {path} 에 기록했습니다."
                                           if path else "오류 로그도 남기지 못했습니다(로그 폴더에 쓸 수 없음)."),
-             f"원인(요약): {type(e).__name__}: {e}")
+             errorlog.tokenize_home(f"원인(요약): {type(e).__name__}: {e}"))  # 사용자 홈 경로가 화면/로그에 그대로 나가지 않게
         return 1
