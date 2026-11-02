@@ -9,7 +9,7 @@ from pathlib import Path, PurePosixPath
 
 from .discover_data import RESTORE_DENY_SUBSTRINGS
 from .rules import Rule
-from .package_base import DENY_COMPOUND_SUFFIXES, DENY_DIR_NAMES, DENY_EXTENSIONS, DENY_FILE_NAMES, HOME_DENY_DIRS, HOME_DENY_FILES, HOME_DENY_SUBFILES, SSH_DENY_FILES, split_rule_path
+from .package_base import DENY_CODE_DIR_NAMES, DENY_COMPOUND_SUFFIXES, DENY_DIR_NAMES, DENY_PATH_SUFFIXES, DENY_EXTENSIONS, DENY_FILE_NAMES, HOME_DENY_DIRS, HOME_DENY_FILES, HOME_DENY_SUBFILES, SSH_DENY_FILES, split_rule_path
 
 
 def _path_covers(pr, base: str, parts: list[str]) -> bool:
@@ -56,6 +56,10 @@ def restore_denied(rel: str, target: Path, rule: Rule | None, base: str) -> str 
     parts = [x.lower() for x in PurePosixPath(rel).parts]
     if any(x in DENY_DIR_NAMES for x in parts[:-1]) or parts[-1] in DENY_DIR_NAMES:
         return "복원이 금지된 위치(Excel 시작 폴더 XLSTART)"
+    if any(x in DENY_CODE_DIR_NAMES for x in parts[:-1]):
+        return "복원이 금지된 위치(파이썬 site-packages: .pth 등 시작 때 코드가 실행되는 파일이 있음)"
+    if any(len(parts) >= len(s) and tuple(parts[-len(s):]) == s for s in DENY_PATH_SUFFIXES):
+        return "복원이 금지된 설정 파일(패키지 관리자 설정/Notepad++ 단축키 등 실행 명령을 바꿀 수 있음)"
     if base == "%USERPROFILE%" and (parts[0] in HOME_DENY_FILES and len(parts) == 1
                                     or len(parts) == 2 and (parts[0], parts[1]) in HOME_DENY_SUBFILES):
         return "복원이 금지된 설정 파일(도구가 실행할 명령이나 토큰이 들어갈 수 있는 홈 설정)"

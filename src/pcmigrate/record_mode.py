@@ -688,6 +688,9 @@ def build_rule(a: Analysis, min_conf: str = LOW, rule_id: str | None = None, tod
             excl.append(f"*{c.ext}")
     notes = (f"설정 기록 모드로 생성, 확인 필요. 라운드 {a.rounds}회(기준선 {a.baselines}회), 생성일 {today}. "
              f"후보 {len(pick)}개를 paths 에 담았고 기준선에서 바뀐 파일 {a.noise_files}개는 제외했습니다.")
+    if any(e[1] == "dir" for e in entries):  # 폴더 묶기의 한계(스키마는 파일 목록 지정을 지원하지 않는다)
+        notes += (" 폴더(dir)로 묶은 항목은 스냅샷에 보이지 않은 파일(건너뛴 캐시/큰 파일 포함)까지 폴더째 담기므로 "
+                  "내용을 복원 전에 확인하세요(한계: 규칙은 폴더 안의 일부 파일만 지정할 수 없음).")
     n_secret = sum(1 for c in left if c.secret and not c.removed)
     if n_secret:
         notes += f" 로그인/라이선스/토큰으로 보이는 파일 {n_secret}개는 담지 않았고, 그런 파일이 든 폴더는 폴더째 담지 않고 파일 단위로 담았습니다."

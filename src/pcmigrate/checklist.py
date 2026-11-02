@@ -43,11 +43,19 @@ OLD_VERSION_GUIDE = (
 NO_VERSION_TEXT = "버전 정보 없음 — 구 PC 의 제어판에서 확인"
 
 
+_CTRL = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b[@-Z\\-_]|[\x00-\x1f\x7f-\x9f]")
+
+
+def clean_text(s: str) -> str:
+    """패키지의 프로그램 목록(registry.json)에서 온 문자열의 ANSI 이스케이프/제어 문자를 지운다(터미널 화면 조작 방지, 78)."""
+    return _CTRL.sub("", str(s))
+
+
 def old_version_text(p: Program) -> str:
     """구 PC 에서 설치돼 있던 버전(레지스트리 DisplayVersion, 있으면 게시자). 없으면 '버전 정보 없음 — 구 PC 의 제어판에서 확인'."""
     if not p.version:
         return f"구 PC 버전: {NO_VERSION_TEXT}"
-    return f"구 PC 버전: {p.version}" + (f"(게시자 {p.publisher})" if p.publisher else "")
+    return f"구 PC 버전: {clean_text(p.version)}" + (f"(게시자 {clean_text(p.publisher)})" if p.publisher else "")
 
 # 매칭 근거 등급. '확실' 만 수동 설치 목록에서 제외하고, 나머지는 등급을 표시해 남긴다(과다 안내가 안전).
 CERTAIN, PROBABLE, NONE = "확실", "추정", "없음"
@@ -259,10 +267,11 @@ def find_manual_installs(registry: list[Program], winget: list[Program],
 
 
 def describe_manual(p: Program, m: Match | None) -> str:
-    if p.version and p.version.lower() in p.display.lower():  # 이름 옆에 구 PC 버전이 이미 보이면 대괄호에 버전을 또 쓰지 않는다
-        head = f"{p.display} [구 PC 게시자 {p.publisher}]" if p.publisher else p.display
+    display = clean_text(p.display)
+    if p.version and clean_text(p.version).lower() in display.lower():  # 이름 옆에 구 PC 버전이 이미 보이면 대괄호에 버전을 또 쓰지 않는다
+        head = f"{display} [구 PC 게시자 {clean_text(p.publisher)}]" if p.publisher else display
     else:
-        head = f"{p.display} [{old_version_text(p)}]"
+        head = f"{display} [{old_version_text(p)}]"
     if m is None:
         return f"{head} — 매칭 근거: {NONE}"
     return f"{head} — 매칭 근거: {m.grade}({m.reason}: {m.winget_id}) → 실제 설치 여부 확인"

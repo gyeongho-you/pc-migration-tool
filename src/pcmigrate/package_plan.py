@@ -129,6 +129,15 @@ def plan_import(path: Path, rules: list[Rule], expand: Expand = expand_env, *,
         raise PackageError(f"패키지 검증 실패: manifest 구조가 올바르지 않습니다({type(e).__name__})") from e
 
 
+MAX_PATH_TOTAL = 32000   # 긴 경로 접두(long_path)를 써도 Windows 가 받는 경로 전체 길이의 한계(32,767자)보다 약간 작게
+MAX_COMPONENT = 255      # NTFS 폴더/파일 이름 하나의 최대 길이
+
+
+def _path_too_long(target: Path) -> bool:
+    """긴 경로 접두로도 만들 수 없는 길이인지(전체 길이 또는 이름 하나)."""
+    return len(str(target)) > MAX_PATH_TOTAL or any(len(part) > MAX_COMPONENT for part in target.parts)
+
+
 def _rejected_item(f: dict, target: Path, link: str, is_extra: bool, base_path: Path) -> dict:
     return {"entry": f["arc"], "target": str(target), "status": REJECTED, "backup": "", "size": f["size"],
             "base_dir": str(base_path),
@@ -261,7 +270,9 @@ def _plan_import_inner(path: Path, rules: list[Rule], expand: Expand, only: list
             continue
         key = os.path.normcase(str(target))
         if key in seen_targets:  # 대소문자만 다른 경로 등 같은 파일로 가는 두 항목: 뒤 항목이 앞 항목을 .bak 으로 밀어낸다(B-6)
-            plan.problems.append(f"같은 대상으로 복원되는 중복 항목: {target}")
+            # 78: 패키지 전체를 막지 않고 뒤 항목만 '복원 안 함'(먼저 나온 항목이 이긴다). 뒤 항목은 쓰지 않으므로 앞 항목을 .bak 으로 밀어내지 않는다
+            plan.items.append(_skipped_item(f, target, "같은 대상으로 복원되는 다른 항목이 먼저 있어 복원하지 않음(중복 항목)",
+                                            "duplicate", is_extra, base_path, pkey, selected))
             continue
         seen_targets.add(key)
         if not selected:  # 선택에서 뺀 프로그램: 대상 파일은 읽지도 않는다
@@ -272,14 +283,20 @@ def _plan_import_inner(path: Path, rules: list[Rule], expand: Expand, only: list
             plan.items.append(_denied_item(f, target, why, is_extra, base_path) | {"program": pkey})
             continue
         backup = ""
-        if target.is_file() and target.stat().st_size == f["size"] and sha256_file(target) == f["sha256"]:
+        lp = fs.long_path  # 260자를 넘는 경로도 있는 그대로 판정한다(Path.exists 는 긴 경로를 '없음'으로 보아 미리보기가 낙관적이었다)
+        if _path_too_long(target):  # 긴 경로 접두를 써도 만들 수 없는 길이(전체 32,000자 초과, 폴더/파일 이름 255자 초과): 미리보기부터 실패로 보인다
+            plan.items.append({"entry": f["arc"], "target": str(target), "status": FAILED, "backup": "", "size": f["size"],
+                               "sha256": f["sha256"], "extra": is_extra, "base_dir": str(base_path), "program": pkey,
+                               "reason": failure.PATH_TOO_LONG, "error": failure.REASONS[failure.PATH_TOO_LONG].text})
+            continue
+        if os.path.isfile(lp(target)) and os.stat(lp(target)).st_size == f["size"] and sha256_file(target) == f["sha256"]:
             status = SKIPPED_SAME
-        elif target.is_dir():  # 같은 이름의 폴더: 실제 복원도 실패하므로 미리보기도 같은 결과를 보인다(M5). 폴더는 지우지 않는다
+        elif os.path.isdir(lp(target)):  # 같은 이름의 폴더: 실제 복원도 실패하므로 미리보기도 같은 결과를 보인다(M5). 폴더는 지우지 않는다
             plan.items.append({"entry": f["arc"], "target": str(target), "status": FAILED, "backup": "", "size": f["size"],
                                "sha256": f["sha256"], "extra": is_extra, "base_dir": str(base_path), "program": pkey,
                                "reason": failure.DEST_IS_DIR, "error": failure.REASONS[failure.DEST_IS_DIR].text})
             continue
-        elif target.exists():
+        elif os.path.exists(lp(target)):
             status = WOULD_OVERWRITE
             backup = str(_backup_path(target))
         else:
