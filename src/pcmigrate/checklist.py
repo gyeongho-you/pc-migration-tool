@@ -18,7 +18,7 @@ from .checklist_data import (BUNDLE_PATTERNS, BUNDLE_REGEX, COMMON_ITEMS, KNOWN_
                              LOGIN_KEYWORDS, CommonItem)
 from .copier import _backup_path
 from .fs import long_path
-from .detect import Program, parse_winget_export
+from .detect import DEFAULT_LOCALE, Program, parse_winget_export, winget_install_command
 from .rules import Rule
 
 WINGET_IMPORT_GUIDE: tuple[str, ...] = (
@@ -26,10 +26,28 @@ WINGET_IMPORT_GUIDE: tuple[str, ...] = (
     "pcmigrate winget-extract 패키지.zip --output 폴더경로",
     "그런 다음 꺼낸 winget.json 으로 다음 명령을 직접 실행하세요:",
     "winget import -i 폴더경로\\winget.json --ignore-unavailable --accept-package-agreements --accept-source-agreements",
-    "--ignore-unavailable 은 신 PC 의 winget 에서 찾을 수 없는 패키지를 건너뜁니다. "
+    "--ignore-unavailable 은 신 PC 의 winget 에서 찾을 수 없는 패키지(구 PC 의 그 버전이 저장소에 없는 경우 포함)를 건너뜁니다. "
     "이 도구는 winget import 를 자동 실행하지 않습니다. "
     "실행한 뒤에는 pcmigrate install-check 패키지.zip 으로 설치 결과를 다시 확인할 수 있습니다.",
+    "구 PC 의 버전이 목록에 들어 있으면 import 는 기본으로 그 버전을 설치합니다. 저장소에서 그 버전을 찾지 못한 항목은 건너뛰거나 오류가 날 수 있으니(winget 동작) "
+    "설치 확인에서 다시 확인하세요. 최신판을 받아도 괜찮다면 명령 끝에 --ignore-versions 를 붙여 다시 실행하세요. "
+    "이전 버전 도구로 만든 묶음은 버전 정보가 없어 항상 최신판이 설치됩니다.",
+    "※ winget import(일괄 설치)는 언어(--locale)를 지정할 수 없어 패키지의 기본 언어판이 설치될 수 있습니다. 한글판이 중요한 프로그램은 일괄 설치 대신 "
+    "개별 설치 명령(winget install --id <id> --exact --locale ko-KR [--version 버전])을 쓰세요. --locale 은 그 패키지가 해당 언어를 제공할 때만 적용되며, "
+    "제공하지 않으면 winget 이 기본값을 쓸 수 있고, 설치 프로그램이 자체 언어 선택 화면을 쓰면 바뀌지 않을 수 있습니다. 설치한 뒤 실제 언어를 직접 확인하세요.",
 )
+
+OLD_VERSION_GUIDE = (
+    "같은 버전을 받아 설치하세요. 구 PC 의 제어판 > 프로그램 및 기능에서 확인한 값입니다. "
+    "언어판은 구 PC 에서 쓰던 것과 같은 언어판을 고르세요.")
+NO_VERSION_TEXT = "버전 정보 없음 — 구 PC 의 제어판에서 확인"
+
+
+def old_version_text(p: Program) -> str:
+    """구 PC 에서 설치돼 있던 버전(레지스트리 DisplayVersion, 있으면 게시자). 없으면 '버전 정보 없음 — 구 PC 의 제어판에서 확인'."""
+    if not p.version:
+        return f"구 PC 버전: {NO_VERSION_TEXT}"
+    return f"구 PC 버전: {p.version}" + (f"(게시자 {p.publisher})" if p.publisher else "")
 
 # 매칭 근거 등급. '확실' 만 수동 설치 목록에서 제외하고, 나머지는 등급을 표시해 남긴다(과다 안내가 안전).
 CERTAIN, PROBABLE, NONE = "확실", "추정", "없음"
@@ -241,7 +259,7 @@ def find_manual_installs(registry: list[Program], winget: list[Program],
 
 
 def describe_manual(p: Program, m: Match | None) -> str:
-    head = p.display
+    head = f"{p.display} [{old_version_text(p)}]"
     if m is None:
         return f"{head} — 매칭 근거: {NONE}"
     return f"{head} — 매칭 근거: {m.grade}({m.reason}: {m.winget_id}) → 실제 설치 여부 확인"
@@ -307,7 +325,8 @@ def build_checklist(rule_warnings: list[tuple[str, list[str]]], registry: list[P
                     winget: list[Program] | None = None,
                     winget_list_text: str | None = None,
                     rule_ids: list[str] | tuple[str, ...] = (), show_all: bool = False,
-                    discovery: tuple[int, int | None] | None = None) -> Checklist:
+                    discovery: tuple[int, int | None] | None = None,
+                    locale: str = DEFAULT_LOCALE) -> Checklist:
     """rule_warnings: [(프로그램 이름, [경고...])]. 같은 문구는 하나로 합치고 출처를 병기한다.
 
     공통 경고는 설치 목록 이름/감지된 규칙에 관련된 것만(또는 항상 해당하는 것) 보여 주고,
@@ -350,11 +369,15 @@ def build_checklist(rule_warnings: list[tuple[str, list[str]]], registry: list[P
     if registry is not None:
         cl.has_winget_list = bool(winget_list_text)
         cls = classify_programs(registry, winget or [], winget_list_text)
+        wver = {w.winget_id.lower(): w.version for w in (winget or []) if w.winget_id}
         for p, wid, why in cls.winget_auto:
-            cl.winget_auto.append(f"{p.name} — winget import 로 자동 설치({wid}, {why})")
-        for p, wid in cls.winget_cmd:
+            ver = wver.get(wid.lower()) or p.version
+            cl.winget_auto.append(f"{p.name} — winget import 로 자동 설치({wid}, {why}; "
+                                  + (f"구 PC 버전 {ver}" if ver else NO_VERSION_TEXT) + ")")
+        for p, wid in cls.winget_cmd:  # 이 항목은 묶음 winget 목록에 없어 winget 이 기록한 버전이 없다(레지스트리 표기는 winget 버전과 다를 수 있어 --version 은 붙이지 않는다)
             cl.winget_cmd.append(f"{p.name} — 내보낸 winget 목록에 없음. 신 PC에서 "
-                                 f"`winget install --id {wid} --exact` 로 설치(대표 앱 표 기준)")
+                                 f"`{winget_install_command(wid, '', locale)}` 로 설치(대표 앱 표 기준, 한글판 등 언어는 --locale 로 지정, "
+                                 f"{old_version_text(p)} — 같은 버전이 필요하면 `winget show --id {wid} --versions` 로 있는지 확인 후 --version 추가)")
         for p, why in cls.reference:
             cl.reference.append(f"{p.name} — {why}")
         installs = []
@@ -411,6 +434,7 @@ def render(cl: Checklist, fmt: str = "text") -> str:
         if not cl.has_winget_list:
             note += " (winget list 결과가 없어 '확실' 판정을 하지 못했습니다.)"
         lines.append(note)
+        lines.append("※ " + OLD_VERSION_GUIDE)
     else:
         lines.append("(없음)")
     if not cl.winget_available:

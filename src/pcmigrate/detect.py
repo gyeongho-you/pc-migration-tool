@@ -135,6 +135,38 @@ def valid_winget_id(value: object) -> bool:
     return isinstance(value, str) and WINGET_ID_RE.fullmatch(value) is not None
 
 
+DEFAULT_LOCALE = "ko-KR"
+_LOCALE_RE = re.compile(r"^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8}){0,3}$")
+_VERSION_ARG_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$")
+
+
+def valid_locale(value: object) -> bool:
+    """BCP47 로캘 형식(ko-KR, en-US, zh-CN 등). 명령 문자열에 넣기 전의 주입 방지 검사."""
+    return isinstance(value, str) and _LOCALE_RE.fullmatch(value) is not None
+
+
+def usable_version_arg(value: object) -> bool:
+    """winget install --version 에 그대로 넣어도 안전하고 쓸 만한 버전 문자열인가('Unknown'·공백·기호 포함 값은 제외)."""
+    return (isinstance(value, str) and _VERSION_ARG_RE.fullmatch(value) is not None
+            and value.lower() not in ("unknown", "latest"))
+
+
+def winget_install_command(winget_id: str, version: str = "", locale: str = DEFAULT_LOCALE) -> str:
+    """개별 설치 명령 한 줄(실행하지 않는다): winget install --id X --exact [--locale ko-KR] [--version V].
+
+    id/로캘 형식이 틀리면 ValueError. 버전은 쓸 수 없는 값(빈 값, Unknown, 특수문자)이면 조용히 뺀다(구 PC 버전을 모르는 경우)."""
+    if not valid_winget_id(winget_id):
+        raise ValueError(f"올바르지 않은 winget id: {winget_id!r}")
+    parts = [f"winget install --id {winget_id} --exact"]
+    if locale:
+        if not valid_locale(locale):
+            raise ValueError(f"올바르지 않은 로캘(예: ko-KR): {locale!r}")
+        parts.append(f"--locale {locale}")
+    if usable_version_arg(version):
+        parts.append(f"--version {version}")
+    return " ".join(parts)
+
+
 def parse_winget_export(text: str) -> list[Program]:
     data = json.loads(text)
     programs: list[Program] = []
@@ -142,28 +174,40 @@ def parse_winget_export(text: str) -> list[Program]:
         for pkg in source.get("Packages", []):
             pid = pkg.get("PackageIdentifier", "")
             if pid:
-                programs.append(Program(pid, pkg.get("Version", ""),
+                programs.append(Program(pid, str(pkg.get("Version") or ""),
                                         source="winget", winget_id=pid))
     return programs
 
 
-def winget_export_raw(runner: Runner = _subprocess_runner) -> str | None:
-    """`winget export` 를 임시 파일로 실행해 JSON 원문을 반환한다. 실패 시 None."""
+def _winget_export_once(runner: Runner, include_versions: bool) -> tuple[str | None, bool]:
+    """winget export 1회. (JSON 원문 또는 None, 재시도할 만한 실패인가). 실행 자체가 안 되거나 시간 초과면 재시도하지 않는다."""
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "winget.json"
+        args = ["winget", "export", "-o", str(out), "--accept-source-agreements"]
+        if include_versions:
+            args.append("--include-versions")
         try:
-            code, _ = runner(["winget", "export", "-o", str(out),
-                              "--accept-source-agreements"])
+            code, _ = runner(args)
         except (OSError, subprocess.SubprocessError):
-            return None
+            return None, False
         if code != 0 or not out.exists():
-            return None
+            return None, True
         try:
             text = out.read_text(encoding="utf-8-sig")
             json.loads(text)
         except (json.JSONDecodeError, OSError):
-            return None
-        return text
+            return None, False
+        return text, False
+
+
+def winget_export_raw(runner: Runner = _subprocess_runner) -> str | None:
+    """`winget export --include-versions` 를 임시 파일로 실행해 JSON 원문(패키지마다 구 PC 버전 포함)을 반환한다. 실패 시 None.
+
+    --include-versions 를 모르는 구버전 winget 은 오류 종료하므로, 종료 코드가 0 이 아니면 옵션 없이 한 번 더 시도한다(버전 없는 목록)."""
+    text, retry = _winget_export_once(runner, True)
+    if text is None and retry:
+        text, _ = _winget_export_once(runner, False)
+    return text
 
 
 def winget_export(runner: Runner = _subprocess_runner) -> list[Program]:

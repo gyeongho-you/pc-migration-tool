@@ -62,8 +62,10 @@ class InstallMixin:
             key = "installed_diff" if it.status == INSTALLED and it.version_diff else it.status
             version = T.INST_VERSION_DIFF.format(old=it.old_version, new=it.new_version) if it.version_diff else (
                 (it.new_version if it.status == INSTALLED else "") or it.old_version)  # 애매함/설치 안 됨은 구 PC 버전
+            if not version and it.needs_action:
+                version = T.INST_NO_VERSION_COL  # 구 PC 버전을 모르면 빈 칸 대신 알려 준다
             rows.append({"name": it.name, "status": it.status, "label": T.INST_LABELS[key], "version": version,
-                         "reason": it.reason, "hint": it.hint, "markable": it.needs_action, "diff": it.version_diff,
+                         "reason": it.reason, "hint": it.hint, "old_info": it.old_info if it.needs_action else "", "markable": it.needs_action, "diff": it.version_diff,
                          "mark": it.name in self.state.install_marks,
                          "pickable": self._pickable(it), "pick": self._pickable(it) and it.name in self.state.install_picks})
         return rows
@@ -110,7 +112,8 @@ class InstallMixin:
             raise GuardError(T.INST_PICK_NOTHING_LEFT)
         in_file = safe_winget_ids([i.winget_id for i in items if i.in_import_file])
         rest = safe_winget_ids([i.winget_id for i in items if not i.in_import_file])
-        cmds = selected_commands(None, [*in_file, *rest])
+        versions = {i.winget_id: i.winget_version for i in items if i.winget_version}  # 묶음 목록에 적힌 구 PC 버전만 --version 으로 붙인다
+        cmds = selected_commands(None, [*in_file, *rest], versions)
         each = dict(zip(cmds["ids"], cmds["each"]))
         target, bak, command = None, None, ""
         if in_file:
@@ -149,6 +152,10 @@ class InstallMixin:
             out.append(T.INST_NO_WINGET_FILE)
         if r.by_status("ambiguous"):
             out.append(T.INST_AMBIGUOUS_NOTE)
+        if r.by_status("manual") or r.by_status("ambiguous"):
+            out.append(T.INST_OLD_VERSION_GUIDE)
+        if r.has_winget_file and not r.winget_has_versions:
+            out.append(T.INST_NO_WINGET_VERSIONS)
         return out
 
     def toggle_install_mark(self, name: str) -> bool:

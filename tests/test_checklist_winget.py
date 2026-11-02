@@ -117,7 +117,7 @@ def test_checklist_dedups_and_merges_sources():
     cl = build_checklist(pairs, [Program("Rhino 8")], wg("a.b"))
     assert "라이선스 재로그인 (Revit, AutoCAD)" in cl.login
     assert "캐시 재동기화 (Revit)" in cl.data
-    assert cl.install == ["Rhino 8 — 매칭 근거: 없음"]
+    assert cl.install == ["Rhino 8 [구 PC 버전: 버전 정보 없음 — 구 PC 의 제어판에서 확인] — 매칭 근거: 없음"]
 
 
 def test_common_warnings_cover_claude_md_items():
@@ -131,7 +131,7 @@ def test_common_warnings_cover_claude_md_items():
 def test_render_has_checkboxes_sections_and_winget_guide(fmt):
     cl = build_checklist([("Revit", ["w1"])], [Program("Rhino 8")], wg("a.b"))
     out = render(cl, fmt)
-    assert "- [ ] w1 (Revit)" in out and "- [ ] Rhino 8 — 매칭 근거: 없음" in out
+    assert "- [ ] w1 (Revit)" in out and "- [ ] Rhino 8 [구 PC 버전: 버전 정보 없음 — 구 PC 의 제어판에서 확인] — 매칭 근거: 없음" in out
     assert "1. 새 PC에서 먼저 설치" in out and "--ignore-unavailable" in out
     assert "자동 실행하지 않습니다" in out
 
@@ -170,7 +170,7 @@ def test_cli_checklist_output_file_with_bak(tmp_path, monkeypatch, rules_dir):
     out.write_text("old", encoding="utf-8")
     assert cli.main(["checklist", "--format", "md", "--output", str(out), "--rules", str(rules_dir)]) == 0
     text = out.read_text(encoding="utf-8")
-    assert "- [ ] 데모 재로그인 (Demo)" in text and "- [ ] Rhino 8 — 매칭 근거: 없음" in text
+    assert "- [ ] 데모 재로그인 (Demo)" in text and "- [ ] Rhino 8 [구 PC 버전: 버전 정보 없음 — 구 PC 의 제어판에서 확인] — 매칭 근거: 없음" in text
     assert "Google Chrome" not in text
     assert (tmp_path / "check.md.bak").read_text(encoding="utf-8") == "old"
 

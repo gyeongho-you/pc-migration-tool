@@ -558,6 +558,9 @@ def _install_check_text(r: ic.InstallCheck, package: str) -> str:
         for i in items:
             extra = f" [{i.hint}]" if i.hint else ""
             lines.append(f"  {mark} {i.name} — {i.reason}{extra}")
+            lines.append(f"      {i.old_info}")
+        if status in (ic.AMBIGUOUS, ic.MANUAL):
+            lines.append("  ※ " + ic.OLD_VERSION_GUIDE)
         lines.append("")
     diff = [i for i in r.by_status(ic.INSTALLED) if i.version_diff]
     if diff:
@@ -568,7 +571,11 @@ def _install_check_text(r: ic.InstallCheck, package: str) -> str:
     lines += r.notes
     cmds = r.individual_commands
     if cmds:
-        lines += ["개별 설치 명령(직접 실행하세요):", *[f"    {c}" for c in cmds]]
+        lines += ["개별 설치 명령(직접 실행하세요):", *[f"    {c}" for c in cmds],
+                  "  ※ 이 항목들은 묶음의 winget 목록에 없어 --version 을 붙이지 않았습니다. 위에 적힌 구 PC 버전과 같은 버전이 필요하면 "
+                  "`winget show --id <id> --versions` 로 있는지 확인한 뒤 --version 을 직접 추가하세요."]
+    if r.import_needed or r.has_winget_file:
+        lines += ["※ " + ic.LOCALE_NOTE]
     lines += ["", r.next_step(),
               "winget 목록 꺼내기와 명령: pcmigrate winget-extract 패키지.zip --output 폴더경로 / 수동 작업 전체 목록: pcmigrate checklist --package 패키지.zip"]
     return "\n".join(lines)
@@ -590,6 +597,7 @@ def _cmd_install_check(args: argparse.Namespace) -> int:
         r = run_install_check(args.package, deps=deps, new_state=new_state)
     except ApiError as e:
         return _fail(e)
+    r.locale = args.locale
     if args.json:
         _json_out(r.to_dict(), indent=2)
     else:
@@ -850,14 +858,28 @@ def _cmd_winget_extract(args: argparse.Namespace) -> int:
         print(f"- 같은 이름의 기존 파일은 덮어쓰지 않고 {fs.plain_path_text(str(bak))} 로 옮겼습니다.")
     print("다음 할 일: 아래 명령을 직접 실행하세요(이 도구는 대신 실행하지 않습니다).")
     print(ic.import_command(fs.plain_path_text(str(target))))
+    written = json.loads(Path(target).read_text(encoding="utf-8-sig"))  # 묶음에 적힌 대소문자 그대로의 id 로 안내한다
+    pkgs = [p for sr in written.get("Sources", []) for p in sr.get("Packages", []) if isinstance(p, dict)]
+    versions = {p["PackageIdentifier"]: str(p.get("Version") or "") for p in pkgs if p.get("PackageIdentifier")}
+    if not any(versions.values()):
+        print("※ 이 목록에는 구 PC 버전 정보가 없습니다(버전 기록 기능이 없던 이전 도구로 만든 묶음). import 는 최신판을 설치하고 개별 설치 명령에도 --version 이 붙지 않습니다.")
+    else:
+        print("※ " + ic.IMPORT_VERSION_NOTE)
+    print("※ " + ic.LOCALE_NOTE)
     if only:
-        print("또는 프로그램별로 하나씩:")
-        written = json.loads(Path(target).read_text(encoding="utf-8-sig"))  # 묶음에 적힌 대소문자 그대로의 id 로 안내한다
-        canon = [p["PackageIdentifier"] for sr in written.get("Sources", []) for p in sr.get("Packages", [])]
-        for line in ic.selected_commands(None, canon)["each"]:
+        print("또는 프로그램별로 하나씩(구 PC 버전이 목록에 있으면 --version 포함):")
+        for line in ic.selected_commands(None, list(versions), versions, args.locale)["each"]:
             print(line)
     print("실행한 뒤 설치 결과 확인: pcmigrate install-check 패키지.zip")
     return 0
+
+
+def _locale_arg(text: str) -> str:
+    """--locale 값 검사: BCP47 형식(ko-KR, en-US, zh-CN 등)이거나 빈 값(= --locale 을 붙이지 않음)."""
+    from .detect import valid_locale
+    if text and not valid_locale(text):
+        raise argparse.ArgumentTypeError(f"로캘 형식이 올바르지 않습니다: {text!r} (예: ko-KR, en-US, zh-CN. 빈 값이면 --locale 을 붙이지 않습니다)")
+    return text
 
 
 def _place_path_arg(text: str) -> str:
@@ -1070,6 +1092,8 @@ def build_parser() -> argparse.ArgumentParser:
     ik = sub.add_parser("install-check", help="설정 묶음의 구 PC 프로그램이 이 PC(새 PC)에 설치돼 있는지 비교(읽기 전용, 설치는 하지 않음)")
     ik.add_argument("package", type=_path_arg, help="export 로 만든 .zip")
     ik.add_argument("--json", action="store_true", help="JSON 으로 출력")
+    ik.add_argument("--locale", type=_locale_arg, default=ic.DEFAULT_LOCALE, metavar="BCP47",
+                    help="개별 설치 명령의 --locale 값(기본 ko-KR, 빈 값이면 붙이지 않음). 일괄 winget import 에는 적용되지 않음")
     ik.add_argument("--winget-list-file", type=_path_arg,
                     help="(시험용) 이 PC 의 winget 대신 이 파일의 `winget list` 출력을 사용")
     ik.set_defaults(func=_cmd_install_check)
@@ -1148,6 +1172,8 @@ def build_parser() -> argparse.ArgumentParser:
     w.add_argument("--output", type=_path_arg, default=None, help="winget.json 을 꺼낼 폴더(없으면 만듦, 같은 이름 파일은 .bak 보존). --list 만 쓸 때는 생략 가능")
     w.add_argument("--only", default=None, metavar="ID1,ID2", help="쉼표로 구분한 winget id(대소문자 무시)의 프로그램만 담은 winget.json 을 만든다(없는 id 는 거부)")
     w.add_argument("--list", action="store_true", help="꺼내지 않고 묶음 안 winget 프로그램 id/버전 표만 출력")
+    w.add_argument("--locale", type=_locale_arg, default=ic.DEFAULT_LOCALE, metavar="BCP47",
+                   help="--only 로 안내하는 개별 설치 명령의 --locale 값(기본 ko-KR, 빈 값이면 붙이지 않음). 일괄 winget import 에는 적용되지 않음")
     w.set_defaults(func=_cmd_winget_extract)
 
     t = sub.add_parser("transfer", help="모드 B: 대용량 폴더를 robocopy 로 전송 + SHA-256 검증")
