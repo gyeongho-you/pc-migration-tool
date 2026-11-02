@@ -23,13 +23,12 @@ from typing import Callable
 from . import copier, envpaths, errorlog, fs, settings_filter
 from .cancel import Cancelled
 from .progress import ProgressInfo, fmt_bytes
+from . import record_infer as ri
+from .record_base import (CAND_FILE, DRAFT_FILE, REPORT_FILE, STATE_FILE, RecordError, ResetResult, _archive_previous, _atomic_write,  # noqa: F401
+                          _write_report, reset)
 from .record_snapshot import (HASH_LIMIT, MAX_FILES, Root, Snapshot, SnapshotOptions, custom_root, default_roots, match_words,
                               snapshot_changes, standard_token, take_snapshot)
 
-STATE_FILE = "record-state.json"
-CAND_FILE = "record-candidates.json"
-REPORT_FILE = "record-last-report.json"
-DRAFT_FILE = "rule-draft.json"
 BEFORE, BASELINE, AFTER = "before", "baseline", "after"
 HIGH, MID, LOW = "높음", "중간", "낮음"
 RANK = {LOW: 0, MID: 1, HIGH: 2}
@@ -48,16 +47,6 @@ DEFAULT_WARNINGS = (
     "라이선스/로그인 정보는 복원되지 않습니다. 신 PC 에서 다시 활성화하거나 로그인하세요.",
     "레지스트리에 저장되는 설정과 클라우드 계정에 동기화되는 설정은 파일로 옮겨지지 않을 수 있습니다.",
 )
-
-
-class RecordError(Exception):
-    """사용자에게 그대로 보여 줄 수 있는 오류(상태 파일 없음, 라벨 오류 등)."""
-
-
-def _atomic_write(path: Path, text: str) -> None:
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, path)
 
 
 def _read_json(path: Path):
@@ -117,6 +106,9 @@ class Session:
 
     def roots(self, documents_fn=None) -> tuple[list[Root], list[str]]:
         sc = self.state["scope"]
+        inf = sc.get("infer")
+        if inf:  # 정보로 추정한(또는 사용자가 더한) 폴더 목록: 시작할 때 고정해 저장한 것을 그대로 쓴다
+            return [custom_root(envpaths.expand_env(f["path"])) for f in inf["folders"] if f.get("enabled", True)], []
         if sc["custom_roots"]:
             return [custom_root(envpaths.expand_env(p)) for p in sc["custom_roots"]], []
         return default_roots(documents_fn)
@@ -124,7 +116,7 @@ class Session:
     def options(self) -> SnapshotOptions:
         sc = self.state["scope"]
         return SnapshotOptions(sc["hash_limit"], sc["max_files"], sc["include_caches"],
-                               [] if sc["all_roots"] or sc["custom_roots"] else match_words(self.state["program"], sc["match"]),
+                               [] if sc["all_roots"] or sc["custom_roots"] or sc.get("infer") else match_words(self.state["program"], sc["match"]),
                                [str(self.work)])
 
     def load_snap(self, label: str) -> Snapshot:
@@ -172,14 +164,6 @@ def running_processes(program: str, extra: list[str], process_list_fn: Callable[
 
 
 # --------------------------------------------------------------------------- 보고서(어떤 경우에도 저장)
-def _write_report(work: Path, rep: dict) -> None:
-    try:
-        work.mkdir(parents=True, exist_ok=True)
-        _atomic_write(work / REPORT_FILE, json.dumps(rep, ensure_ascii=False, indent=1))
-    except OSError as e:
-        errorlog.record(e, "설정 기록: 보고서 저장")
-
-
 @dataclass
 class SnapshotResult:
     label: str
@@ -195,26 +179,20 @@ class SnapshotResult:
     warnings: list = field(default_factory=list)
     root_notes: list = field(default_factory=list)
     matched: list = field(default_factory=list)  # 이름으로 좁혀 훑은 시작 폴더(환경변수 표기)
-
-
-def _archive_previous(wd: Path) -> list[str]:
-    """start --force: 이전 세션 산출물(스냅샷, 상태, 후보, 보고서, 초안)을 지우지 않고 .bak 으로 옮겨 새 기록과 섞이지 않게 한다."""
-    moved: list[str] = []
-    for f in sorted(wd.glob("snap-*.json")) + [wd / n for n in (STATE_FILE, CAND_FILE, REPORT_FILE, DRAFT_FILE)]:
-        if f.is_file():
-            try:
-                os.replace(f, copier._backup_path(f))
-                moved.append(f.name)
-            except OSError as e:
-                errorlog.record(e, "설정 기록: 이전 산출물 보관")
-                raise RecordError(f"이전 기록 파일 {f.name} 을(를) 보관하지 못했습니다({type(e).__name__}). 파일을 닫고 다시 시도하세요") from e
-    return moved
+    inferred: list = field(default_factory=list)  # 정보로 추정해 훑는 폴더 [{path, reason, confidence, source, enabled}]
+    inferred_excluded: list = field(default_factory=list)  # 제외 후보 [{path, reason}]
 
 
 def start(program: str, work: str | None = None, roots: list[str] | None = None, match: list[str] | None = None,
           all_roots: bool = False, include_caches: bool = False, hash_limit: int = HASH_LIMIT, max_files: int = MAX_FILES,
-          force: bool = False, **kw) -> tuple[Session, SnapshotResult]:
-    """기록을 시작하고 변경 전 스냅샷(before)을 찍는다. 작업 폴더에 이미 기록이 있으면 force 가 필요하다."""
+          force: bool = False, info: ri.ProgramInfo | None = None, infer: bool = False, plan: ri.Inference | None = None,
+          version_info_fn=None, **kw) -> tuple[Session, SnapshotResult]:
+    """기록을 시작하고 변경 전 스냅샷(before)을 찍는다. 작업 폴더에 이미 기록이 있으면 force 가 필요하다.
+
+    infer=True(또는 plan 지정): 프로그램 정보(info, 없으면 이름만)로 훑을 폴더를 추정한다. roots 는 추정에 더해지는 직접 추가 폴더,
+    match 낱말은 폴더 이름 부분 일치 보강. 폴더를 하나도 못 찾으면 전체 훑기를 하지 않고 안내와 함께 RecordError(--all-roots 로 명시해야 전체 훑기).
+    화면은 먼저 record_infer.infer_folders 로 계획(plan)을 만들어 사용자가 add_roots/exclude_roots 로 고친 뒤 plan 으로 넘긴다.
+    """
     program = program.strip()
     if not program:
         raise RecordError("--program 에 프로그램 이름이 필요합니다")
@@ -224,15 +202,33 @@ def start(program: str, work: str | None = None, roots: list[str] | None = None,
         raise RecordError("--roots 폴더를 찾지 못했습니다: " + ", ".join(errorlog.tokenize_home(m) for m in missing)
                           + " (경로 철자와 폴더 존재 여부를 확인하세요)")
     if (wd / STATE_FILE).exists() and not force:
-        raise RecordError("이 작업 폴더에는 이미 기록이 있습니다. 이어서 하려면 `record snapshot`, 처음부터 다시 하려면 --force 를 쓰세요")
+        raise RecordError("이 작업 폴더에는 이미 기록이 있습니다. 이어서 하려면 `record snapshot`, 처음부터 다시 하려면 `record reset` 또는 --force 를 쓰세요")
+    use_infer = (infer or plan is not None) and not all_roots
+    if use_infer:
+        info = info or ri.ProgramInfo(program)
+        if plan is None:
+            plan = ri.infer_folders(info, documents_fn=kw.get("documents_fn"), version_info_fn=version_info_fn, extra_words=match)
+        if roots:
+            ri.add_roots(plan, list(roots))
+        if not plan.enabled():
+            tips = [f"  제외 후보: {t} — {w}" for t, w in plan.excluded[:5]]
+            raise RecordError("이 프로그램의 설정 폴더를 정보로 찾지 못했습니다. 전체 훑기는 자동으로 하지 않습니다. 폴더를 직접 지정(--roots)하거나 "
+                              "낱말을 추가(--match)하거나, 오래 걸려도 괜찮다면 --all-roots 를 명시하세요." + ("\n" + "\n".join(tips) if tips else ""))
     wd.mkdir(parents=True, exist_ok=True)
     if force:
         _archive_previous(wd)
-    state = {"version": 1, "program": program, "created": (kw.get("now") or datetime.now)().strftime("%Y-%m-%d"), "snapshots": [],
-             "scope": {"custom_roots": [standard_token(fs.plain_path_text(os.path.abspath(r))) for r in (roots or [])], "match": list(match or []),
-                       "all_roots": all_roots, "include_caches": include_caches, "hash_limit": hash_limit, "max_files": max_files}}
+    scope = {"custom_roots": [] if use_infer else [standard_token(fs.plain_path_text(os.path.abspath(r))) for r in (roots or [])],
+             "match": list(match or []), "all_roots": all_roots, "include_caches": include_caches, "hash_limit": hash_limit, "max_files": max_files}
+    if use_infer:
+        scope["infer"] = {"info": info.as_state(), "folders": [{"path": f.token, "reason": f.reason, "confidence": f.confidence,
+                                                                  "source": f.source, "enabled": f.enabled} for f in plan.folders]}
+    state = {"version": 1, "program": program, "created": (kw.get("now") or datetime.now)().strftime("%Y-%m-%d"), "snapshots": [], "scope": scope}
     s = Session(wd, state)
-    return s, snapshot(s, BEFORE, **kw)
+    res = snapshot(s, BEFORE, **kw)
+    if use_infer:
+        res.inferred = [f.as_dict() for f in plan.folders]
+        res.inferred_excluded = [{"path": t, "reason": w} for t, w in plan.excluded]
+    return s, res
 
 
 def snapshot(s: Session, label: str | None = None, cancel=None, progress=None, process_list_fn=None, documents_fn=None,
@@ -254,6 +250,18 @@ def snapshot(s: Session, label: str | None = None, cancel=None, progress=None, p
         roots, res.root_notes = s.roots(documents_fn)
         if not roots:
             raise RecordError("훑을 폴더가 없습니다(--roots 를 지정하거나 환경변수를 확인하세요)")
+        inf_sc = s.state["scope"].get("infer")
+        if inf_sc and kind != BEFORE:  # 시작 뒤에 새로 생긴 폴더가 있으면 알린다(이미 찍은 스냅샷과 섞이지 않게 훑지는 않는다)
+            try:
+                known = {f["path"].lower() for f in inf_sc["folders"]}
+                now_plan = ri.infer_folders(ri.ProgramInfo.from_state(inf_sc["info"]), documents_fn=documents_fn,
+                                            extra_words=s.state["scope"]["match"])
+                new = [f.token for f in now_plan.enabled() if f.token.lower() not in known]
+                if new:
+                    res.warnings.append("기록을 시작한 뒤 새로 생긴 설정 폴더가 있습니다(" + ", ".join(new[:5]) + "). 이번 기록에는 포함하지 않았습니다. "
+                                        "포함하려면 기록을 초기화(reset)하고 다시 시작하세요")
+            except Exception as e:  # noqa: BLE001 - 안내를 못 해도 스냅샷은 계속한다
+                errorlog.record(e, "설정 기록: 새 폴더 확인")
         prev = s.load_snap(s.snaps[-1]["label"]) if s.snaps else None
         kw = {} if hash_fn is None else {"hash_fn": hash_fn}
         snap = take_snapshot(label, roots, s.options(), prev, cancel, progress, clock, now, attr_getter, **kw)
@@ -264,7 +272,7 @@ def snapshot(s: Session, label: str | None = None, cancel=None, progress=None, p
         res.files, res.hashed, res.carried = len(snap.files), snap.hashed, snap.carried
         res.unreadable, res.cloud_skipped, res.links_skipped = snap.unreadable_count, snap.cloud_skipped, snap.links_skipped
         res.truncated = snap.truncated
-        res.warnings = list(snap.notes)
+        res.warnings = res.warnings + list(snap.notes)
         res.matched = list(snap.matched)
         if not snap.files:
             res.warnings.append("일치하는 파일이 하나도 없습니다. 프로그램을 한 번 실행한 적이 없거나 이름이 폴더와 다를 수 있습니다"
@@ -665,7 +673,8 @@ def render_status(s: Session) -> list[str]:
     st = s.state
     sc = st["scope"]
     lines = [f"프로그램: {st['program']} (시작 {st['created']})",
-             "범위: " + ("지정 폴더 " + ", ".join(sc["custom_roots"]) if sc["custom_roots"] else
+             "범위: " + (("프로그램 정보로 추정한 폴더 " + ", ".join(f["path"] for f in sc["infer"]["folders"] if f.get("enabled", True)))
+                       if sc.get("infer") else "지정 폴더 " + ", ".join(sc["custom_roots"]) if sc["custom_roots"] else
                        ("기본 루트 전체" if sc["all_roots"] else "기본 루트 중 이름이 맞는 폴더(" + ", ".join(match_words(st['program'], sc['match'])) + ")"))
              + (", 캐시 포함" if sc["include_caches"] else "") + f", 해시 상한 {fmt_bytes(sc['hash_limit'])}"]
     for i in s.snaps:

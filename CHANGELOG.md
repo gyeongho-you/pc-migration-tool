@@ -2,6 +2,9 @@
 
 형식은 최신순입니다. 버전은 git 태그(v0.1.0 ~ v0.3.4)와 맞춥니다.
 
+## Unreleased
+- 설정 기록 모드 후속(백엔드·CLI, 화면 변경 없음): 설치 프로그램 정보로 훑을 폴더 추정(`record_infer.py`: 표시 이름·게시자·설치 위치·실행 파일 버전 정보, 버전/연도 제거, 제조사 폴더 통째 수집 금지, 이름이 같을 때만 인정해 `Photoshop` 이 `Photoshop Elements` 에 걸리지 않음, 폴더별 이유·확신도, 못 찾으면 전체 훑기를 자동으로 하지 않음)과 `record start --from-installed/--exe/--no-infer`, 화면용 `add_roots`/`exclude_roots`/`start(plan=...)`, 초기화 `record reset`(이전 기록을 지우지 않고 번호 `.bak` 으로 보관, `start --force` 와 공유). `detect.Program` 에 선택 필드(`display_icon`, `uninstall_string`, `install_date`)를 더하되 설정 묶음(`registry.json`)에는 담지 않음.
+
 ## v0.3.4 (2026-10-30)
 - 규칙 추가(초안, 근거는 각 규칙 `notes`): `photoshop`(`%APPDATA%\Adobe\Adobe Photoshop <버전>\Adobe Photoshop <버전> Settings`), `illustrator`(`%APPDATA%\Adobe\Adobe Illustrator <버전> Settings`), `zwcad`(경로 근거가 없어 감지와 수동 안내만, 경로는 '확인 필요'). Adobe 는 로그인·구독·플러그인을 복원하지 않고 경고로만 안내(`selftransfer` 의 `adobe_cc` 와 역할 분리). `autocad` 규칙은 AutoCAD LT(`AutoCAD LT 2015` 등)가 같은 감지 패턴과 `AutoCAD *` 경로 패턴에 이미 포함됨을 notes/테스트로 확인(v7). 규칙 22개 → 25개. 규칙이 없는 3DF Zephyr/DJI Terra/ArchiOffice/GPU-Z 는 `docs/program-rules-todo.md` 에 확인 절차만 정리. 화면(GUI) 변경 없음.
 - `pcmigrate record` 설정 기록 모드 추가(`start`/`snapshot`/`diff`/`rule-draft`/`status`): 규칙 없는 프로그램의 설정 파일을 변경 전·기준선·변경 후 스냅샷(경로, 크기, 시각, SHA-256 만 저장, 내용은 저장 안 함) 비교로 찾고 확신도(라운드 누적)와 규칙 JSON 초안을 만든다. 기준선에서 바뀐 파일은 제외, 시각만 바뀐 파일은 후보에서 제외, 첫 스냅샷만 20MB 이하 파일을 해시하고 이후에는 바뀐 파일만 해시. 링크/정션·OneDrive 클라우드 전용 파일 건너뜀, 읽지 못한 항목 격리·보고, 긴 경로, 취소/오류 시에도 보고서 저장, 실행 중 프로그램 경고, 경로는 환경변수 표기. 파일이 안 바뀌면 레지스트리 저장 안내. 화면(GUI) 변경 없음. 리뷰 수정: 작업 폴더 자기 제외(Windows 긴 경로 접두 비교 오류), `--roots` 로 루트/앱 폴더를 줄 때 루트 통째 수집 방지와 `%APPDATA%` 토큰 일반화, 폴더 묶기 256MB 재귀 검사와 중첩 폴더 정리, 기준선에서 처음 생성된 설정 파일 승격과 '확정 못 함'/'잘려서 판단 불가' 안내 분리, 오류 로그의 사용자 이름 치환(이스케이프·긴 경로 접두 형태 포함), 홈 밖 경로 초안 쉬운 안내, `--output` 기존 파일 `.bak` 보관과 id 중복 경고, `diff --json` 순수 JSON, 제조사 낱말 단독 매칭 금지와 매칭 폴더 표시, 사용자 지정 루트의 잡음 폴더 기준 완화, 없는 `--roots` 오류, unreadable 합산 수정, 삭제 파일 참고 표시, `start --force` 이전 산출물 `.bak` 보관.
