@@ -1,7 +1,7 @@
 {
   "id": "sketchup",
   "name": "SketchUp",
-  "version": "4",
+  "version": "5",
   "detect": {
     "display_name_patterns": [
       "SketchUp Pro",
@@ -33,9 +33,11 @@
     "공식 이전 수단: 구 PC의 SketchUp 에서 파일 > 환경설정 마이그레이션(Migrate Preferences)을 사용하세요. 단축키는 환경설정 > 단축키에서 내보낸 .dat 파일로 옮깁니다(Windows 한정).",
     "확장 프로그램(Extension Warehouse)은 파일 복사 후 동작하지 않을 수 있습니다. 신 PC에서 재설치/재로그인하세요.",
     "신 PC의 SketchUp 버전이 다르면 플러그인이 호환되지 않을 수 있습니다. 버전을 맞추세요.",
-    "자동 실행되는 플러그인/매크로 파일(.rb)은 신뢰하는 설정 묶음에서만 복원하세요. 출처를 모르는 묶음의 플러그인은 다음 실행 때 코드가 실행될 수 있습니다."
+    "자동 실행되는 플러그인/매크로 파일(.rb)은 신뢰하는 설정 묶음에서만 복원하세요. 출처를 모르는 묶음의 플러그인은 다음 실행 때 코드가 실행될 수 있습니다.",
+    "플러그인 DLL 본체는 보안상 복원되지 않으므로 신 PC 에 플러그인을 따로 설치해야 합니다. 설정/등록 파일(.rb)만 복원되면 플러그인이 없어 로드 오류가 날 수 있습니다.",
+    "이 규칙은 신 PC 에 설치된 버전을 확인하지 않습니다. 신 PC 에 없는 버전(SketchUp 2020 등)의 설정 폴더도 만들어질 수 있으니, 쓰지 않는 버전 폴더는 확인 후 직접 지우세요(알려진 한계)."
   ],
-  "notes": "근거 등급: 플러그인 경로=포럼(SketchUp 포럼 보고, 공식 문서 아님: %APPDATA%\\SketchUp\\SketchUp <년도>\\SketchUp\\Plugins). 공식 이전(Migrate Preferences, 단축키 .dat)=확실. 확인 필요: 템플릿(.skp) 경로, 설치 경로 %ProgramFiles%\\SketchUp, 제품 표시 이름('SketchUp Pro 20xx' 가정). 'V-Ray for SketchUp' 등 플러그인 이름에 오탐하지 않도록 'SketchUp' 단독 패턴은 쓰지 않음.",
+  "notes": "근거 등급: 플러그인 경로=포럼(SketchUp 포럼 보고, 공식 문서 아님: %APPDATA%\\SketchUp\\SketchUp <년도>\\SketchUp\\Plugins). 공식 이전(Migrate Preferences, 단축키 .dat)=확실. 확인 필요: 템플릿(.skp) 경로, 설치 경로 %ProgramFiles%\\SketchUp, 제품 표시 이름('SketchUp Pro 20xx' 가정). 'V-Ray for SketchUp' 등 플러그인 이름에 오탐하지 않도록 'SketchUp' 단독 패턴은 쓰지 않음. [v5] 알려진 한계(감지): install_paths 만으로도 감지되므로 %ProgramFiles%\\SketchUp 폴더만 남아 있거나 같은 제조사의 다른 제품만 설치된 PC 에서도 이 규칙이 감지될 수 있습니다(확인 필요). 감지되면 실제 설치 여부를 확인하세요.",
   "exclude": [
     "*.lic"
   ]

@@ -888,6 +888,8 @@ python -m pcmigrate discover --output-selection <폴더>\selection.json
 
 **보안상 복원하지 않는 형식**: 실행/스크립트/라이브러리 형식(`.exe .dll .js .py .bat .lnk .msi .jar .xll .chm` 등), 시작 프로그램/XLSTART 폴더, 셸·SSH 시작 설정, 홈의 `.npmrc/.wslconfig/.condarc/.kube/config/.docker/config.json` 등은 `export` 때 같은 판정으로 패키지에서 빼고(경고와 `manifest.skipped` 의 `denied`), `import` 때는 **패키지 전체를 막지 않고 그 파일만 "복원 안 함(denied)"** 으로 표시한 채 나머지를 정상 복원합니다(결과/리포트에 항목별로 남고 실패로 세지 않습니다. 변조된 패키지가 이 위치에 쓰려 해도 쓰지 않습니다). 규칙이 마지막 경로 패턴에 `*.dll` 처럼 그 확장자를 직접 적어 둔 경우에만 그 규칙에서 허용합니다. 예: QGIS 플러그인의 `.py` 는 복원되지 않으므로 신 PC 에서 플러그인 관리자로 다시 설치하세요.
 
+**가져오기에서 건너뛰는 항목과 전체 거부(stage68)**: 이 PC 에 없는 환경변수 위치(예: OneDrive 없는 PC 의 `%OneDrive%\Documents`)나 규칙 `exclude`/라이선스에 걸리는 옛 패키지의 파일은 패키지 전체를 막지 않고 그 항목만 '복원 안 함'으로 남기며, 결과에 이유가 나옵니다(위치를 지정하려면 `pcmigrate --env ONEDRIVE=D:\OneDrive import …`). 경로 탈출·알 수 없는 규칙 id·허용 외 위치는 전과 같이 패키지 전체를 거부합니다. 복원이 중간에 멈춰도 이미 쓴 파일의 복원 기록(`undo-import`)과 결과 리포트는 남습니다. 규칙 경로의 첫 요소는 `%APPDATA% %LOCALAPPDATA% %USERPROFILE% %PROGRAMDATA% %OneDrive% %OneDriveCommercial%` 만 쓸 수 있고, 규칙은 신 PC 의 설치 버전을 확인하지 않으므로 없는 버전의 설정 폴더가 만들어질 수 있습니다(자세한 한계는 `docs/package-integrity.md`).
+
 경고 전용 프로그램의 설정은 각 프로그램의 자체 내보내기/동기화 기능으로 옮기세요(체크리스트에 안내가 나옵니다). 위 표의 근거 등급(원문/요약/미검증)은 각 규칙 파일의 `notes` 에 있습니다. 규칙이 아직 없는 프로그램(3DF Zephyr, DJI Terra, ArchiOffice, GPU-Z 등)의 설정 위치 확인 절차는 `docs/program-rules-todo.md` 에 있습니다.
 
 **프로그램 설치는 안내만 합니다.** `export` 는 설치 목록(`winget export` 와 레지스트리)을 패키지에 담고, 신 PC 의 `checklist --package` 와 GUI 체크 목록이

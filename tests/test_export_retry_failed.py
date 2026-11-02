@@ -22,7 +22,7 @@ NOW = lambda: __import__("datetime").datetime(2030, 1, 1, tzinfo=__import__("dat
 
 def rule_data(exclude=()):
     return {"id": "demo", "name": "Demo", "version": "7", "detect": {"display_name_patterns": ["Demo"]},
-            "paths": [{"path": "%ROAM%\\Vendor\\Demo\\Support", "dest": "demo/support", "kind": "dir"}],
+            "paths": [{"path": "%APPDATA%\\Vendor\\Demo\\Support", "dest": "demo/support", "kind": "dir"}],
             "exclude": list(exclude), "manual_warnings": []}
 
 
@@ -38,7 +38,7 @@ def env(tmp_path):
     rules.mkdir()
     (rules / "demo.json").write_text(json.dumps(rule_data()), encoding="utf-8")
     return SimpleNamespace(tmp=tmp_path, old=old, sup=sup, out=tmp_path / "out" / "p.zip", rules_dir=rules,
-                           expand=lambda s: s.replace("%ROAM%", str(old)),
+                           expand=lambda s: s.replace("%APPDATA%", str(old)),
                            rule=parse_rule(rule_data()))
 
 
@@ -224,16 +224,16 @@ def test_extras_are_restored_from_manifest(env):
     folder.mkdir(parents=True)
     (folder / "a.ini").write_bytes(b"a" * 100)
     (folder / "b.ini").write_bytes(b"b" * 100)
-    ex = SimpleNamespace(root="%APPDATA%", rel="Tool", path=folder, is_dir=True)
+    ex = SimpleNamespace(root="%LOCALAPPDATA%", rel="Tool", path=folder, is_dir=True)  # stage68: 규칙 경로는 허용 환경변수만 쓰므로 %ROAM% 대신 %APPDATA%, 별도 루트는 LOCALAPPDATA
 
     def expand(s):
-        return s.replace("%ROAM%", str(env.old)).replace("%APPDATA%", str(root))
+        return s.replace("%APPDATA%", str(env.old)).replace("%LOCALAPPDATA%", str(root))
     with ByteLock(folder / "b.ini", 2):
         m0 = export_package([env.rule], env.out, [], None, expand=expand, extras=[ex], now=NOW)
     assert len(m0["failed"]) == 1
     m = retry_failed_export(env.out, [env.rule], expand, now=NOW)
     assert m["failed"] == [] and any(f["rule"] == "extra" and f["rel"] == "Tool/b.ini" for f in m["files"])
-    assert verify_package(env.out)[1] == [] and m["extras"] == [{"root": "%APPDATA%", "rel": "Tool"}]
+    assert verify_package(env.out)[1] == [] and m["extras"] == [{"root": "%LOCALAPPDATA%", "rel": "Tool"}]
 
 
 def test_nothing_to_retry_leaves_package_alone(env):

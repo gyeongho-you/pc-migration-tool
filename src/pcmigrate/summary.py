@@ -104,15 +104,23 @@ def import_lines(r, package: str, report=None) -> list[str]:
         counts: dict[str, int] = {}
         for x in report.results:
             counts[x.status] = counts.get(x.status, 0) + 1
-        lines = [f"복원을 마쳤습니다: {pkg}", f"- {_counts_line(counts, _IMPORT_LABELS)}"]
+        head = "복원이 중간에 멈췄습니다(여기까지의 결과)" if r.mode == "interrupted" else "복원을 마쳤습니다"
+        lines = [f"{head}: {pkg}", f"- {_counts_line(counts, _IMPORT_LABELS)}"]
     else:
         lines = [f"{'미리보기' if r.mode == 'dry-run' else '복원 전 확인'}(아무것도 쓰지 않았습니다): {pkg}",
                  f"- {_counts_line(r.summary(), _IMPORT_LABELS)}"]
-    if denied:
-        lines.append(f"- 보안상 복원하지 않는 형식 {len(denied)}개(나머지는 정상 복원됩니다):")
-        lines += [f"    · {fs.plain_path_text(it['target'])}" for it in denied[:5]]
-        if len(denied) > 5:
-            lines.append(f"    … 외 {len(denied) - 5}개")
+    sec = [it for it in denied if not it.get("skip_kind")]
+    if sec:
+        lines.append(f"- 보안상 복원하지 않는 형식 {len(sec)}개(나머지는 정상 복원됩니다):")
+        lines += [f"    · {fs.plain_path_text(it['target'])}" for it in sec[:5]]
+        if len(sec) > 5:
+            lines.append(f"    … 외 {len(sec) - 5}개")
+    legacy = [it for it in denied if it.get("skip_kind")]
+    if legacy:  # 이 PC 환경이나 규칙 때문에 그 항목만 건너뜀(패키지 전체는 정상 복원)
+        lines.append(f"- 이 PC 환경/규칙 때문에 건너뛴 항목 {len(legacy)}개(나머지는 정상 복원됩니다):")
+        lines += [f"    · {fs.plain_path_text(it['target'])} — {it['error'].removeprefix('복원 안 함: ')}" for it in legacy[:5]]
+        if len(legacy) > 5:
+            lines.append(f"    … 외 {len(legacy) - 5}개(전체는 --json 으로 확인)")
     lines += program_table_lines(plan.programs)
     lines += coverage.lines(plan.manifest)
     lines += install_lines(r, report)

@@ -5,6 +5,7 @@
 from __future__ import annotations
 import json
 import os
+import re
 import zipfile
 from pathlib import Path
 
@@ -17,6 +18,7 @@ from .package_verify import verify_package
 
 
 WINGET_ENTRY = "programs/winget.json"
+_ID_OK = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$")  # 실제 id 에 쓰이는 '+'(예: Notepad++.Notepad++)까지만 허용. 공백/따옴표/셸 문자는 거부
 MAX_WINGET_BYTES = 64 * 1024 * 1024
 
 
@@ -38,10 +40,35 @@ def _read_winget_raw(path: Path) -> bytes:
             raise PackageError("패키지의 winget 목록이 비정상적으로 큽니다. 안전하지 않은 패키지일 수 있습니다.")
         raw = zf.read(WINGET_ENTRY)
     try:
-        json.loads(raw.decode("utf-8-sig"))
+        data = json.loads(raw.decode("utf-8-sig"))
     except (ValueError, RecursionError):
         raise PackageError("패키지의 winget 목록이 올바른 JSON 이 아닙니다. 쓰지 않았습니다.") from None
+    bad = winget_schema_problem(data)
+    if bad:  # winget import 가 이 파일을 그대로 읽으므로 모양과 id 형식을 엄격히 확인한다(M6)
+        raise PackageError(f"패키지의 winget 목록이 올바른 형식이 아닙니다({bad}). 쓰지 않았습니다.")
     return raw
+
+
+def winget_schema_problem(data: object) -> str:
+    """winget export JSON 의 최소 스키마 검사. 문제 없으면 빈 문자열, 있으면 짧은 사유."""
+    if not isinstance(data, dict):
+        return "최상위가 객체가 아님"
+    sources = data.get("Sources", [])
+    if not isinstance(sources, list):
+        return "Sources 가 목록이 아님"
+    for src in sources:
+        if not isinstance(src, dict) or not isinstance(src.get("Packages", []), list):
+            return "Sources 항목 형식 오류"
+        for pkg in src.get("Packages", []):
+            if not isinstance(pkg, dict):
+                return "Packages 항목 형식 오류"
+            pid = pkg.get("PackageIdentifier")
+            if not isinstance(pid, str) or not _ID_OK.fullmatch(pid):
+                return f"PackageIdentifier 형식 오류: {str(pid)[:40]!r}"
+            ver = pkg.get("Version")
+            if ver is not None and not isinstance(ver, (str, int, float)):
+                return "Version 형식 오류"
+    return ""
 
 
 def list_winget_packages(path: Path) -> list[dict]:

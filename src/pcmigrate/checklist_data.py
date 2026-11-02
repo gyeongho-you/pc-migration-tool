@@ -7,6 +7,22 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+# 패키지로 복원한 설정 파일 안에는 구 PC 의 경로(사용자 이름 포함)가 그대로 들어 있을 수 있다. 도구는 파일 내용을 바꾸지 않으므로 알리기만 한다(M7).
+OLD_PATH_WARNING_NAME = "공통(복원한 설정 파일)"
+OLD_PATH_WARNING = ("설정 파일 안에 구 PC 의 경로(사용자 이름 포함)가 들어 있을 수 있습니다. 최근 파일 목록·템플릿/라이브러리 경로가 "
+                    "신 PC 와 맞는지 확인하세요(도구는 파일 내용을 바꾸지 않습니다).")
+PROGRAMS_UNVERIFIED_WARNING = ("이 패키지의 프로그램 목록(programs/*)은 변조 여부를 확인할 수 없는 옛 형식입니다. 출처를 아는 패키지인지 확인하세요.")
+
+
+def common_warning_pairs(manifest: dict) -> list[tuple[str, list[str]]]:
+    """패키지 manifest 에 담긴 파일이 있으면 규칙 공통 경고(M7), 프로그램 목록 해시가 없는 옛 패키지면 신뢰 경고를 돌려준다."""
+    items = []
+    if manifest.get("files"):
+        items.append(OLD_PATH_WARNING)
+    if manifest.get("_programs_unverified"):
+        items.append(PROGRAMS_UNVERIFIED_WARNING)
+    return [(OLD_PATH_WARNING_NAME, items)] if items else []
+
 # --------------------------------------------------------------------------- 공통(자동 복원 불가) 경고
 # phase: "login" = 2. 로그인·인증, "data" = 3. 데이터 복사/기타
 # always=True 이면 감지 여부와 무관하게 표시(거의 모든 PC 에 해당).

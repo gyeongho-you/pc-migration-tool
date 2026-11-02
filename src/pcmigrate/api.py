@@ -23,7 +23,7 @@ from typing import Callable
 from .cancel import Cancelled, CancelToken  # noqa: F401  (GUI 가 api 에서 가져다 쓴다)
 from . import coverage
 from .settings_filter import DEFAULT_EXTRA_MODE, EXTRA_MODE_ALL, EXTRA_MODES
-from .checklist import (Checklist, build_checklist, bundle_reason, load_package_programs,
+from .checklist import (Checklist, PackageProgramsError, build_checklist, bundle_reason, load_package_programs,
                         manifest_warning_pairs, render as render_checklist, rule_warning_pairs)
 from .copier import Report, copy_tree
 from .detect import (Program, match_rules, parse_winget_export, read_registry_programs,
@@ -420,7 +420,11 @@ def run_checklist(rules_dir: str | Path, *, package: str | Path | None = None, s
         manifest, problems = verify_package(Path(package))
         if manifest is None or problems:
             raise ApiError("패키지 검증 실패: " + "; ".join(problems[:3]))
-        registry, winget, list_text = load_package_programs(Path(package))
+        try:
+            registry, winget, list_text = load_package_programs(Path(package))
+        except (ValueError, OSError, zipfile.BadZipFile) as e:  # 변조/손상된 programs/*.json 은 traceback 대신 알림(M6)
+            raise ApiError(str(e) if isinstance(e, PackageProgramsError) else
+                           f"패키지의 프로그램 목록을 읽을 수 없습니다({type(e).__name__}). 구 PC 에서 설정 묶음 파일을 다시 만들어 주세요.") from e
         pairs = manifest_warning_pairs(manifest)
         rule_ids = [r["id"] for r in manifest.get("rules", [])]
         all_rules = load_rules_checked(rules_dir)  # 규칙 폴더가 없거나 비어 있으면 조용히 넘어가지 않고 오류로 알린다
@@ -459,7 +463,8 @@ def run_install_check(package: str | Path, *, deps: Deps | None = None,
     try:
         registry, winget, list_text = load_package_programs(Path(package))
     except (ValueError, KeyError, TypeError, AttributeError, RecursionError, zipfile.BadZipFile, OSError) as e:
-        raise ApiError(f"패키지의 프로그램 목록을 읽을 수 없습니다({type(e).__name__}). 구 PC 에서 설정 묶음 파일을 다시 만들어 주세요.") from e
+        raise ApiError(str(e) if isinstance(e, PackageProgramsError) else
+                       f"패키지의 프로그램 목록을 읽을 수 없습니다({type(e).__name__}). 구 PC 에서 설정 묶음 파일을 다시 만들어 주세요.") from e
     _phase(progress_info, "list", "이 PC 에 설치된 프로그램 목록을 읽는 중입니다…")
     state = new_state if new_state is not None else read_new_state(deps.registry, deps.winget_export, deps.winget_list)
     _phase(progress_info, "match", "묶음의 프로그램과 비교하는 중입니다…")
@@ -808,7 +813,7 @@ def run_export_retry(rules_dir: str | Path, output: str | Path, *, deps: Deps | 
 
 @dataclass
 class ImportResult:
-    """mode: blocked(검증 실패) / dry-run / needs-confirm(--yes 없음) / needs-allow-extra / applied"""
+    """mode: blocked(검증 실패) / dry-run / needs-confirm(--yes 없음) / needs-allow-extra / applied / interrupted(복원 중 취소·예외: 부분 결과, 예외의 partial_result)"""
     plan: ImportPlan
     mode: str
     n_extra: int
@@ -919,7 +924,11 @@ def run_import(package: str | Path, rules_dir: str | Path, *, dry_run: bool = Fa
         return ImportResult(plan, "dry-run" if dry_run else "needs-confirm", n_extra, only=only, skip=skip)
     if n_extra and not allow_extra:
         return ImportResult(plan, "needs-allow-extra", n_extra, only=only, skip=skip)
-    report = apply_import(Path(package), plan, progress_info) if progress_info else apply_import(Path(package), plan)
+    try:
+        report = apply_import(Path(package), plan, progress_info) if progress_info else apply_import(Path(package), plan)
+    except BaseException as e:  # 취소/예외로 중간에 멈춰도 이미 쓴 파일의 되돌리기 기록과 부분 결과를 남긴다(M1)
+        _save_partial_import(e, package, plan, only, skip, n_extra, record_dir)
+        raise
     report.meta["programs"] = plan.programs
     res = ImportResult(plan, "applied", n_extra, report, only=only, skip=skip)
     try:  # 되돌리기의 근거: 복원 기록. 저장하지 못해도 이미 끝난 복원은 성공으로 두고 알린다
@@ -929,6 +938,28 @@ def run_import(package: str | Path, rules_dir: str | Path, *, dry_run: bool = Fa
     except OSError as e:
         res.record_error = f"{type(e).__name__}: {e.strerror or e}"
     return res
+
+
+def _save_partial_import(e: BaseException, package, plan, only, skip, n_extra, record_dir) -> None:
+    """복원이 중간에 멈췄을 때: 여기까지의 결과(e.partial_result, mode='interrupted')를 예외에 붙이고, 복사한 파일이 있으면 복원 기록을 저장한다.
+    기록 저장 실패는 원래 예외를 가리지 않는다(e.record_error 로만 알린다). 취소(Cancelled)가 아닌 예외는 오류 로그에도 남긴다."""
+    partial = getattr(e, "partial_report", None)
+    if partial is None:
+        return
+    partial.meta["programs"] = plan.programs
+    partial.meta["interrupted"] = type(e).__name__
+    res = ImportResult(plan, "interrupted", n_extra, partial, only=only, skip=skip)
+    try:
+        rec = import_record.build_record(package, plan, partial)
+        if rec["entries"]:
+            res.record_path = str(import_record.write_record(rec, record_dir))
+            partial.meta["import_record"] = res.record_path
+    except OSError as oe:
+        res.record_error = f"{type(oe).__name__}: {oe.strerror or oe}"
+    if not isinstance(e, (Cancelled, KeyboardInterrupt)):
+        from . import errorlog
+        errorlog.record(e, "복원 중 예외로 중단")
+    e.partial_result = res  # type: ignore[attr-defined]
 
 
 def _tokens(v) -> list[str]:

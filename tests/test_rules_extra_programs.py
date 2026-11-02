@@ -192,7 +192,10 @@ def test_roundtrip_lumion_and_unexpanded_var_rejected_on_restore(rules, tmp_path
     def expand_new(s):
         return s.replace("%USERPROFILE%", str(new))
     plan = plan_import(out, list(rules.values()), expand_new)
-    assert any("환경변수" in p for p in plan.problems)
+    # stage68(H1): 패키지 전체를 막지 않고, 환경변수를 확장할 수 없는 항목만 '복원 안 함'(사유와 --env 안내 포함)으로 남긴다
+    assert plan.problems == []
+    env_denied = [it for it in plan.items if it.get("skip_kind") == "env"]
+    assert env_denied and all(it["status"] == "denied" and "환경변수" in it["error"] and "--env" in it["error"] for it in env_denied)
     assert not (tmp_path / "%OneDrive%").exists() and not Path("%OneDrive%").exists()
     assert not new.exists()
 

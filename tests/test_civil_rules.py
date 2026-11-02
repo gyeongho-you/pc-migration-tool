@@ -211,8 +211,9 @@ def test_qgis_collects_default_profile_only_and_excludes_cache_and_auth_db(rules
     items, skipped = collect_items(rules["qgis"], env.expand)
     got = arcs(items)
     # 19a: .py 는 복원 때 거부되는 형식이라 내보낼 때도 같은 판정으로 빼고(denied) 경고한다(플러그인은 QGIS 에서 다시 설치)
-    assert got == ["data/qgis/profile-default/default/QGIS/QGIS3.ini"]
-    assert sum("제외" in s["reason"] for s in skipped) >= 4  # auth.db, tmp, cache, pyc
+    # stage68(M2): QGIS3.ini 는 저장된 연결 비밀번호가 평문으로 들어갈 수 있어 규칙이 기본 복원 대상에서 뺀다
+    assert got == []
+    assert sum("제외" in s["reason"] for s in skipped) >= 5  # QGIS3.ini, auth.db, tmp, cache, pyc
     assert any(s.get("denied") and s["path"].endswith("__init__.py") for s in skipped)
     text = " ".join(rules["qgis"].manual_warnings)
     assert "플러그인" in text and "용량" in text and "qgis-auth.db" in text

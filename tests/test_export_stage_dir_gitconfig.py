@@ -20,7 +20,7 @@ NOW = lambda: datetime(2030, 1, 1)  # noqa: E731
 
 def make_rule(**over):
     data = {"id": "demo", "name": "Demo", "version": "7", "detect": {"display_name_patterns": ["Demo"]},
-            "paths": [{"path": "%ROAM%\\Vendor\\Demo", "dest": "demo/cfg", "kind": "dir"}],
+            "paths": [{"path": "%APPDATA%\\Vendor\\Demo", "dest": "demo/cfg", "kind": "dir"}],
             "manual_warnings": ["재로그인 필요"]}
     data.update(over)
     return parse_rule(data)
@@ -34,7 +34,7 @@ def env(tmp_path):
     (demo / "a.cfg").write_bytes(b"a-config")
     (demo / "big.dat").write_bytes(b"B" * 200)
     return SimpleNamespace(tmp=tmp_path, old=old, demo=demo, out=tmp_path / "out" / "pkg.zip",
-                           expand=lambda s: s.replace("%ROAM%", str(old)))
+                           expand=lambda s: s.replace("%APPDATA%", str(old)))
 
 
 def export(env, **kw):
@@ -148,7 +148,7 @@ def test_stage_on_output_drive_still_counts_biggest_file_there(env, monkeypatch)
 
 def test_api_run_export_passes_stage_dir_only_when_given(env, monkeypatch):
     from pcmigrate import envpaths
-    monkeypatch.setattr(envpaths, "expand_env", lambda s: s.replace("%ROAM%", str(env.old)))
+    monkeypatch.setattr(envpaths, "expand_env", lambda s: s.replace("%APPDATA%", str(env.old)))
     patch_pkg(monkeypatch, "expand_env", envpaths.expand_env)
     seen = {}
 
@@ -224,7 +224,7 @@ def test_gitconfig_restore_allowed_with_warning_in_plan_and_report_meta(git_env)
 
 def test_no_gitconfig_no_warning(env):
     export(env)
-    plan = plan_import(env.out, [make_rule()], lambda s: s.replace("%ROAM%", str(env.tmp / "n")))
+    plan = plan_import(env.out, [make_rule()], lambda s: s.replace("%APPDATA%", str(env.tmp / "n")))
     assert plan.git_config_warning == ""
     rep = apply_import(env.out, plan)
     assert "git_config_warning" not in rep.meta and "git_config_warning" not in rep.to_dict()

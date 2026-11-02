@@ -14,7 +14,7 @@ import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .checklist_data import (BUNDLE_PATTERNS, BUNDLE_REGEX, COMMON_ITEMS, KNOWN_APPS,
+from .checklist_data import (common_warning_pairs, BUNDLE_PATTERNS, BUNDLE_REGEX, COMMON_ITEMS, KNOWN_APPS,
                              LOGIN_KEYWORDS, CommonItem)
 from .copier import _backup_path
 from .fs import long_path
@@ -507,21 +507,44 @@ def rule_warning_pairs(rules: list[Rule]) -> list[tuple[str, list[str]]]:
 
 
 def manifest_warning_pairs(manifest: dict) -> list[tuple[str, list[str]]]:
-    return [(w.get("name", ""), list(w.get("items", []))) for w in manifest.get("manual_warnings", [])]
+    return [(w.get("name", ""), list(w.get("items", []))) for w in manifest.get("manual_warnings", [])] + common_warning_pairs(manifest)
+
+
+class PackageProgramsError(ValueError):
+    """패키지의 프로그램 목록(programs/*)이 손상/변조되어 읽을 수 없음(M6). 메시지는 사용자에게 그대로 보여도 된다."""
+
+
+def _str_field(d: dict, key: str) -> str:
+    v = d.get(key, "")
+    return v if isinstance(v, str) else ("" if v is None else str(v))
 
 
 def load_package_programs(path: Path) -> tuple[list[Program], list[Program], str | None]:
-    """패키지 zip 의 registry.json / winget.json / winget-list.txt 를 읽는다(없으면 빈 값)."""
+    """패키지 zip 의 registry.json / winget.json / winget-list.txt 를 읽는다(없으면 빈 값).
+
+    모양이 올바르지 않으면 PackageProgramsError. 항목이 객체가 아니거나 이름이 비어 있으면 건너뛰고, 이름/버전/발행자가 문자열이 아니면 문자열로 바꾼다."""
     registry: list[Program] = []
     winget: list[Program] = []
     list_text: str | None = None
-    with zipfile.ZipFile(path) as zf:
-        names = set(zf.namelist())
-        if "programs/registry.json" in names:
-            for d in json.loads(zf.read("programs/registry.json").decode("utf-8")):
-                registry.append(Program(d.get("name", ""), d.get("version", ""), d.get("publisher", "")))
-        if "programs/winget.json" in names:
-            winget = parse_winget_export(zf.read("programs/winget.json").decode("utf-8-sig"))
-        if "programs/winget-list.txt" in names:
-            list_text = zf.read("programs/winget-list.txt").decode("utf-8", errors="replace")
+    try:
+        with zipfile.ZipFile(path) as zf:
+            names = set(zf.namelist())
+            if "programs/registry.json" in names:
+                data = json.loads(zf.read("programs/registry.json").decode("utf-8"))
+                if not isinstance(data, list):
+                    raise PackageProgramsError("패키지의 프로그램 목록(registry.json)이 올바른 형식이 아닙니다. 구 PC 에서 설정 묶음 파일을 다시 만들어 주세요.")
+                for d in data:
+                    if not isinstance(d, dict):
+                        continue
+                    name = _str_field(d, "name")
+                    if name:
+                        registry.append(Program(name, _str_field(d, "version"), _str_field(d, "publisher")))
+            if "programs/winget.json" in names:
+                winget = parse_winget_export(zf.read("programs/winget.json").decode("utf-8-sig"))
+            if "programs/winget-list.txt" in names:
+                list_text = zf.read("programs/winget-list.txt").decode("utf-8", errors="replace")
+    except PackageProgramsError:
+        raise
+    except (ValueError, KeyError, TypeError, AttributeError, RecursionError, zipfile.BadZipFile, OSError) as e:
+        raise PackageProgramsError(f"패키지의 프로그램 목록을 읽을 수 없습니다({type(e).__name__}). 구 PC 에서 설정 묶음 파일을 다시 만들어 주세요.") from e
     return registry, winget, list_text
