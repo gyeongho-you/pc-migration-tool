@@ -144,11 +144,25 @@ def check_path_forms(**paths: str | None) -> tuple[list[str], list[str]]:
     return errors, notes
 
 
-def load_rules_checked(rules_dir: str | Path) -> list[Rule]:
+def load_rules_checked(rules_dir: str | Path, errors: list[str] | None = None) -> list[Rule]:
+    """규칙 폴더를 읽는다. 규칙 파일 하나가 잘못돼도 그 규칙만 건너뛰고 나머지는 쓴다(건너뛴 사유는 errors 에 덧붙이고, 오류 로그와 표준 오류에도 남긴다).
+    폴더가 없거나 읽을 수 있는 규칙이 하나도 없으면 ApiError. check-rules 는 errors 를 받아 오류로 보고한다."""
+    bad: list[str] = []
     try:
-        return load_rules(Path(rules_dir))
+        rules = load_rules(Path(rules_dir), errors=bad)
     except RuleError as e:
         raise ApiError(f"규칙 오류: {e}") from e
+    if bad:
+        from . import errorlog
+        for msg in bad:
+            errorlog.record(RuleError(msg), "규칙 파일 건너뜀")
+        if errors is not None:
+            errors.extend(bad)
+        else:
+            print(f"[주의] 읽을 수 없는 규칙 파일 {len(bad)}개를 건너뛰고 나머지 규칙만 씁니다(pcmigrate check-rules 로 확인):", file=sys.stderr)
+            for msg in bad[:5]:
+                print(f"  - {msg}", file=sys.stderr)
+    return rules
 
 
 def load_self_transfer_checked(folder: str | Path | None = None) -> list:

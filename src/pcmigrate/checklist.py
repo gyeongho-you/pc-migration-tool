@@ -18,7 +18,7 @@ from .checklist_data import (common_warning_pairs, BUNDLE_PATTERNS, BUNDLE_REGEX
                              LOGIN_KEYWORDS, CommonItem)
 from .copier import _backup_path
 from .fs import long_path
-from .detect import DEFAULT_LOCALE, Program, parse_winget_export, winget_install_command
+from .detect import DEFAULT_LOCALE, Program, parse_winget_export, safe_install_command
 from .rules import Rule
 
 WINGET_IMPORT_GUIDE: tuple[str, ...] = (
@@ -378,8 +378,12 @@ def build_checklist(rule_warnings: list[tuple[str, list[str]]], registry: list[P
             cl.winget_auto.append(f"{p.name} — winget import 로 자동 설치({wid}, {why}; "
                                   + (f"구 PC 버전 {ver}" if ver else NO_VERSION_TEXT) + ")")
         for p, wid in cls.winget_cmd:  # 이 항목은 묶음 winget 목록에 없어 winget 이 기록한 버전이 없다(레지스트리 표기는 winget 버전과 다를 수 있어 --version 은 붙이지 않는다)
+            cmd = safe_install_command(wid, '', locale)
+            if cmd is None:  # 한 항목의 id/로캘 문제로 체크리스트 전체를 멈추지 않는다
+                cl.winget_cmd.append(f"{p.name} — winget id({wid!r}) 또는 로캘 형식이 올바르지 않아 설치 명령을 만들지 못했습니다(수동으로 설치하세요)")
+                continue
             cl.winget_cmd.append(f"{p.name} — 내보낸 winget 목록에 없음. 신 PC에서 "
-                                 f"`{winget_install_command(wid, '', locale)}` 로 설치(대표 앱 표 기준, 한글판 등 언어는 --locale 로 지정, "
+                                 f"`{cmd}` 로 설치(대표 앱 표 기준, 한글판 등 언어는 --locale 로 지정, "
                                  f"{old_version_text(p)} — 같은 버전이 필요하면 `winget show --id {wid} --versions` 로 있는지 확인 후 --version 추가)")
         for p, why in cls.reference:
             cl.reference.append(f"{p.name} — {why}")

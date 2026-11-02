@@ -9,7 +9,7 @@ from pathlib import Path, PurePosixPath
 
 from .discover_data import RESTORE_DENY_SUBSTRINGS
 from .rules import Rule
-from .package_base import DENY_DIR_NAMES, DENY_EXTENSIONS, DENY_FILE_NAMES, HOME_DENY_DIRS, HOME_DENY_FILES, HOME_DENY_SUBFILES, SSH_DENY_FILES, split_rule_path
+from .package_base import DENY_COMPOUND_SUFFIXES, DENY_DIR_NAMES, DENY_EXTENSIONS, DENY_FILE_NAMES, HOME_DENY_DIRS, HOME_DENY_FILES, HOME_DENY_SUBFILES, SSH_DENY_FILES, split_rule_path
 
 
 def _path_covers(pr, base: str, parts: list[str]) -> bool:
@@ -63,6 +63,9 @@ def restore_denied(rel: str, target: Path, rule: Rule | None, base: str) -> str 
         return "복원이 금지된 위치(Git/편집기/VS Code 확장/Gradle 의 시작·확장 설정 폴더)"
     if parts[-1] in DENY_FILE_NAMES or (len(parts) >= 2 and parts[-2] == ".ssh" and parts[-1] in SSH_DENY_FILES):
         return "복원이 금지된 설정 파일(쉘 시작 파일/SSH 설정)"
+    for suf in DENY_COMPOUND_SUFFIXES:
+        if parts[-1].rstrip(" .").endswith(suf) and not _rule_names_extension(rule, base, suf, rel):
+            return f"실행 파일/라이브러리의 동작 설정({suf})은 복원하지 않음(로드할 코드를 바꿀 수 있음)"
     ext = os.path.splitext(parts[-1])[1]
     if ext in DENY_EXTENSIONS and not _rule_names_extension(rule, base, ext, rel):
         return f"실행/스크립트 파일({ext})은 복원하지 않음(PowerShell 프로필 등)"

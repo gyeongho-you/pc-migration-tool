@@ -33,7 +33,12 @@ WILDCARD = set("*?[")
 # 압축 폭탄/거대 패키지 방어(B-5). deflate 는 압축비가 약 1000:1 을 넘을 수 없으므로 압축 방식을 제한하고 선언 크기를 지킨다.
 MAX_MANIFEST_BYTES = 256 * 1024 * 1024
 MAX_ENTRIES = 1_000_000
-MAX_TOTAL_BYTES = 1024 ** 4  # 패키지 files 의 선언 크기 합 상한(1 TiB). 넘으면 dry-run/verify 단계에서 거부한다(L5)
+MAX_TOTAL_BYTES = 256 * 1024 ** 3  # 패키지 files 의 선언 크기 합 상한(256 GiB). 넘으면 dry-run/verify 단계에서 거부한다(L5)
+# 압축 폭탄 방어(L5): deflate 의 이론상 최대 압축비는 약 1032:1 이다. 엔트리 하나가 16 MiB 이상이면서 선언 크기/압축 크기가 1000 을 넘으면
+# (거의 0 으로 채운 데이터) 거부한다. 전체도 선언 크기 합이 zip 파일 실제 크기의 1000배(최소 64 MiB 까지는 면제)를 넘으면 거부한다. 설정 파일(.ini/.xml/.json)의 보통 압축비는 10~100 배다.
+MAX_COMPRESSION_RATIO = 1000
+RATIO_CHECK_MIN_BYTES = 16 * 1024 ** 2
+RATIO_TOTAL_FLOOR_BYTES = 64 * 1024 ** 2
 ALLOWED_COMPRESSION = (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED)
 # 복원 거부 목록(B-1/B-7/F-1): 규칙/extra 모두에 적용한다. 다음 로그인/실행 때 코드가 실행될 수 있는 파일들이다.
 # 확장자는 규칙 path 의 마지막 패턴이 그 확장자를 직접 적어 둔 경우(예: "*.exe")에만 그 규칙에서 허용한다.
@@ -51,6 +56,9 @@ DENY_EXTENSIONS = frozenset({".exe", ".scr", ".com", ".pif", ".bat", ".cmd", ".p
                              # 매크로 문서 .docm/.xlsm, 테마 .theme, 원격 연결 .rdp, 탐색기 셸 명령 .scf/.library-ms, 네이티브 .so).
                              # 규칙이 allow_extensions 나 마지막 패턴("*.dvb")으로 명시하면 그 규칙에서는 기존처럼 허용된다.
                              ".rbe", ".rbs", ".dvb", ".lua", ".vim", ".vsto", ".docm", ".xlsm", ".theme", ".rdp", ".scf", ".library-ms", ".so"})
+# 실행 파일/라이브러리의 동작 설정(.NET 앱의 app.exe.config, x.dll.config: 로드할 어셈블리·코드 베이스를 바꿀 수 있음). 확장자만 보면 .config 라
+# 설정으로 보이므로 이름 끝으로 따로 거부한다. 규칙이 allow_extensions(".exe.config")나 마지막 패턴("*.exe.config")으로 명시한 경우만 허용(stage72).
+DENY_COMPOUND_SUFFIXES = (".exe.config", ".dll.config")
 # 폴더 이름(소문자)이 경로 어디에 있어도 막는다: Excel 이 시작할 때 자동으로 여는 폴더
 DENY_DIR_NAMES = frozenset({"xlstart"})
 # 사용자 홈 바로 아래(%USERPROFILE%)에서 도구가 읽어 명령을 실행하거나 비밀을 담는 점 파일(소문자 이름). .gitconfig 는 흔히 쓰므로 허용한다.

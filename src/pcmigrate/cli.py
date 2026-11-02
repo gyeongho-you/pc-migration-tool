@@ -548,10 +548,14 @@ def _cmd_verify(args: argparse.Namespace) -> int:
 
 def _cmd_check_rules(args: argparse.Namespace) -> int:
     """규칙 폴더가 읽히는지만 확인한다(설치 목록/사용자 폴더는 읽지 않는다). exe 빌드 스모크 시험에서 번들 누락을 잡는 용도."""
+    bad: list[str] = []
     try:
-        rules = load_rules_checked(args.rules)
+        rules = load_rules_checked(args.rules, errors=bad)
     except ApiError as e:
         return _fail(e)
+    if bad:  # 규칙 파일 하나의 오류는 다른 명령에서는 그 규칙만 건너뛰지만, 확인 명령에서는 오류로 보고한다
+        _err(f"규칙 파일 {len(bad)}개에 오류가 있습니다(다른 명령은 이 규칙만 건너뛰고 진행합니다):", *[f"  - {m}" for m in bad])
+        return 1
     if not rules:
         _err(f"규칙 파일이 하나도 없습니다: {args.rules}")
         return 1

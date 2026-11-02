@@ -21,7 +21,7 @@ from .cancel import checkpoint
 from .checklist import (CERTAIN, NO_VERSION_TEXT, OLD_VERSION_GUIDE, PROBABLE, _norm_display, bundle_reason, classify_programs,
                         install_hint_for, known_app, match_program, parse_winget_list)
 from .detect import (DEFAULT_LOCALE, Program, parse_winget_export, valid_locale, valid_winget_id,
-                     winget_install_command)
+                     safe_install_command, winget_install_command)
 
 INSTALLED, WINGET, MANUAL, AMBIGUOUS, NOT_NEEDED = "installed", "winget", "manual", "ambiguous", "not_needed"
 STATUSES = (INSTALLED, WINGET, MANUAL, AMBIGUOUS, NOT_NEEDED)
@@ -172,8 +172,9 @@ class InstallCheck:
     @property
     def individual_commands(self) -> list[str]:
         """묶음의 winget 목록에는 없지만 대표 앱 표에 id 가 있어 개별로 설치할 수 있는 항목의 명령."""
-        return [install_command(i.winget_id, i.winget_version, self.locale) for i in self.items
-                if i.status == WINGET and i.winget_id and not i.in_import_file]
+        cmds = (safe_install_command(i.winget_id, i.winget_version, self.locale) for i in self.items
+                if i.status == WINGET and i.winget_id and not i.in_import_file)
+        return [c for c in cmds if c]  # id 형식이 틀린 항목은 명령을 만들지 않고 건너뜀(나머지는 계속)
 
     def summary(self) -> str:
         c = self.counts()
@@ -329,7 +330,7 @@ def check_install(old_registry: list[Program], old_winget: list[Program], old_li
         out.items.append(evaluate(p, wid, WINGET, "묶음의 winget 목록에 있음(새 PC 의 winget 에서 찾을 수 있는지는 import 가 판단)"))
     for p, wid in cls.winget_cmd:
         claimed.add(wid.lower())
-        out.items.append(evaluate(p, wid, WINGET, f"묶음의 winget 목록에는 없지만 개별 설치 가능: {install_command(wid)}"))
+        out.items.append(evaluate(p, wid, WINGET, f"묶음의 winget 목록에는 없지만 개별 설치 가능: {safe_install_command(wid) or '(id 형식 오류로 명령 없음)'}"))
     for p, m in cls.manual:
         pw = m.winget_id if m is not None else ""
         if pw:

@@ -202,8 +202,11 @@ def load_rule_file(path: Path) -> Rule:
     return parse_rule(data, str(path))
 
 
-def load_rules(rules_dir: Path) -> list[Rule]:
-    """디렉터리의 *.json 을 모두 로드한다. id 중복은 오류."""
+def load_rules(rules_dir: Path, errors: list[str] | None = None) -> list[Rule]:
+    """디렉터리의 *.json 을 모두 로드한다. id 중복은 오류.
+
+    errors 를 주면(리스트) 규칙 파일 하나가 잘못돼도(스키마 위반, JSON 오류, id 중복) 그 파일만 건너뛰고 사유를 errors 에 덧붙인 채 나머지를 로드한다
+    (사용자가 넣은 규칙 하나가 전체를 막지 않게). 주지 않으면 첫 오류에서 RuleError(기존 동작). 폴더가 없거나 읽을 수 있는 규칙이 하나도 없으면 항상 RuleError."""
     rules_dir = Path(rules_dir)
     if not rules_dir.is_dir():
         raise RuleError(f"규칙 폴더를 찾을 수 없습니다: {rules_dir} "
@@ -212,11 +215,21 @@ def load_rules(rules_dir: Path) -> list[Rule]:
     rules: list[Rule] = []
     seen: set[str] = set()
     for f in sorted(rules_dir.glob("*.json")):
-        rule = load_rule_file(f)
-        if rule.id in seen:
-            raise RuleError(f"{f}: 중복된 규칙 id '{rule.id}'")
+        try:
+            rule = load_rule_file(f)
+            if rule.id in seen:
+                raise RuleError(f"{f}: 중복된 규칙 id '{rule.id}'")
+        except (RuleError, OSError, UnicodeDecodeError) as e:
+            if errors is None:
+                if isinstance(e, RuleError):
+                    raise
+                raise RuleError(f"{f}: 읽을 수 없음: {e}") from e
+            errors.append(str(e) if isinstance(e, RuleError) else f"{f}: 읽을 수 없음: {e}")
+            continue
         seen.add(rule.id)
         rules.append(rule)
+    if not rules and errors:  # 읽을 수 있는 규칙이 없고 건너뛴 파일이 있으면 그 오류를 그대로 알린다(원인을 가리지 않는다)
+        raise RuleError("; ".join(errors))
     if not rules:
         raise RuleError(f"규칙 폴더에 규칙 파일(*.json)이 하나도 없습니다: {rules_dir} "
                         "(규칙이 없으면 어떤 프로그램도 감지하지 못합니다. 프로그램을 다시 내려받아 주세요)")

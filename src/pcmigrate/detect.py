@@ -57,6 +57,17 @@ RegistryReader = Callable[[], list[Program]]
 Runner = Callable[[list[str]], tuple[int, str]]
 
 
+_UPDATE_TRAILING_KB = re.compile(r"\(KB\d{6,8}\)\s*$", re.IGNORECASE)
+_UPDATE_RELEASE_TYPES = frozenset({"security update", "update", "hotfix", "update rollup", "critical update"})
+
+
+def is_update_noise(name: str, release_type: str = "") -> bool:
+    """레지스트리 설치 목록의 Windows/Office 업데이트·핫픽스 항목(프로그램이 아니다)인지. 확실한 패턴만 본다:
+    ReleaseType 이 Security Update/Update/Hotfix/Update Rollup/Critical Update 이거나, 이름이 '(KB1234567)' 로 끝날 때.
+    ('Microsoft Update Health Tools' 처럼 KB 번호가 없는 일반 프로그램은 건드리지 않는다.)"""
+    return release_type.strip().lower() in _UPDATE_RELEASE_TYPES or bool(_UPDATE_TRAILING_KB.search(name or ""))
+
+
 def read_registry_programs() -> list[Program]:
     import winreg  # Windows 전용이라 지연 import
 
@@ -87,7 +98,7 @@ def read_registry_programs() -> list[Program]:
                             except OSError:
                                 return ""
                         name = val("DisplayName")
-                        if not name or val("SystemComponent") == "1":
+                        if not name or val("SystemComponent") == "1" or is_update_noise(name, val("ReleaseType")):
                             continue
                         p = Program(name, val("DisplayVersion"), val("Publisher"),
                                     install_location=val("InstallLocation"), display_icon=val("DisplayIcon"),
@@ -132,11 +143,11 @@ def _kill(proc: subprocess.Popen) -> None:
         pass
 
 
-WINGET_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+WINGET_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$")  # 실제 id 의 '+'(Notepad++.Notepad++)까지만 더 허용. 공백/따옴표/셸 문자는 거부
 
 
 def valid_winget_id(value: object) -> bool:
-    """winget 패키지 id 형식(영문자·숫자와 . - _ 만, 128자 이내). 명령 문자열에 넣기 전의 주입 방지 검사."""
+    """winget 패키지 id 형식(영문자·숫자와 . - _ + 만, 128자 이내; checklist/install-check/winget-extract 가 모두 이 검사 하나를 쓴다). 명령 문자열에 넣기 전의 주입 방지 검사."""
     return isinstance(value, str) and WINGET_ID_RE.fullmatch(value) is not None
 
 
@@ -170,6 +181,14 @@ def winget_install_command(winget_id: str, version: str = "", locale: str = DEFA
     if usable_version_arg(version):
         parts.append(f"--version {version}")
     return " ".join(parts)
+
+
+def safe_install_command(winget_id: str, version: str = "", locale: str = DEFAULT_LOCALE) -> str | None:
+    """winget_install_command 의 예외 없는 판: id/로캘이 올바르지 않으면 None(그 항목만 건너뛰고 나머지는 계속하는 데 쓴다)."""
+    try:
+        return winget_install_command(winget_id, version, locale)
+    except ValueError:
+        return None
 
 
 def parse_winget_export(text: str) -> list[Program]:

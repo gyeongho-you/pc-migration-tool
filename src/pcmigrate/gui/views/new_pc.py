@@ -584,7 +584,7 @@ class ResultView(BaseView):
             return
         self.note.configure(text="\n".join(x for x in (self.c.denied_note(), self.c.git_config_note(applied=True)) if x))
         ok, skipped, failed = self.c.import_counts()
-        self.summary.show(ok, skipped, failed, T.RES_ALL_OK, T.RES_IMPORT_FAIL)
+        self.summary.show(ok, skipped, failed, T.RES_ALL_OK, T.RES_IMPORT_FAIL, notice=self.c.interrupted_note())
         self._render_programs()
         self.cov.show(self.c.coverage_table(r))
 
