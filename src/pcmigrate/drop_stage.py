@@ -138,6 +138,7 @@ class StagePlan:
     duplicates: list[str] = field(default_factory=list)
     cloud_only: list[dict] = field(default_factory=list)  # {"path","size"}
     skipped_links: list[str] = field(default_factory=list)
+    empty_dirs: int = 0  # 직접 고른 폴더 안의 빈 폴더(파일만 담으므로 빠진다)
     failed: list[dict] = field(default_factory=list)  # {"path","reason"}
     changed: list[dict] = field(default_factory=list)  # 담은 뒤 바뀐 파일(최신 내용으로 보냄)
 
@@ -147,7 +148,8 @@ class StagePlan:
 
 
 def plan_drops(entries: list[DropEntry], checked: list[str], *, cancel: Callable[[], bool] | None = None,
-               attr_fn: Callable[[os.stat_result], int] = _attrs, junk_spec=None) -> StagePlan:
+               attr_fn: Callable[[os.stat_result], int] = _attrs, junk_spec=None,
+               tag_fn: Callable[[os.stat_result], int] = fs.reparse_tag) -> StagePlan:
     """끌어다 놓은 항목을 정리한다. 원본은 읽기만 한다(stat/목록).
 
     junk_spec: 정크 제외가 켜져 있으면, 체크한 폴더 안에 있어도 폴더 전송에서 빠질 파일(정크 규칙에 걸림)은 겹침으로 보지 않고
@@ -191,7 +193,10 @@ def plan_drops(entries: list[DropEntry], checked: list[str], *, cancel: Callable
             seen.add(k)
             plan.cloud_only.append({"path": path, "size": st.st_size})
             return
-        if _stat.S_ISLNK(st.st_mode) or not _stat.S_ISREG(st.st_mode) or a & FILE_ATTRIBUTE_REPARSE_POINT:
+        # 실제 링크만 제외한다: OneDrive 에서 받아 둔 파일처럼 reparse 속성만 있는 파일은 보낸다(클라우드 전용은 위에서 이미 제외·보고)
+        if fs.file_is_link(st, tag_fn(st)) or not _stat.S_ISREG(st.st_mode):
+            if expect is not None:  # 사용자가 직접 고른 파일이 링크라 빠지면 조용히 사라지지 않게 실패로 센다
+                plan.failed.append({"path": path, "reason": "바로가기·연결이라 따라가지 않고 보내지 않았습니다"})
             plan.skipped_links.append(path)
             return
         if expect is not None and not expect.is_dir and (st.st_size != expect.size or st.st_mtime_ns != expect.mtime_ns):
@@ -222,7 +227,8 @@ def plan_drops(entries: list[DropEntry], checked: list[str], *, cancel: Callable
         if not _stat.S_ISDIR(st.st_mode):
             add_file(e.path, os.path.dirname(os.path.abspath(e.path)), e)
             continue
-        if attr_fn(st) & FILE_ATTRIBUTE_REPARSE_POINT:
+        if fs.dir_is_link(st, tag_fn(st), attr_fn(st)):  # 링크/정션 폴더(클라우드 태그 폴더는 따라간다)
+            plan.failed.append({"path": e.path, "reason": "바로가기·연결이라 따라가지 않고 보내지 않았습니다"})
             plan.skipped_links.append(e.path)
             continue
 
@@ -233,13 +239,15 @@ def plan_drops(entries: list[DropEntry], checked: list[str], *, cancel: Callable
             checkpoint()
             if cancel is not None and cancel():
                 raise Cancelled()
+            if not dirs and not files and os.path.normcase(root) != os.path.normcase(fs.long_path(e.path)):
+                plan.empty_dirs += 1
             keep = []
             for d in sorted(dirs):
                 full = fs.plain_path_text(os.path.join(root, d))
                 c = covered(_key(full))
                 if c is not None and junk_spec is None:
                     plan.overlap.append({"path": full, "covered_by": c})
-                elif fs.is_reparse(full):
+                elif _dir_link(full):
                     plan.skipped_links.append(full)
                 else:
                     keep.append(d)
@@ -247,6 +255,13 @@ def plan_drops(entries: list[DropEntry], checked: list[str], *, cancel: Callable
             for n in sorted(files):
                 add_file(fs.plain_path_text(os.path.join(root, n)), e.path, None)
     return plan
+
+
+def _dir_link(path: str) -> bool:
+    try:
+        return fs.dir_is_link(os.lstat(fs.long_path(path)))
+    except OSError:
+        return False
 
 
 def tops_of(plan: StagePlan) -> list[str]:
@@ -474,7 +489,7 @@ def _info(plan: StagePlan, entries: list[DropEntry]) -> dict:
     return {"entries": len(entries), "staged_files": len(plan.files), "staged_bytes": plan.total_bytes,
             "overlap_count": len(plan.overlap), "overlap": _cap(plan.overlap), "duplicate_count": len(plan.duplicates),
             "duplicates": _cap(plan.duplicates), "cloud_only": _cap(plan.cloud_only), "cloud_only_total": len(plan.cloud_only),
-            "skipped_links": _cap(plan.skipped_links), "skipped_links_total": len(plan.skipped_links),
+            "skipped_links": _cap(plan.skipped_links), "skipped_links_total": len(plan.skipped_links), "empty_dirs": plan.empty_dirs,
             "failed": plan.failed, "changed": _cap(plan.changed)}
 
 
@@ -487,6 +502,8 @@ def summary_lines(ds: dict) -> list[str]:
         lines.append(f"    · 같은 파일이 두 번 들어와 {ds['duplicate_count']}개는 한 번만 보냅니다")
     if ds.get("cloud_only_total"):
         lines.append(f"    · OneDrive 클라우드 전용 {ds['cloud_only_total']}개는 내려받지 않고 제외했습니다(파일을 이 PC에 내려받은 뒤 다시 하세요)")
+    if ds.get("empty_dirs"):
+        lines.append(f"    · 빈 폴더 {ds['empty_dirs']}개는 파일이 없어 담지 않았습니다(폴더째 보내려면 폴더로 추가하세요)")
     if ds.get("skipped_links_total"):
         lines.append(f"    · 바로가기/연결 {ds['skipped_links_total']}개는 따라가지 않고 제외했습니다")
     if ds.get("changed"):
@@ -501,9 +518,13 @@ def summary_lines(ds: dict) -> list[str]:
 
 def _write_abort(path, ds: dict, err: BaseException) -> None:
     try:
-        data = {"aborted": True, "cancelled": isinstance(err, Cancelled), "reason": f"{type(err).__name__}: {err}",
-                "success": False, "drop_stage": ds}
-        Path(path).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        data = {"aborted": True, "cancelled": isinstance(err, Cancelled), "reason": errorlog.tokenize_home(f"{type(err).__name__}: {err}"),
+                "success": False, "drop_stage": ds, "items": getattr(err, "partial_items", [])}  # items: 중단 전에 끝난 항목별 결과
+        p = Path(path)
+        if p.is_file():  # 같은 이름의 이전 리포트는 번호 .bak 으로 보관한다
+            from .copier import _backup_path
+            os.replace(p, _backup_path(p))
+        p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     except OSError as e:
         errorlog.record(e, f"drop-stage abort report {path}")
 

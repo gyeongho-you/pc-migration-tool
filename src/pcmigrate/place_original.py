@@ -791,6 +791,7 @@ def discover(recv: Path, maps: dict[str, str], include_unverified: bool, warn: C
             continue
         if status != "done" and not include_unverified:
             rows.append(Row("folder", expected, str(cur), UNVERIFIED, f"상태: {status}"))
+            meta.setdefault("skip_dirs", []).append(os.path.normcase(str(cur)))  # 부모 단위가 이 폴더까지 같이 옮기지 않게(미검증은 건드리지 않는다)
             continue
         units.append(Unit(cur, tgt(letter), parts, "journal", status == "done", letter.upper()))
     try:
@@ -1512,7 +1513,7 @@ def _place_impl(rep: PlaceReport, recv: Path, apply: bool, keep: bool, no_overwr
                 warn(f"모으는 폴더가 드라이브 전체({u.letter}:)를 놓는 위치 안에 있습니다. 같은 이름의 폴더가 있으면 섞일 수 있습니다.")
     p = _Placer(recv, dry_run=not apply, keep=keep, no_overwrite=no_overwrite, drive_root_fn=drive_root_fn,
                 same_volume_fn=same_volume_fn, cancel=cancel, progress_info=progress_info, report=rep)
-    p.nested_roots = {os.path.normcase(str(u.current)) for u in units}
+    p.nested_roots = {os.path.normcase(str(u.current)) for u in units} | set(meta.get("skip_dirs", ()))
     ready: list[tuple[Unit, Path, str]] = []
     # ---- 1) 사전 점검: 드라이브 존재/쓰기 가능, 수량, 용량
     p.phase = "scan"

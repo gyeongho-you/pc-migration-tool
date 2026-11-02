@@ -18,6 +18,7 @@ from .manifest import ManifestReader, ManifestWriter
 from .power import KeepAwake
 from .progress import OK, ProgressInfo, ProgressTracker, fmt_bytes, format_info, slow_policy
 from .scan import scan_source_info
+from .transfer_base import mtime_tolerance_ns
 from .transfer_base import AttrGetter, DEFAULT_CHUNK, DISCONNECTED_MESSAGE, DriveDisconnected, LOG_NAME, MAX_DETAIL_RESULTS, PRESERVE_NAME, Runner, SPACE_MARGIN, STATE_NAME, TransferError, _friendly_makedirs, _is_within, _join
 from .transfer_copy import _alive_checker, _copy_with_robocopy, _dry_run
 from .transfer_preserve import DestScan, _preserve_existing, _scan_dest, _write_journal
@@ -165,7 +166,7 @@ def transfer(src: Path, dst: Path, *, dry_run: bool = False, include_cloud: bool
     dscan: DestScan | None = None
     if not verify_only:
         say("대상에 이미 있는 파일을 확인하는 중입니다…")
-        dscan = _scan_dest(plain, dst, total_bytes - (sctx.bytes if sctx else 0), cancel)  # 복사 여부 판단 기준(_differs 와 같음)을 한 번만 훑는다
+        dscan = _scan_dest(plain, dst, total_bytes - (sctx.bytes if sctx else 0), cancel, mtime_tolerance_ns(dest.fs))  # 복사 여부 판단 기준(_differs 와 같음)을 한 번만 훑는다
         if sctx is not None and sctx.entries:  # 조각은 이미 있는(크기가 맞는) 조각만큼 덜 쓴다
             dscan.need += sum(e[1] - split.parts_bytes_present(_join(str(dst), e[0]), e[1], sctx.psz) for e in sctx.entries)
         required = dscan.need + int(total_bytes * SPACE_MARGIN)
@@ -193,6 +194,9 @@ def transfer(src: Path, dst: Path, *, dry_run: bool = False, include_cloud: bool
     # ---- 실제 실행
     _friendly_makedirs(dst)
     log = Path(log_path) if log_path else dst / LOG_NAME
+    if not dry_run:
+        from .transfer_base import rotate_log
+        rotate_log(log)
     state = State(Path(state_path) if state_path else dst / STATE_NAME, src, str(dst), dest.serial)
     report.meta["state_file"] = str(state.path)
     if state.reset_reason:

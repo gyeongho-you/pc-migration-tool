@@ -60,7 +60,7 @@ def run_send(target: str, code: str, selection=None, sources: list[str] | None =
              progress_info: Callable[[ProgressInfo], None] | None = None, cancel: Callable[[], bool] | None = None,
              on_event: Callable[[dict], None] | None = None, *, plan: SendPlan | None = None,
              extra_files=None, warn: Callable[[str], None] | None = None, progress: Callable[[str], None] | None = None,
-             **resolve_kw) -> dict:
+             abort_report=None, **resolve_kw) -> dict:
     """구 PC 에서 새 PC 로 보낸다. target 은 '주소[:포트]' 또는 '자동'. 리포트 dict(verification: exact/mismatch/missing 등)를 돌려준다.
 
     extra_files(stage63): 직접 고른 파일/폴더. 있으면 보내기 시작 때 drop_stage 가 겹침을 빼고 임시 폴더에 <드라이브>/<경로> 구조로 모아
@@ -87,7 +87,8 @@ def run_send(target: str, code: str, selection=None, sources: list[str] | None =
         if opts.exclude_junk:
             from .junk import make_spec
             jk = {"junk_spec": make_spec(opts.junk_backup_copies)}
-        return drop_stage.run_with_extras(items, list(extra_files), None, go, cancel=cancel, warn=warn or (lambda m: None), progress=progress, **jk)
+        return drop_stage.run_with_extras(items, list(extra_files), None, go, cancel=cancel, warn=warn or (lambda m: None), progress=progress,
+                                          abort_report=abort_report, **jk)
     if plan is None:
         plan = build_send_plan(sources, selection, opts, cancel=cancel, progress_info=progress_info)
     return _run_send(host, port, code, plan, opts, progress_info, cancel, on_event)

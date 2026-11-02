@@ -101,15 +101,39 @@ def _join(root: str, rel: str) -> str:
 
 # --------------------------------------------------------------------------- 덮어쓰기 전 보존(.bak)
 
-def _differs(target: str, size: int, mtime_ns: int) -> bool:
-    """대상에 같은 이름의 '다른' 파일이 있는가. robocopy 가 같다고 보는 기준(크기 같고 수정시각 2초 이내)과 같다. 폴더는 해당 없음."""
+FAT_FAMILY = ("FAT", "FAT32", "EXFAT")
+
+
+LOG_ROTATE_BYTES = 64 * 1024 * 1024  # 이보다 커진 robocopy 로그는 번호를 붙여 보관하고 새로 시작한다
+
+
+def rotate_log(path, limit: int = LOG_ROTATE_BYTES) -> None:
+    """/LOG+ 로 계속 덧붙는 로그가 limit 를 넘으면 <이름>.1, .2 ... 로 옮기고 새로 시작한다(실패해도 전송은 계속)."""
+    try:
+        p = Path(path)
+        if p.is_file() and p.stat().st_size > limit:
+            n = 1
+            while os.path.lexists(str(p) + f".{n}"):
+                n += 1
+            os.replace(p, str(p) + f".{n}")
+    except OSError:
+        pass
+
+
+def mtime_tolerance_ns(fs_name: str | None) -> int:
+    """수정 시각 비교 허용오차: FAT 계열(2초 해상도)만 2초, NTFS·네트워크 등은 정확히 같아야 같다(robocopy 가 NTFS 끼리는 정확 비교로 덮어쓴다)."""
+    return MTIME_TOLERANCE_NS if (fs_name or "").upper() in FAT_FAMILY else 0
+
+
+def _differs(target: str, size: int, mtime_ns: int, tol_ns: int = MTIME_TOLERANCE_NS) -> bool:
+    """대상에 같은 이름의 '다른' 파일이 있는가. robocopy 가 같다고 보는 기준(크기 같고 수정시각 tol_ns 이내)과 같다. 폴더는 해당 없음."""
     try:
         st = os.stat(long_path(target))
     except OSError:
         return False
     if not _stat.S_ISREG(st.st_mode):  # stat 한 번으로 일반 파일 여부까지 본다(R1-12)
         return False
-    return not (st.st_size == size and abs(st.st_mtime_ns - mtime_ns) <= MTIME_TOLERANCE_NS)
+    return not (st.st_size == size and abs(st.st_mtime_ns - mtime_ns) <= tol_ns)
 
 
 def _bak_name(target: str) -> str:

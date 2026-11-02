@@ -113,6 +113,40 @@ def free_space(path: str | os.PathLike) -> int | None:
         return None
 
 
+IO_REPARSE_TAG_SYMLINK = 0xA000000C
+IO_REPARSE_TAG_MOUNT_POINT = 0xA0000003
+
+
+def reparse_tag(st) -> int:
+    """os.stat 결과의 reparse 태그(없으면 0). Python 3.12+ 의 st_reparse_tag."""
+    return int(getattr(st, "st_reparse_tag", 0) or 0)
+
+
+def is_cloud_tag(tag: int) -> bool:
+    """OneDrive 같은 클라우드 파일 공급자의 reparse 태그(IO_REPARSE_TAG_CLOUD, 0x9000?01A 계열)."""
+    return (tag & 0xFFFF0FFF) == 0x9000001A
+
+
+def file_is_link(st, tag: int | None = None) -> bool:
+    """파일이 실제 심볼릭 링크/마운트 지점인가. OneDrive 에서 받아 둔 파일처럼 reparse 속성만 가진(링크가 아닌) 파일은 링크로 보지 않는다."""
+    import stat as _stat
+    t = reparse_tag(st) if tag is None else tag
+    return _stat.S_ISLNK(st.st_mode) or t in (IO_REPARSE_TAG_SYMLINK, IO_REPARSE_TAG_MOUNT_POINT)
+
+
+def dir_is_link(st, tag: int | None = None, attrs: int | None = None) -> bool:
+    """폴더가 링크/정션인가: 심볼릭 링크이거나 reparse 속성이 있는데 클라우드 태그가 아니면 링크로 본다(클라우드 폴더는 따라간다).
+    태그를 알 수 없는 환경(옛 Python)에서는 reparse 속성만 있으면 링크로 본다(보수적)."""
+    import stat as _stat
+    if _stat.S_ISLNK(st.st_mode):
+        return True
+    a = getattr(st, "st_file_attributes", 0) if attrs is None else attrs
+    if not (a & FILE_ATTRIBUTE_REPARSE_POINT):
+        return False
+    t = reparse_tag(st) if tag is None else tag
+    return not is_cloud_tag(t)
+
+
 def is_reparse(path: str | os.PathLike) -> bool:
     """경로(링크 자체, 따라가지 않음)가 심볼릭 링크 또는 정션 등 reparse point 인지. 없거나 읽을 수 없으면 False.
 

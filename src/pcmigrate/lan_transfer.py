@@ -790,7 +790,7 @@ class _Session:
             return
         res = FileResult(src="(lan)", dst=str(cur.dst), status=COPIED, size=cur.size, sha256=digest)
         try:
-            if _same_content(cur.dst, cur.size, digest):  # 내용이 같은 파일이 이미 있으면 .bak 으로 옮기지 않고 받은 임시 파일만 버린다
+            if _same_content(cur.dst, cur.size, digest, lambda n: self._ping()):  # 긴 파일을 읽는 동안에도 핑을 보내 송신 쪽 대기 시간 초과를 막는다  # 내용이 같은 파일이 이미 있으면 .bak 으로 옮기지 않고 받은 임시 파일만 버린다
                 os.remove(long_path(cur.part))
             else:
                 _install(cur.part, cur.dst, res, long_path)
@@ -1013,10 +1013,10 @@ def build_send_plan(sources: list[str] | None = None, selection: str | os.PathLi
     return plan
 
 
-def _same_content(dst, size: int, digest: str) -> bool:
+def _same_content(dst, size: int, digest: str, on_bytes=None) -> bool:
     try:
         p = Path(dst)
-        return os.path.isfile(long_path(p)) and os.path.getsize(long_path(p)) == size and sha256_file(p) == digest
+        return os.path.isfile(long_path(p)) and os.path.getsize(long_path(p)) == size and sha256_file(p, None, None, on_bytes) == digest
     except OSError:
         return False
 
@@ -1069,7 +1069,15 @@ def run_send(host: str, port: int, code: str, plan: SendPlan, options: SendOptio
              on_event: Callable[[dict], None] | None = None) -> dict:
     """계획(plan)대로 host:port 의 수신기로 보낸다. 리포트 dict 를 돌려준다. 취소하면 Cancelled, 연결 문제는 LanError."""
     s = _Sender(host, port, code, plan, options or SendOptions(), progress_info, cancel, on_event)
-    return s.run()
+    try:
+        return s.run()
+    except BaseException as e:  # 중단/끊김/오류여도 지금까지의 결과를 예외에 붙인다(CLI/GUI 가 중단 리포트에 쓴다)
+        try:
+            e.partial = {"sent_files": s.counts["sent"], "skipped_existing": s.counts["skipped_existing"], "failed_count": len(s.failed),
+                         "total_files": plan.total_files, "last_file": getattr(s, "last_wire", "")}  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001
+            pass
+        raise
 
 
 class _Sender:
@@ -1334,6 +1342,7 @@ class _Sender:
         return sha, st.st_size, st.st_mtime_ns
 
     def _send_one(self, idx: int, e: Entry, hint: int, off: int, force_zero: bool) -> None:
+        self.last_wire = e.wire  # 중단 리포트에 마지막으로 보내던 파일을 남기려고
         ch = self.ch
         assert ch is not None
         path = os.path.join(self.plan.roots[e.root], *e.rel.split("/"))
@@ -1419,9 +1428,11 @@ class _Sender:
     def _finish(self) -> None:
         assert self.ch is not None
         bad_recs = [r for r in self.recs.values() if r.state == "bad"]
+        have = {f["path"] for f in self.failed}  # 재시도 중 원본을 못 읽어 이미 실패로 적은 파일은 다시 적지 않는다(이중 집계 방지)
         for r in bad_recs:
             self.counts["mismatch"] += 1 if r.reason == "mismatch" else 0
-            self.failed.append({"path": r.e.wire, "reason": r.reason, "error": r.err})
+            if r.e.wire not in have:
+                self.failed.append({"path": r.e.wire, "reason": r.reason, "error": r.err})
         self.ch.send_json(T_SUMMARY, {"files": self.plan.total_files, "bytes": self.plan.total_bytes,
                                       "failed": self.failed[:200], "failed_count": len(self.failed)})
         self.receiver_done = self._wait_for(T_DONE)

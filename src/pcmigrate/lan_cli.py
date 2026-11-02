@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -145,6 +146,26 @@ def cmd_send(args: argparse.Namespace) -> int:
         return rc if rc is not None else _cmd_send(args)
 
 
+def _save_send_abort(path, exc: BaseException) -> None:
+    """보내기가 중단·끊김·오류로 끝나도 --report 에 aborted 리포트를 남긴다(전송한 수, 마지막 파일, 사유; 홈 경로는 치환). 같은 이름의 기존 리포트는 번호 .bak 으로 보관한다."""
+    if not path:
+        return
+    from . import errorlog
+    from .copier import _backup_path
+    data = {"aborted": True, "cancelled": isinstance(exc, Cancelled), "success": False,
+            "reason": errorlog.tokenize_home(f"{type(exc).__name__}: {exc}")[:300], "code": getattr(exc, "code", ""),
+            **{"sent_files": 0, **(getattr(exc, "partial", None) or {})}}
+    if data.get("last_file"):
+        data["last_file"] = errorlog.tokenize_home(str(data["last_file"]))
+    try:
+        p = Path(path)
+        if p.is_file():
+            os.replace(p, _backup_path(p))
+        p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError as e:
+        _err(f"리포트를 저장하지 못했습니다: {e}")
+
+
 def _cmd_send(args: argparse.Namespace) -> int:
     if args.diagnose:
         target = args.target
@@ -200,10 +221,12 @@ def _cmd_send(args: argparse.Namespace) -> int:
         rep = run_send(args.target, args.code, selection=args.from_selection, sources=args.sources or None, options=opts,
                        progress_info=on_progress, on_event=on_event, choose=_choose, timeout=args.discover_seconds,
                        extra_files=args.extra_file or None, warn=lambda m: _err(f"[경고] {m}"))
-    except Cancelled:
+    except Cancelled as e:
+        _save_send_abort(args.report, e)
         _err("취소했습니다. 원본은 읽기만 했으므로 바뀌지 않았습니다. 같은 명령을 다시 실행하면 이어서 보냅니다.")
         return 130
     except LanError as e:
+        _save_send_abort(args.report, e)
         _err(str(e))
         if e.code in ("refused", "timeout", "unreachable"):
             _err("원인 확인: pcmigrate send <주소> --diagnose [--code 코드]")

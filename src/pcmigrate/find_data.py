@@ -441,7 +441,7 @@ class _Finder:
                 st = e.stat(follow_symlinks=False)
                 attrs = getattr(st, "st_file_attributes", 0)
                 if e.is_dir(follow_symlinks=False):
-                    if attrs & FILE_ATTRIBUTE_REPARSE_POINT:
+                    if attrs & FILE_ATTRIBUTE_REPARSE_POINT and fs.dir_is_link(st):  # 정션/링크만(OneDrive 같은 클라우드 태그 폴더는 따라간다)
                         self.res.skipped_links += 1
                         continue
                     why = self._skip_reason(name, parts, full)

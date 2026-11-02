@@ -501,76 +501,83 @@ def run_multi(selected: Iterable[SelectedItem | str], dst: str | os.PathLike, tr
         item_dir = final_manifest.with_name(final_manifest.name + ".items")
     total = len(plan.items)
     t0 = time.monotonic()
-    for n, it in enumerate(plan.items, 1):
-        if cancel is not None and cancel():
-            raise Cancelled()
-        item_dst = dst / it.rel
-        shown = it.orig or it.src  # 임시 폴더에서 온 항목은 원래 경로로 표시/기록
-        label = f"[{n}/{total}] {shown}"
-        key = it.rel.lower() + (STAGED_SUFFIX if it.orig else "")
-        prior = journal["items"].get(key, {})
-        partial = {"partial": True, **_staged_list(it.src)} if it.orig else {}  # 임시 보관(직접 고른 일부 파일) 항목: 폴더 전체가 끝났다는 뜻이 아니다(담은 파일 목록도 남긴다)
-        if (skip_done and not it.orig and not dry_run and not retry_failed and prior.get("status") == "done" and not prior.get("partial")
-                and _skip_still_valid(prior, item_dst, it.src, stamp_fn, cancel)):
-            mr.items.append(ItemResult(shown, str(item_dst), "skipped_done"))
+    try:
+        for n, it in enumerate(plan.items, 1):
+            if cancel is not None and cancel():
+                raise Cancelled()
+            item_dst = dst / it.rel
+            shown = it.orig or it.src  # 임시 폴더에서 온 항목은 원래 경로로 표시/기록
+            label = f"[{n}/{total}] {shown}"
+            key = it.rel.lower() + (STAGED_SUFFIX if it.orig else "")
+            prior = journal["items"].get(key, {})
+            partial = {"partial": True, **_staged_list(it.src)} if it.orig else {}  # 임시 보관(직접 고른 일부 파일) 항목: 폴더 전체가 끝났다는 뜻이 아니다(담은 파일 목록도 남긴다)
+            if (skip_done and not it.orig and not dry_run and not retry_failed and prior.get("status") == "done" and not prior.get("partial")
+                    and _skip_still_valid(prior, item_dst, it.src, stamp_fn, cancel)):
+                mr.items.append(ItemResult(shown, str(item_dst), "skipped_done"))
+                if on_item:
+                    on_item(n, total, shown, "skipped_done", None)
+                continue
             if on_item:
-                on_item(n, total, shown, "skipped_done", None)
-            continue
-        if on_item:
-            on_item(n, total, shown, "start", None)
-        kw = dict(item_kwargs or {})
-        kw.update(dry_run=dry_run, cancel=cancel, warn=(lambda m, _l=label: warn(f"{_l}: {m}")))
-        if retry_failed:
-            kw["retry_failed"] = True
-        if verify_only:
-            kw["verify_only"] = True
-        if progress:
-            kw["progress"] = lambda m, _l=label: progress(f"{_l} {m}")
-        if progress_info:
-            kw["progress_info"] = lambda info, _l=label: progress_info(dataclasses.replace(info, message=f"{_l} {info.message}".strip()))
-        if it.orig:  # 같은 폴더 이름의 실제 항목과 이어받기 상태/보존 기록 파일을 나눈다(서로 덮어쓰지 않게)
-            kw["state_path"] = item_dst / STAGED_STATE_NAME
-            kw["preserve_path"] = item_dst / STAGED_PRESERVE_NAME
-        if item_dir is not None and not dry_run:
-            kw["manifest_out"] = item_dir / f"{n:04d}.jsonl"
-        if not dry_run:
-            journal["items"][key] = {"src": shown, "rel": it.rel, "status": "pending", **partial}
-            _write_journal(dst, journal)
-        try:
-            rep = transfer_fn(Path(it.src), item_dst, **kw)
-        except Cancelled:
-            raise
-        except DriveDisconnected:
-            raise
-        except Exception as e:  # noqa: BLE001 - 한 항목의 예외(예상 밖 포함)가 나머지 항목을 막지 않게 항목 오류로 기록하고 계속한다
-            if not isinstance(e, (TransferError, OSError, ValueError)):
-                from . import errorlog
-                errorlog.record(e, f"multi-transfer item {shown}")
-            res = ItemResult(shown, str(item_dst), "error", error=str(e) if str(e) else type(e).__name__)
+                on_item(n, total, shown, "start", None)
+            kw = dict(item_kwargs or {})
+            kw.update(dry_run=dry_run, cancel=cancel, warn=(lambda m, _l=label: warn(f"{_l}: {m}")))
+            if retry_failed:
+                kw["retry_failed"] = True
+            if verify_only:
+                kw["verify_only"] = True
+            if progress:
+                kw["progress"] = lambda m, _l=label: progress(f"{_l} {m}")
+            if progress_info:
+                kw["progress_info"] = lambda info, _l=label: progress_info(dataclasses.replace(info, message=f"{_l} {info.message}".strip()))
+            if it.orig:  # 같은 폴더 이름의 실제 항목과 이어받기 상태/보존 기록 파일을 나눈다(서로 덮어쓰지 않게)
+                kw["state_path"] = item_dst / STAGED_STATE_NAME
+                kw["preserve_path"] = item_dst / STAGED_PRESERVE_NAME
+            if item_dir is not None and not dry_run:
+                kw["manifest_out"] = item_dir / f"{n:04d}.jsonl"
             if not dry_run:
-                journal["items"][key] = {"src": shown, "rel": it.rel, "status": "failed", "error": str(e), **partial}
+                journal["items"][key] = {"src": shown, "rel": it.rel, "status": "pending", **partial}
                 _write_journal(dst, journal)
-            mr.items.append(res)
-            warn(f"{label}: 이 폴더는 처리하지 못했습니다 — {e}")
+            try:
+                rep = transfer_fn(Path(it.src), item_dst, **kw)
+            except Cancelled:
+                raise
+            except DriveDisconnected:
+                raise
+            except Exception as e:  # noqa: BLE001 - 한 항목의 예외(예상 밖 포함)가 나머지 항목을 막지 않게 항목 오류로 기록하고 계속한다
+                if not isinstance(e, (TransferError, OSError, ValueError)):
+                    from . import errorlog
+                    errorlog.record(e, f"multi-transfer item {shown}")
+                res = ItemResult(shown, str(item_dst), "error", error=str(e) if str(e) else type(e).__name__)
+                if not dry_run:
+                    journal["items"][key] = {"src": shown, "rel": it.rel, "status": "failed", "error": str(e), **partial}
+                    _write_journal(dst, journal)
+                mr.items.append(res)
+                warn(f"{label}: 이 폴더는 처리하지 못했습니다 — {e}")
+                if on_item:
+                    on_item(n, total, shown, "error", None)
+                continue
+            bad = bool(rep.failures)
+            status = "preview" if dry_run else ("failed" if bad else "ok")
+            mr.items.append(ItemResult(shown, str(item_dst), status, rep))
+            if not dry_run:
+                r = rep.to_dict()
+                done = not bad and bool(r.get("verification_complete"))
+                journal["items"][key] = {"src": shown, "rel": it.rel, "status": "done" if done else "failed" if bad else "copied",
+                                         "files": r.get("total_files"), "bytes": r.get("total_bytes"), "failed": len(rep.failures), **partial}
+                if done and not it.orig and stamp_fn is not None:
+                    try:
+                        journal["items"][key]["src_stamp"] = list(stamp_fn(it.src))  # 다음 skip_done 때 원본이 그대로인지 대조하는 표식
+                    except (OSError, ValueError, TypeError):
+                        pass
+                _write_journal(dst, journal)
             if on_item:
-                on_item(n, total, shown, "error", None)
-            continue
-        bad = bool(rep.failures)
-        status = "preview" if dry_run else ("failed" if bad else "ok")
-        mr.items.append(ItemResult(shown, str(item_dst), status, rep))
-        if not dry_run:
-            r = rep.to_dict()
-            done = not bad and bool(r.get("verification_complete"))
-            journal["items"][key] = {"src": shown, "rel": it.rel, "status": "done" if done else "failed" if bad else "copied",
-                                     "files": r.get("total_files"), "bytes": r.get("total_bytes"), "failed": len(rep.failures), **partial}
-            if done and not it.orig and stamp_fn is not None:
-                try:
-                    journal["items"][key]["src_stamp"] = list(stamp_fn(it.src))  # 다음 skip_done 때 원본이 그대로인지 대조하는 표식
-                except (OSError, ValueError, TypeError):
-                    pass
-            _write_journal(dst, journal)
-        if on_item:
-            on_item(n, total, shown, status, rep)
+                on_item(n, total, shown, status, rep)
+    except BaseException as e:  # 취소/드라이브 분리/오류로 멈춰도 지금까지 끝난 항목의 결과를 예외에 붙인다(중단 리포트가 쓴다)
+        try:
+            e.partial_items = [{"src": i.src, "dest": i.dest, "status": i.status, "error": i.error} for i in mr.items]  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001
+            pass
+        raise
     mr.meta["seconds"] = round(time.monotonic() - t0, 1)
     if final_manifest is not None and not dry_run:
         _merge_manifests(mr, plan, final_manifest, item_dir)

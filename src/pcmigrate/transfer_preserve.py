@@ -62,7 +62,7 @@ class DestScan:
         return sum(self.old_sizes.values())
 
 
-def _scan_dest(entries, dst: Path, total_bytes: int, cancel: Callable[[], bool] | None = None) -> DestScan:
+def _scan_dest(entries, dst: Path, total_bytes: int, cancel: Callable[[], bool] | None = None, tol_ns: int = MTIME_TOLERANCE_NS) -> DestScan:
     """_differs 와 같은 기준(크기 + 수정시각 2초)으로 각 파일이 대상에 '없음/같음/다름' 인지 한 번에 본다."""
     out = DestScan(states=["n"] * len(entries), need=total_bytes)
     if not dst.is_dir() or not any(True for _ in _first(dst)):
@@ -80,7 +80,7 @@ def _scan_dest(entries, dst: Path, total_bytes: int, cancel: Callable[[], bool] 
         if not _stat.S_ISREG(st.st_mode):
             need += size  # 폴더 등은 .bak 대상이 아님(복사 단계에서 문제로 드러난다)
             continue
-        if st.st_size == size and abs(st.st_mtime_ns - mtime) <= MTIME_TOLERANCE_NS:
+        if st.st_size == size and abs(st.st_mtime_ns - mtime) <= tol_ns:
             out.states[i] = "s"
         else:
             out.states[i] = "d"
