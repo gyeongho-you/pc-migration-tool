@@ -48,6 +48,8 @@ def add_parsers(sub, path_arg) -> None:
     s.add_argument("target", help="새 PC 주소[:포트] 또는 '자동'(같은 네트워크에서 검색)")
     s.add_argument("sources", nargs="*", type=path_arg, help="보낼 원본 폴더(--from-selection 을 쓰면 적지 않음)")
     s.add_argument("--code", help="새 PC 화면에 표시된 숫자 6자리 코드")
+    s.add_argument("--extra-file", action="append", type=path_arg, metavar="경로",
+                   help="선택한 폴더 밖의 파일/폴더를 더 보냄(여러 번 가능). 선택한 폴더에 든 것·중복은 빼고, 임시 폴더에 같은 경로 구조로 모아 함께 보낸 뒤 지움(원본은 읽기만)")
     s.add_argument("--from-selection", type=path_arg, metavar="선택파일", help="find-data 가 만든 선택 파일(include:true 폴더들)을 <드라이브>\\<경로> 구조로 보냄")
     s.add_argument("--exclude-junk", action="store_true", help="Thumbs.db, ~$ 잠금, *.tmp 등 다시 만들어지는 파일을 보내지 않음(transfer 와 같은 목록)")
     s.add_argument("--exclude-backup-copies", action="store_true", help="--exclude-junk 와 함께: Revit 백업 사본 등도 제외")
@@ -170,7 +172,7 @@ def _cmd_send(args: argparse.Namespace) -> int:
         if not args.code:
             _err(f"--code 가 필요합니다: {SEND_USAGE}")
             return 2
-    if bool(args.from_selection) == bool(args.sources):
+    if bool(args.from_selection) == bool(args.sources) and not (args.extra_file and not args.from_selection and not args.sources):
         _err(f"보낼 곳을 하나만 지정하세요(--from-selection 선택 파일 또는 원본 폴더): {SEND_USAGE}")
         return 2
     if args.exclude_backup_copies and not args.exclude_junk:
@@ -193,7 +195,8 @@ def _cmd_send(args: argparse.Namespace) -> int:
     _err("[안내] 이 연결은 암호화되지 않습니다. 믿을 수 있는 사설 LAN(같은 공유기/스위치, 랜선 직결)에서만 쓰세요. 원본은 읽기만 합니다.")
     try:
         rep = run_send(args.target, args.code, selection=args.from_selection, sources=args.sources or None, options=opts,
-                       progress_info=on_progress, on_event=on_event, choose=_choose, timeout=args.discover_seconds)
+                       progress_info=on_progress, on_event=on_event, choose=_choose, timeout=args.discover_seconds,
+                       extra_files=args.extra_file or None, warn=lambda m: _err(f"[경고] {m}"))
     except Cancelled:
         _err("취소했습니다. 원본은 읽기만 했으므로 바뀌지 않았습니다. 같은 명령을 다시 실행하면 이어서 보냅니다.")
         return 130
@@ -220,6 +223,10 @@ def _cmd_send(args: argparse.Namespace) -> int:
             print(f"- OneDrive 클라우드 전용 파일 {rep['cloud_only_skipped']}개는 보내지 않았습니다(--include-cloud 로 포함)")
         if rep["skipped_links"]:
             print(f"- 바로가기/정션(링크) {rep['skipped_links']}개는 따라가지 않았습니다")
+        if rep.get("drop_stage"):
+            from .drop_stage import summary_lines
+            for line in summary_lines(rep["drop_stage"]):
+                print(line)
         for f in rep["failed"][:20]:
             print(f"  ! {f['path']}: {f['error']}")
         if rep["failed_count"] > 20:

@@ -458,7 +458,7 @@ def run_with_extras(items: list, extras, dst, run_fn: Callable[[list], "object"]
             info["stale_cleaned"] = stale
         extra_items: list[StagedItem] = []
         if plan.files and not dry_run:
-            free = free_fn(os.fspath(dst))
+            free = free_fn(os.fspath(dst)) if dst is not None else None  # LAN 보내기는 로컬 대상이 없다(받는 PC 가 공간을 확인)
             if free is not None and plan.total_bytes > free:
                 raise DropSpaceError(f"대상 드라이브의 여유 공간이 부족합니다. 직접 고른 파일만 {fmt_bytes(plan.total_bytes)}, 현재 여유 {fmt_bytes(free)}.", "dest")
             stage = new_stage_dir(root)
@@ -476,7 +476,7 @@ def run_with_extras(items: list, extras, dst, run_fn: Callable[[list], "object"]
             result = run_fn(list(items) + extra_items)
     except BaseException as e:  # noqa: BLE001 - 정리 후 그대로 다시 던진다
         err = e
-        if not isinstance(e, Cancelled):
+        if not isinstance(e, Cancelled) and type(e).__name__ != "LanError":  # 연결/코드 문제는 화면이 쉬운 문구로 안내한다(오류 로그 대상 아님)
             errorlog.record(e, "drop-stage run")
     if stage is not None:
         if progress:
@@ -486,5 +486,21 @@ def run_with_extras(items: list, extras, dst, run_fn: Callable[[list], "object"]
         if abort_report:
             _write_abort(abort_report, info, err)
         raise err
+    return attach_info(result, info)
+
+
+def attach_info(result, info: dict):
+    """결과에 drop_stage 정보를 붙인다. MultiReport 는 meta 에, LAN 리포트(dict)는 키로 넣고 실패/클라우드 제외 개수를 합친다."""
+    if isinstance(result, dict):
+        result["drop_stage"] = info
+        nfail = len(info.get("failed", []))
+        if nfail:
+            result["failed_count"] = int(result.get("failed_count", 0)) + nfail
+            result.setdefault("failed", []).extend({"path": x["path"], "reason": "drop_stage", "error": x["reason"]} for x in info["failed"])
+            result["success"] = False
+        cloud = result.get("cloud_only_skipped")
+        if isinstance(cloud, int):
+            result["cloud_only_skipped"] = cloud + int(info.get("cloud_only_total", 0))
+        return result
     result.meta["drop_stage"] = info
     return result

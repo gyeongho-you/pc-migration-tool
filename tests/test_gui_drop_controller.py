@@ -113,13 +113,15 @@ def test_overlap_marking_and_note(env):
     assert env.drop_notes() == [T.DP_OVERLAP.format(n=1)]
 
 
-def test_lan_direct_send_with_drops_is_explained(env):
+def test_lan_direct_send_with_drops_is_allowed(env):
     env.add_drop_paths([str(env.work / "loose.txt")])
     env.set_method(T.MV_DIRECT)
     env.set_role(T.MV_ROLE_SEND)
-    assert env.files_method_reason() == T.DP_LAN_UNSUPPORTED
-    env.set_role(T.MV_ROLE_RECV)
     assert env.files_method_reason() == ""
+    assert env.lan_send_problem("192.0.2.1", "123456") == ""
+    assert "직접 고른 1개" in env.tx_selection_text() and "직접 고른 1개" in env.tx_confirm_text("192.0.2.1")
+    env.clear_drops()
+    assert env.lan_send_problem("192.0.2.1", "123456") == T.G_TX_NEED_SELECTION
 
 
 def test_totals_text_includes_drops(env):
@@ -210,3 +212,32 @@ def test_space_shortage_is_translated_to_plain_message(env, tmp_path):
     env.start_transfer(dry_run=True)
     errs = [p for k, p in env.events if k == "error"]
     assert T.DP_DEST_LOW in (errs[-1].what + errs[-1].how + errs[-1].detail)
+
+
+class FakeLanSend:
+    def __init__(self, report):
+        self.report, self.kw, self.sel = report, None, None
+
+    def run_send(self, target, code, selection=None, options=None, progress_info=None, cancel=None, **kw):
+        self.kw, self.sel = kw, selection
+        return self.report
+
+
+def test_lan_send_passes_extra_files_and_shows_drop_lines(env):
+    sel_folder(env, env.work / "A")
+    env.add_drop_paths([str(env.work / "loose.txt")])
+    drop = {"entries": 1, "staged_files": 1, "overlap_count": 0, "duplicate_count": 0, "failed": [], "cleanup": {"removed": True}}
+    lan = FakeLanSend({"success": True, "files": 2, "verification": {"exact": 2, "mismatch": 0, "missing": 0}, "drop_stage": drop})
+    env.lan_api = lan
+    env.lan_send_start("192.0.2.1", "123456", confirmed=True)
+    assert len(lan.kw["extra_files"]) == 1 and [i.path for i in lan.sel] == [str(env.work / "A")]
+    _text, ok, notes = env.tx_result_lines()
+    assert ok and T.DP_RESULT.format(n=1, ok=1, skip=0, bad=0) in notes and T.DP_CLEANED in notes
+
+
+def test_lan_send_without_drops_passes_nothing_extra(env):
+    sel_folder(env, env.work / "A")
+    lan = FakeLanSend({"success": True, "files": 1, "verification": {"exact": 1, "mismatch": 0, "missing": 0}})
+    env.lan_api = lan
+    env.lan_send_start("192.0.2.1", "123456", confirmed=True)
+    assert lan.kw == {}

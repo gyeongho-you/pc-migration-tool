@@ -381,8 +381,6 @@ class FilesMixin:
             return T.WHY_MV_NEED_METHOD
         if f.method == T.MV_DIRECT and not f.role:
             return T.WHY_MV_NEED_ROLE
-        if f.method == T.MV_DIRECT and f.role == T.MV_ROLE_SEND and f.drops:
-            return T.DP_LAN_UNSUPPORTED  # 직접 연결(LAN) 보내기는 폴더 단위만 지원한다
         if not (f.method == T.MV_DIRECT and f.role == T.MV_ROLE_RECV) and not self.data_has_send():
             return T.WHY_FD_NEED_SELECTION
         return ""
@@ -500,6 +498,9 @@ class FilesMixin:
         items = self.lan_send_items() if items is None else items
         folders, size = self._folders_and_size(items)
         text = T.TX_SELECTION.format(n=len(folders), size=size) if folders else T.TX_SELECTION_UNKNOWN.format(n=0)
+        dn, dsize = self.drop_total()
+        if dn:
+            text = (text + " + " if folders else "") + T.DP_TOTAL.format(n=dn, size=fmt_bytes(dsize))
         note = self.bundle_note(items)
         return text + (" · " + note if note else "")
 
@@ -507,7 +508,8 @@ class FilesMixin:
         items = self.lan_send_items() if items is None else items
         folders, size = self._folders_and_size(items)
         text = T.TX_CONFIRM.format(n=len(folders), size=size, target=target)
-        lines = self._bundle_lines(items)
+        dn, dsize = self.drop_total()
+        lines = self._bundle_lines(items) + ([T.DP_TOTAL.format(n=dn, size=fmt_bytes(dsize))] if dn else [])
         return ("\n".join(lines) + "\n\n" + text) if lines else text
 
     def files_stage(self, screen: str) -> int:
@@ -873,7 +875,7 @@ class FilesMixin:
 
     def lan_send_problem(self, target: str, code: str) -> str:
         """보내기를 시작할 수 없는 이유(빈 문자열이면 시작해도 됨)."""
-        if not self.lan_send_items():
+        if not self.lan_send_items() and not self.files.drops:
             return T.G_TX_NEED_SELECTION
         if not _clean(target):
             return T.G_TX_NEED_ADDR
@@ -892,6 +894,7 @@ class FilesMixin:
         t, c = _clean(target), (code or "").strip()
         f, lan = self.files, self._lan()
         junk = f.junk
+        drops = list(f.drops)
         f.tx_report, f.tx_error, f.tx_error_code, f.tx_cancelled = None, "", "", False
         f.tx_bundle = any(self.is_bundle_item(i) for i in items)
         holder: dict[str, Any] = {}
@@ -900,7 +903,8 @@ class FilesMixin:
             holder["token"] = token
             try:
                 with self.bundle_staging(items):  # 설정 묶음이 있으면 임시 폴더에 복사본을 만들고, 끝나면(실패·취소 포함) 지운다
-                    rep = lan.run_send(t, c, selection=items, options={"exclude_junk": junk}, progress_info=progress, cancel=token)
+                    kw = {"extra_files": list(drops), "warn": progress, "progress": progress} if drops else {}  # 직접 고른 파일(stage63)
+                    rep = lan.run_send(t, c, selection=items, options={"exclude_junk": junk}, progress_info=progress, cancel=token, **kw)
             except LanError as e:  # 연결/코드 문제는 화면에 쉬운 문구로 보인다(오류 대화상자 대신)
                 return {"lan_error": e.code}
             return {"report": rep}
@@ -939,6 +943,7 @@ class FilesMixin:
             notes.append(T.TX_FAILED_HEAD.format(n=rep["failed_count"]))
         if self.files.tx_bundle:
             notes.insert(0, T.BUNDLE_RESULT_NOTE)
+        notes += self.drop_result_lines(rep.get("drop_stage"))  # 직접 고른 N개: 보냄·건너뜀·실패, 제외 안내, 임시 보관 정리 결과
         notes.append(T.TX_VERIFY_NEW_PC)
         return text, ok, notes
 

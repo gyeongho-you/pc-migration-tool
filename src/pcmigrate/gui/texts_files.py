@@ -327,8 +327,6 @@ def install(ns: dict) -> None:
     DP_RESULT = "직접 고른 {n}개: 보냄 {ok}개, 건너뜀 {skip}개, 실패 {bad}개"
     TIP_DP_TEMP = ("전송을 시작할 때 직접 고른 파일은 임시 보관 폴더에 같은 구조로 모았다가 폴더들과 함께 보내고, 끝나면 지웁니다. "
                    "같은 드라이브면 공간을 거의 쓰지 않습니다.")
-    DP_LAN_UNSUPPORTED = ("직접 고른 파일은 '공유 폴더'나 '외장 드라이브'로 옮길 때만 보낼 수 있습니다. 직접 연결로 보내려면 "
-                          "'모두 비우기'로 직접 고른 항목을 빼고 폴더로 체크해 주세요.")
     DP_PROG_CHECK, DP_PROG_STAGE, DP_PROG_CLEAN = "직접 고른 파일 확인 중…", "직접 고른 파일을 임시 보관 중…", "임시 보관 폴더 정리 중…"
 
     ns.update({k: v for k, v in locals().items() if k.isupper()})

@@ -58,11 +58,32 @@ def resolve_target(target: str, *, timeout: float = 2.0, discovery_port: int = D
 
 def run_send(target: str, code: str, selection=None, sources: list[str] | None = None, options: SendOptions | dict | None = None,
              progress_info: Callable[[ProgressInfo], None] | None = None, cancel: Callable[[], bool] | None = None,
-             on_event: Callable[[dict], None] | None = None, *, plan: SendPlan | None = None, **resolve_kw) -> dict:
-    """구 PC 에서 새 PC 로 보낸다. target 은 '주소[:포트]' 또는 '자동'. 리포트 dict(verification: exact/mismatch/missing 등)를 돌려준다."""
+             on_event: Callable[[dict], None] | None = None, *, plan: SendPlan | None = None,
+             extra_files=None, warn: Callable[[str], None] | None = None, progress: Callable[[str], None] | None = None,
+             **resolve_kw) -> dict:
+    """구 PC 에서 새 PC 로 보낸다. target 은 '주소[:포트]' 또는 '자동'. 리포트 dict(verification: exact/mismatch/missing 등)를 돌려준다.
+
+    extra_files(stage63): 직접 고른 파일/폴더. 있으면 보내기 시작 때 drop_stage 가 겹침을 빼고 임시 폴더에 <드라이브>/<경로> 구조로 모아
+    선택한 폴더들과 함께 한 번에 보낸다(프로토콜은 그대로). 끝나면(취소/예외 포함) 임시 폴더를 지우고 리포트의 drop_stage 에 결과를 싣는다.
+    """
     opts = options if isinstance(options, SendOptions) else SendOptions(**(options or {}))
     code = normalize_code(code)
     host, port = resolve_target(target, **resolve_kw)
+    if extra_files:
+        if plan is not None:
+            raise LanError("미리 만든 전송 계획과 직접 고른 파일은 함께 쓸 수 없습니다", "bad_args")
+        from . import drop_stage
+        from .find_data import SelectedItem, load_selection
+        if selection is None:
+            items = [SelectedItem(str(s), True) for s in (sources or [])]
+        else:
+            items = list(selection) if isinstance(selection, list) else list(load_selection(selection))
+
+        def go(its: list) -> dict:
+            p = build_send_plan(None, its, opts, cancel=cancel, progress_info=progress_info)
+            return _run_send(host, port, code, p, opts, progress_info, cancel, on_event)
+
+        return drop_stage.run_with_extras(items, list(extra_files), None, go, cancel=cancel, warn=warn or (lambda m: None), progress=progress)
     if plan is None:
         plan = build_send_plan(sources, selection, opts, cancel=cancel, progress_info=progress_info)
     return _run_send(host, port, code, plan, opts, progress_info, cancel, on_event)
