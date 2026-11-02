@@ -227,7 +227,7 @@ class TransferMixin:
         try:
             self._start_single_transfer(dry_run, strict, include_cloud, report_path, write_confirmed, verify_only, retry_failed, workers, split_large)
         except GuardError as e:  # 시작하지 못한 이유도 결과 리포트로 남긴다(작업 중이거나 리포트 위치가 원본 안이면 쓰지 않는다)
-            if report_path and str(e) not in (T.G_BUSY, T.G_REPORT_INSIDE_SOURCE) and not dry_run:
+            if report_path and str(e) not in (T.G_BUSY, T.G_REPORT_INSIDE_SOURCE):
                 self._write_abort_report(report_path, str(e))
             raise
 
@@ -279,7 +279,7 @@ class TransferMixin:
                                              strict=strict, progress=progress, cancel=token, deps=self.deps,
                                              warn=progress, progress_info=progress, **extra)
             except Exception as e:  # noqa: BLE001 - 오류·취소로 끝나도 결과 리포트는 남긴다(미리보기는 저장하지 않는다)
-                if report_path and not dry_run:
+                if report_path:
                     self._write_abort_report(report_path, "취소했습니다" if type(e).__name__ == "Cancelled" else f"{type(e).__name__}: {e}")
                 raise
 
