@@ -89,10 +89,11 @@ class ImportPlan:
     install: list[dict] = field(default_factory=list)
     install_allowed: bool = False
     install_programs: list[dict] = field(default_factory=list)  # {program, root, folder, old_version, new_version, files}
+    extra_warnings: list[dict] = field(default_factory=list)  # 호출자(api)가 덧붙이는 경고({rule, name, items}): 건너뛴 규칙 파일 안내 등
 
     @property
     def warnings(self) -> list[dict]:
-        w = list(self.manifest.get("manual_warnings", []))
+        w = list(self.manifest.get("manual_warnings", [])) + list(self.extra_warnings)
         for name, items in common_warning_pairs(self.manifest):  # 규칙 공통 한 줄(구 PC 경로 안내 등)
             w.append({"rule": "common", "name": name, "items": items})
         return w

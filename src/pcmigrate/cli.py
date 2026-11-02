@@ -780,7 +780,15 @@ def _import_interrupted(args: argparse.Namespace, exc: BaseException, part) -> i
             part.report.write(Path(args.report))
         except OSError as e:
             _write_failed(args.report, e)
-    _print_lines(summary.import_lines(part, args.package, part.report))
+    if args.json:  # 중단된 복원도 JSON 으로: 복원 기록 경로와 여기까지 쓴 파일 목록
+        rd = part.report.to_dict()
+        _json_out({"dry_run": False, "mode": "interrupted", "written": True, "interrupted": type(exc).__name__,
+                   "error": str(exc)[:300], "summary": rd["summary"], "failed_count": rd["failed_count"], "success": False,
+                   "programs": part.plan.programs, "import_record": part.record_path or None,
+                   **({"import_record_error": part.record_error} if part.record_error else {}),
+                   "written_files": [x.dst for x in part.report.results if x.status == "copied"]})
+    else:
+        _print_lines(summary.import_lines(part, args.package, part.report))
     return 1
 
 

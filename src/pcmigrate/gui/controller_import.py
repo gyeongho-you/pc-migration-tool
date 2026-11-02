@@ -4,7 +4,6 @@ from __future__ import annotations
 import os
 
 from . import texts as T
-from ..cancel import Cancelled
 from .controller_common import GuardError, _accepts, _meta_value, _supported
 
 
@@ -179,7 +178,7 @@ class ImportMixin:
             try:
                 return self.api.run_import(package, self.state.rules_dir, yes=True, allow_extra=allow_extra,
                                            deps=self.deps, **_supported(self.api.run_import, progress_info=progress), **sel_kw, **inst_kw)
-            except Cancelled as e:  # 중지해도 이미 복원한 파일은 결과 화면에 보이고 프로그램별로 되돌릴 수 있게 부분 결과(mode='interrupted')를 넘긴다(stage72)
+            except Exception as e:  # 중지(Cancelled)뿐 아니라 디스크 가득 참/드라이브 분리 같은 예외에도 이미 복원한 파일은 결과 화면에 보이고 되돌릴 수 있게 부분 결과를 넘긴다(stage72/74)
                 part = getattr(e, "partial_result", None)
                 if part is None:
                     raise
@@ -200,7 +199,7 @@ class ImportMixin:
             return {}
         rep = r.report
         counts = rep.to_dict()["summary"]
-        stopped = [("", T.STOP_DONE_APPLY)] if getattr(r, "mode", "") == "interrupted" else []  # 기존 '중지했습니다. 이미 복원한 파일이…' 문구 재사용
+        stopped = [("", self.interrupted_note())] if getattr(r, "mode", "") == "interrupted" else []  # 기존 '중지했습니다. 이미 복원한 파일이…' 문구 재사용
         return {"counts": counts, "interrupted": bool(stopped), "rejected": counts.get("rejected", 0), "denied": counts.get("denied", 0),
                 "failures": [(f.dst, T.friendly_detail(f.error)) for f in rep.failures],
                 "backups": [x.backup for x in rep.results if x.backup],
@@ -209,7 +208,10 @@ class ImportMixin:
     def interrupted_note(self) -> str:
         """복원이 중간에 멈춘 결과면 기존 중지 안내문(STOP_DONE_APPLY), 아니면 빈 문자열."""
         r = self.state.import_result
-        return T.STOP_DONE_APPLY if getattr(r, "mode", "") == "interrupted" else ""
+        if getattr(r, "mode", "") != "interrupted":
+            return ""
+        err = str((getattr(getattr(r, "report", None), "meta", None) or {}).get("interrupted_error") or "")
+        return T.STOP_DONE_APPLY + ("\n" + T.friendly_detail(err) if err else "")  # 취소가 아닌 예외면 중단 이유(오류 문장)를 함께
 
     def backup_folder(self) -> str:
         """복원 때 만든 백업 파일(.bak)이 있는 폴더(여러 곳이면 첫 번째). 없으면 빈 문자열."""

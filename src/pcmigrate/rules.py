@@ -212,12 +212,18 @@ def load_rules(rules_dir: Path, errors: list[str] | None = None) -> list[Rule]:
         raise RuleError(f"규칙 폴더를 찾을 수 없습니다: {rules_dir} "
                         "(프로그램 폴더의 rules 폴더가 지워졌거나 --rules 경로가 잘못됐을 수 있습니다. "
                         "프로그램을 다시 내려받아 주세요)")
-    rules: list[Rule] = []
-    seen: set[str] = set()
-    for f in sorted(rules_dir.glob("*.json")):
+    rules: list[tuple[str, Rule]] = []
+    seen: dict[str, str] = {}  # id -> 그 규칙을 낸 파일 이름
+    try:  # 앱에 내장된 규칙 파일 이름: 같은 폴더에서 id 가 겹치면 내장 규칙이 우선한다(사용자 파일이 이름순으로 앞서도 내장 규칙을 가리지 못함)
+        bundled_names = {p.name for p in default_rules_dir().glob("*.json")}
+    except OSError:
+        bundled_names = set()
+    for f in sorted(rules_dir.glob("*.json"), key=lambda p: (p.name not in bundled_names, p.name)):
         try:
             rule = load_rule_file(f)
             if rule.id in seen:
+                if seen[rule.id] in bundled_names and f.name not in bundled_names:
+                    raise RuleError(f"{f}: 앱에 내장된 규칙 '{rule.id}'({seen[rule.id]})과 id 가 겹치는 규칙이라 건너뜀(내장 규칙 우선)")
                 raise RuleError(f"{f}: 중복된 규칙 id '{rule.id}'")
         except (RuleError, OSError, UnicodeDecodeError) as e:
             if errors is None:
@@ -226,8 +232,9 @@ def load_rules(rules_dir: Path, errors: list[str] | None = None) -> list[Rule]:
                 raise RuleError(f"{f}: 읽을 수 없음: {e}") from e
             errors.append(str(e) if isinstance(e, RuleError) else f"{f}: 읽을 수 없음: {e}")
             continue
-        seen.add(rule.id)
-        rules.append(rule)
+        seen[rule.id] = f.name
+        rules.append((f.name, rule))
+    rules = [r for _n, r in sorted(rules, key=lambda t: t[0])]  # 결과는 예전처럼 파일 이름순
     if not rules and errors:  # 읽을 수 있는 규칙이 없고 건너뛴 파일이 있으면 그 오류를 그대로 알린다(원인을 가리지 않는다)
         raise RuleError("; ".join(errors))
     if not rules:
