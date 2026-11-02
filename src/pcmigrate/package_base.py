@@ -55,7 +55,11 @@ DENY_EXTENSIONS = frozenset({".exe", ".scr", ".com", ".pif", ".bat", ".cmd", ".p
                              # 68(L1): 다음 실행/열기 때 코드를 돌리거나 설정을 바꾸는 형식(Ruby 암호화 .rbe/.rbs, AutoCAD .dvb VBA, Lua/Vim 스크립트, VSTO,
                              # 매크로 문서 .docm/.xlsm, 테마 .theme, 원격 연결 .rdp, 탐색기 셸 명령 .scf/.library-ms, 네이티브 .so).
                              # 규칙이 allow_extensions 나 마지막 패턴("*.dvb")으로 명시하면 그 규칙에서는 기존처럼 허용된다.
-                             ".rbe", ".rbs", ".dvb", ".lua", ".vim", ".vsto", ".docm", ".xlsm", ".theme", ".rdp", ".scf", ".library-ms", ".so"})
+                             ".rbe", ".rbs", ".dvb", ".lua", ".vim", ".vsto", ".docm", ".xlsm", ".theme", ".rdp", ".scf", ".library-ms", ".so",
+                             # 78: 시작/로드 때 코드가 실행되는 형식 — Python site-packages 의 .pth(import 줄), .pyd/.pyc/.pyz/.egg/.whl, IPython 시작 .ipy,
+                             # Outlook VBA .otm, Excel/PowerPoint 애드인 .xla/.ppam/.ppa, PowerShell 콘솔 .psc1, Adobe 스크립트 .jsx/.jsxbin.
+                             # 규칙이 allow_extensions/마지막 패턴으로 명시하면 그 규칙에서만 허용된다.
+                             ".pth", ".pyd", ".pyc", ".pyz", ".egg", ".whl", ".ipy", ".otm", ".xla", ".ppam", ".ppa", ".psc1", ".jsx", ".jsxbin"})
 # 실행 파일/라이브러리의 동작 설정(.NET 앱의 app.exe.config, x.dll.config: 로드할 어셈블리·코드 베이스를 바꿀 수 있음). 확장자만 보면 .config 라
 # 설정으로 보이므로 이름 끝으로 따로 거부한다. 규칙이 allow_extensions(".exe.config")나 마지막 패턴("*.exe.config")으로 명시한 경우만 허용(stage72).
 DENY_COMPOUND_SUFFIXES = (".exe.config", ".dll.config")
@@ -65,14 +69,23 @@ DENY_DIR_NAMES = frozenset({"xlstart"})
 HOME_DENY_FILES = frozenset({".npmrc", ".yarnrc", ".yarnrc.yml", ".wslconfig", ".condarc", ".netrc", ".git-credentials", ".pypirc",
                              # S2: 셸/편집기가 시작할 때 읽어 명령을 실행할 수 있는 점 파일
                              ".bash_aliases", ".vimrc", ".gvimrc", ".emacs", ".inputrc"})
-HOME_DENY_SUBFILES = frozenset({(".kube", "config"), (".docker", "config.json"), (".m2", "settings.xml")})
+HOME_DENY_SUBFILES = frozenset({(".kube", "config"), (".docker", "config.json"), (".m2", "settings.xml"),
+                                # 78: Cargo runner/wrapper(config.toml), AWS credential_process(config)·자격 증명, Gradle 속성(org.gradle.* 로 JVM 인자 지정)
+                                (".cargo", "config.toml"), (".cargo", "config"), (".aws", "config"), (".aws", "credentials"),
+                                (".gradle", "gradle.properties")})
 # 홈 바로 아래의 이 폴더들(의 모든 하위 파일)은 복원을 거부한다: Git 설정(core.sshCommand/alias), 편집기 시작 스크립트, VS Code 확장,
 # Gradle 초기화 스크립트. (.gitconfig 파일은 기존 설계대로 경고 후 허용한다.)
 HOME_DENY_DIRS = frozenset({(".config", "git"), (".emacs.d",), (".vim",), (".vscode", "extensions"), (".gradle", "init.d")})
+# 78: 어느 위치(%APPDATA% 등)에 있어도 막는 경로 끝부분(소문자, 폴더/파일 순서): 패키지 관리자 설정(npm 의 etc/npmrc, pip.ini 는 인덱스/스크립트 지정),
+# Notepad++ 의 shortcuts.xml(사용자 정의 실행 명령을 담을 수 있음). 이 밖에 파이썬 site-packages 폴더 전체는 DENY_CODE_DIR_NAMES 로 막는다.
+DENY_PATH_SUFFIXES = frozenset({("npm", "etc", "npmrc"), ("pip", "pip.ini"), ("notepad++", "shortcuts.xml")})
+DENY_CODE_DIR_NAMES = frozenset({"site-packages"})
 # 셸/SSH 가 시작할 때 읽어 실행하는 설정(소문자 파일 이름 / 폴더 이름)
 DENY_FILE_NAMES = frozenset({".bashrc", ".bash_profile", ".bash_login", ".bash_logout", ".profile", ".zshrc", ".zprofile",
                              ".zshenv", ".zlogin", ".cshrc", ".kshrc", "authorized_keys",
-                             "desktop.ini"})  # desktop.ini: 폴더 아이콘/셸 확장(InfoTip, 바로가기 대상)을 지정할 수 있다
+                             "desktop.ini",
+                             # 78: 도구가 읽어 명령/플러그인 위치를 바꾸는 설정 이름(위치와 상관없이)
+                             ".terraformrc", "terraform.rc", "npmrc", "pip.ini"})  # desktop.ini: 폴더 아이콘/셸 확장(InfoTip, 바로가기 대상)을 지정할 수 있다
 # .ssh 아래에서는 개인키가 아니라 접속 때 명령을 실행시킬 수 있는 파일(ProxyCommand 등)만 막는다
 SSH_DENY_FILES = frozenset({"config", "rc", "environment", "authorized_keys2"})
 _DEVICE_NAMES = frozenset({"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$",

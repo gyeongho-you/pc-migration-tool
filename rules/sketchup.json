@@ -1,7 +1,7 @@
 {
   "id": "sketchup",
   "name": "SketchUp",
-  "version": "5",
+  "version": "6",
   "detect": {
     "display_name_patterns": [
       "SketchUp Pro",
@@ -35,9 +35,10 @@
     "신 PC의 SketchUp 버전이 다르면 플러그인이 호환되지 않을 수 있습니다. 버전을 맞추세요.",
     "자동 실행되는 플러그인/매크로 파일(.rb)은 신뢰하는 설정 묶음에서만 복원하세요. 출처를 모르는 묶음의 플러그인은 다음 실행 때 코드가 실행될 수 있습니다.",
     "플러그인 DLL 본체는 보안상 복원되지 않으므로 신 PC 에 플러그인을 따로 설치해야 합니다. 설정/등록 파일(.rb)만 복원되면 플러그인이 없어 로드 오류가 날 수 있습니다.",
-    "이 규칙은 신 PC 에 설치된 버전을 확인하지 않습니다. 신 PC 에 없는 버전(SketchUp 2020 등)의 설정 폴더도 만들어질 수 있으니, 쓰지 않는 버전 폴더는 확인 후 직접 지우세요(알려진 한계)."
+    "이 규칙은 신 PC 에 설치된 버전을 확인하지 않습니다. 신 PC 에 없는 버전(SketchUp 2020 등)의 설정 폴더도 만들어질 수 있으니, 쓰지 않는 버전 폴더는 확인 후 직접 지우세요(알려진 한계).",
+    "플러그인 로더(.rb)만 복원되고 암호화된 본체(.rbe/.rbs)는 보안상 복원되지 않아, 로더만 있고 본체가 없는 반쪽 확장이 생겨 로드 오류가 날 수 있습니다. 해당 확장은 신 PC 에서 재설치하세요(.rbs 허용 여부는 근거가 없어 바꾸지 않았습니다)."
   ],
-  "notes": "근거 등급: 플러그인 경로=포럼(SketchUp 포럼 보고, 공식 문서 아님: %APPDATA%\\SketchUp\\SketchUp <년도>\\SketchUp\\Plugins). 공식 이전(Migrate Preferences, 단축키 .dat)=확실. 확인 필요: 템플릿(.skp) 경로, 설치 경로 %ProgramFiles%\\SketchUp, 제품 표시 이름('SketchUp Pro 20xx' 가정). 'V-Ray for SketchUp' 등 플러그인 이름에 오탐하지 않도록 'SketchUp' 단독 패턴은 쓰지 않음. [v5] 알려진 한계(감지): install_paths 만으로도 감지되므로 %ProgramFiles%\\SketchUp 폴더만 남아 있거나 같은 제조사의 다른 제품만 설치된 PC 에서도 이 규칙이 감지될 수 있습니다(확인 필요). 감지되면 실제 설치 여부를 확인하세요.",
+  "notes": "근거 등급: 플러그인 경로=포럼(SketchUp 포럼 보고, 공식 문서 아님: %APPDATA%\\SketchUp\\SketchUp <년도>\\SketchUp\\Plugins). 공식 이전(Migrate Preferences, 단축키 .dat)=확실. 확인 필요: 템플릿(.skp) 경로, 설치 경로 %ProgramFiles%\\SketchUp, 제품 표시 이름('SketchUp Pro 20xx' 가정). 'V-Ray for SketchUp' 등 플러그인 이름에 오탐하지 않도록 'SketchUp' 단독 패턴은 쓰지 않음. [v5] 알려진 한계(감지): install_paths 만으로도 감지되므로 %ProgramFiles%\\SketchUp 폴더만 남아 있거나 같은 제조사의 다른 제품만 설치된 PC 에서도 이 규칙이 감지될 수 있습니다(확인 필요). 감지되면 실제 설치 여부를 확인하세요. [v6] .rbe/.rbs 본체 거부로 반쪽 확장이 생길 수 있음(알려진 한계). .rbs 허용 여부는 근거 없음(확인 필요).",
   "exclude": [
     "*.lic"
   ]

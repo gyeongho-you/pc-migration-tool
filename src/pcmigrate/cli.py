@@ -26,7 +26,7 @@ from .discover import render as render_discovery
 from .find_program import render as render_find
 from .discover import summarize
 from .package import export_package, plan_import, retry_failed_export
-from .rules import default_rules_dir
+from .rules import default_rules_dir, find_overlaps
 from .transfer import TransferError, transfer
 from . import data_api, find_data as fd, multi_transfer, place_original
 
@@ -562,6 +562,9 @@ def _cmd_check_rules(args: argparse.Namespace) -> int:
     if not rules:
         _err(f"규칙 파일이 하나도 없습니다: {args.rules}")
         return 1
+    overlaps = find_overlaps(rules)
+    if overlaps:  # 오류는 아니지만 알린다: 같은 파일을 두 규칙이 담으려 한다
+        _err(f"[주의] 경로가 겹치는 규칙이 있습니다({len(overlaps)}건). 내보내기는 먼저 담은 규칙만 담습니다:", *[f"  - {m}" for m in overlaps[:10]])
     try:
         st_items = load_self_transfer_checked(args.self_transfer)
     except ApiError as e:

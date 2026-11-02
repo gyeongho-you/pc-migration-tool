@@ -29,6 +29,21 @@ from .package_zip import COMPRESS_MODES, _PartZip, _write_entry, _zi_dump, _zi_l
 RECORD_ONLY_FIELDS = frozenset({"display_icon", "uninstall_string", "install_date"})  # 설정 기록 모드 전용(경로에 사용자 이름이 있을 수 있어 묶음에 넣지 않는다)
 
 
+def _drop_duplicate_targets(items: list, seen: dict[tuple[str, str], str]) -> tuple[list, list[dict]]:
+    """규칙 둘 이상이 같은 파일(같은 base 와 상대 경로, 대소문자 무시)을 가리키면 먼저 담은 규칙의 것만 남기고 뒤의 것은 제외로 기록한다(78).
+    그대로 담으면 복원 때 같은 대상으로 가는 중복 항목이 생겨 예전에는 패키지 전체가 막혔다."""
+    kept, dups = [], []
+    for it in items:
+        key = (it.base.casefold(), it.rel.casefold())
+        first = seen.get(key)
+        if first is not None:
+            dups.append({"rule": it.rule_id, "path": str(it.src), "reason": f"다른 규칙({first})이 이미 같은 파일을 담아 한 번만 담음(규칙 경로가 겹침)"})
+            continue
+        seen[key] = it.rule_id
+        kept.append(it)
+    return kept, dups
+
+
 def export_package(rules: list[Rule], out: Path, programs: list[Program],
                    winget_text: str | None, expand: Expand = expand_env,
                    winget_list_text: str | None = None, extras: list | None = None,
@@ -132,8 +147,11 @@ def _export_once(rules, out, programs, winget_text, expand, winget_list_text, ex
             q = os.path.normcase(os.path.abspath(p))
             return q in mine or q.startswith(stage_root + os.sep) or (q.startswith(out_prefix + ".bak"))
         roots: list[Path] = []
+        seen_targets: dict[tuple[str, str], str] = {}  # (base, rel) 소문자 -> 먼저 담은 규칙 id
         for rule in rules:  # 1) 파일 찾기(읽기 전용)
             items, skipped = collect_items(rule, expand, avoid=avoid, roots=roots, failed=manifest["failed"], cov=manifest["coverage"])
+            items, dup_skipped = _drop_duplicate_targets(items, seen_targets)
+            skipped = skipped + dup_skipped
             manifest["skipped"] += skipped
             manifest["rules"].append({"id": rule.id, "name": rule.name, "version": rule.version, "notes": rule.notes})
             manifest["manual_warnings"].append({"rule": rule.id, "name": rule.name, "items": list(rule.manual_warnings)})

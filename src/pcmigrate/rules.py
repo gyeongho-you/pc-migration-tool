@@ -128,8 +128,23 @@ def _check_rule_path(path: str, where: str) -> None:
         raise RuleError(f"{where}: path '{path}' 는 루트 폴더 전체입니다. 그 아래 프로그램 폴더/파일까지 적어야 합니다")
     if any(":" in p or "%" in p for p in parts[1:]):
         raise RuleError(f"{where}: path '{path}' 에 ':' 또는 '%' 가 있습니다(대체 데이터 스트림/미확장 변수는 허용하지 않습니다)")
+    last_ext = "." + parts[-1].rsplit(".", 1)[-1].lower() if "." in parts[-1] and not parts[-1].endswith(".") else ""
+    if last_ext in NEVER_ALLOW_EXTENSIONS:  # 마지막 패턴이 '*.exe' 처럼 실행 확장자를 적으면 복원 거부가 풀리므로 규칙에서 받지 않는다(78)
+        raise RuleError(f"{where}: path '{path}' 의 마지막 패턴이 실행/라이브러리 확장자({last_ext})입니다. 규칙으로 허용할 수 없습니다")
     if _wildcard_only(parts[1]):  # 루트 바로 아래 요소는 프로그램 폴더 이름이어야 한다(안쪽 '*' 폴더는 버전 폴더 등에 쓰므로 허용)
         raise RuleError(f"{where}: path '{path}' 의 루트 바로 아래 요소가 와일드카드뿐입니다. 프로그램 폴더 이름을 적어야 합니다")
+
+
+def find_overlaps(rules: list[Rule]) -> list[str]:
+    """서로 다른 규칙의 path 가 같거나 한쪽이 다른 쪽의 상위 폴더인 경우의 설명 목록(78). 겹치면 같은 파일을 두 규칙이 담으려 한다
+    (내보내기는 먼저 담은 규칙만 담고, 가져오기는 중복 항목을 '복원 안 함'으로 둔다). 글로브는 글자 그대로 비교하는 보수적 정적 검사다."""
+    items = [(r.id, p.path.replace("/", "\\").rstrip("\\").lower()) for r in rules for p in r.paths]
+    out = []
+    for i, (a, pa) in enumerate(items):
+        for b, pb in items[i + 1:]:
+            if a != b and (pa == pb or pa.startswith(pb + "\\") or pb.startswith(pa + "\\")):
+                out.append(f"규칙 '{a}' 와 '{b}' 의 경로가 겹칩니다: {pa} / {pb}")
+    return out
 
 
 def parse_rule(data: object, source: str = "<rule>") -> Rule:

@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 import os
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -65,6 +66,21 @@ def _walk_files_no_links(top: Path, files: list[Path], skipped: list[dict], rule
         dirs[:] = keep
         for n in sorted(names):
             files.append(Path(plain) / n)
+
+
+_BAK_NAME = re.compile(r"^(?P<orig>.+)\.bak(\.\d+)?$", re.IGNORECASE)
+
+
+def _is_tool_backup(f: Path) -> bool:
+    """이 도구가 복원 때 만든 백업(<이름>.bak, <이름>.bak.N)으로 보이는지(78): 같은 폴더에 원래 이름의 파일이 함께 있을 때만 그렇게 본다.
+    (그대로 두면 복원 뒤 다음 내보내기가 .bak 을 설정 파일로 다시 담는다. 원래 이름이 없는 .bak 이나 다른 앱이 만든 백업은 건드리지 않는다.)"""
+    m = _BAK_NAME.match(f.name)
+    if not m:
+        return False
+    try:
+        return os.path.isfile(fs.long_path(f.with_name(m.group("orig"))))
+    except OSError:
+        return False
 
 
 def _denied_skip(rule_id: str, path: Path | str, why: str) -> dict:
@@ -142,7 +158,7 @@ def _collect_one_path(rule: Rule, pr: PathRule, expand: Expand, avoid, roots, fa
         for f in files:
             if avoid is not None and avoid(f):
                 continue
-            if os.path.islink(fs.long_path(f)) or _excluded(f.name, rule):
+            if os.path.islink(fs.long_path(f)) or _excluded(f.name, rule) or _is_tool_backup(f):
                 skipped.append({"rule": rule.id, "path": str(f),
                                 "reason": "제외 대상(라이선스/임시/링크)"})
                 continue
@@ -219,7 +235,7 @@ def collect_extra_items(extras: list, expand: Expand = expand_env, *, avoid: Cal
             for f in files:
                 if avoid is not None and avoid(f):
                     continue
-                if os.path.islink(fs.long_path(f)) or _excluded(f.name, None):
+                if os.path.islink(fs.long_path(f)) or _excluded(f.name, None) or _is_tool_backup(f):
                     skipped.append({"rule": EXTRA_ID, "path": str(f), "reason": "제외 대상(라이선스/임시/링크)"})
                     continue
                 rel = ex.rel if f == top else f"{ex.rel}/{f.relative_to(top).as_posix()}"
@@ -271,7 +287,7 @@ def estimate_extra_config(root: str, rel: str, path: Path | str, expand: Expand 
             return
         if restore_denied(rel_f, Path(expand(root)) / rel_f, None, root):
             return
-        if os.path.islink(fs.long_path(f)) or _excluded(f.name, None):
+        if os.path.islink(fs.long_path(f)) or _excluded(f.name, None) or _is_tool_backup(f):
             return
         gate.judge(f.name, _size_or_zero(f), str(f))
 

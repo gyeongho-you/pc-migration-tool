@@ -198,16 +198,17 @@ def _install(tmp: Path, dst: Path, res: FileResult, lp: Callable[[Path], str] = 
 
 
 def copy_file(src: Path, dst: Path, dry_run: bool = False) -> FileResult:
+    """파일 하나를 검증 복사한다. 260자를 넘는 경로(원본/대상/임시 파일)도 긴 경로 접두(long_path)로 다룬다(78, copy_verified 와 같은 방식)."""
     src, dst = Path(src), Path(dst)
     res = FileResult(str(src), str(dst), FAILED)
     tmp = dst.with_name(dst.name + PART_SUFFIX)
     try:
-        res.size = src.stat().st_size
-        if _refuse_dir(dst, res):
+        res.size = os.stat(long_path(src)).st_size
+        if _refuse_dir(dst, res, long_path):
             return res
         res.sha256 = sha256_file(src)
-        exists = dst.exists()
-        if exists and dst.stat().st_size == res.size and sha256_file(dst) == res.sha256:
+        exists = os.path.exists(long_path(dst))
+        if exists and os.stat(long_path(dst)).st_size == res.size and sha256_file(dst) == res.sha256:
             res.status = SKIPPED_SAME
             return res
         if dry_run:
@@ -216,12 +217,12 @@ def copy_file(src: Path, dst: Path, dry_run: bool = False) -> FileResult:
                 res.backup = str(_backup_path(dst))
             return res
 
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(src, tmp)
-        shutil.copystat(src, tmp, follow_symlinks=True)
-        if tmp.stat().st_size != res.size or sha256_file(tmp) != res.sha256:
+        os.makedirs(long_path(dst.parent), exist_ok=True)
+        shutil.copyfile(long_path(src), long_path(tmp))
+        shutil.copystat(long_path(src), long_path(tmp), follow_symlinks=True)
+        if os.stat(long_path(tmp)).st_size != res.size or sha256_file(tmp) != res.sha256:
             raise OSError("복사 후 크기/해시 검증 실패")
-        _install(tmp, dst, res)
+        _install(tmp, dst, res, long_path)
         res.status = COPIED
     except Cancelled:  # 취소는 실패로 기록하지 않는다(임시 파일만 지우고 전파)
         _rm(tmp)
@@ -232,7 +233,7 @@ def copy_file(src: Path, dst: Path, dry_run: bool = False) -> FileResult:
         if isinstance(e, OSError):
             res.reason = failure.classify(e, str(src)).code
         try:
-            tmp.unlink(missing_ok=True)
+            os.unlink(long_path(tmp))
         except OSError:
             pass
     return res
