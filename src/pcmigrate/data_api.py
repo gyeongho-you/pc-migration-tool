@@ -34,10 +34,13 @@ def run_find_data(roots: Iterable[str | os.PathLike] | None = None, *, categorie
     """
     root_list = None if roots is None else [os.fspath(r) for r in roots]
     if output_selection:
-        for r in root_list or []:
-            if os.path.dirname(os.path.abspath(r)) != os.path.abspath(r) and report_inside(output_selection, r):
+        scanned = [r for r in (root_list or []) if os.path.dirname(os.path.abspath(r)) != os.path.abspath(r)]
+        uf = user_folders if user_folders is not None else (fd.default_user_folders() if root_list is None else {})
+        scanned += [str(v) for v in uf.values()]  # 사용자 기본 폴더(문서·바탕화면 등)도 훑는 곳이다: 거기에도 쓰지 않는다
+        for r in scanned:
+            if report_inside(output_selection, r):
                 raise ApiError(f"선택 파일 경로가 훑을 폴더 안입니다: {output_selection}",
-                               lines=["원본 폴더에는 아무것도 쓰지 않습니다. 훑는 폴더 밖(예: 문서 폴더나 외장 드라이브)에 저장하세요."])
+                               lines=["원본 폴더에는 아무것도 쓰지 않습니다. 훑는 폴더 밖(예: 외장 드라이브)에 저장하세요."])
     if use_user_exts and "ext_table" not in inject:
         cfg = ext_config if ext_config is not None else find_exts.load()
         notes = list(cfg.notes)

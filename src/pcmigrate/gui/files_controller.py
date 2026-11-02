@@ -243,6 +243,8 @@ class FilesMixin:
         return p
 
     def set_data_junk(self, on: bool) -> None:
+        if self.state.busy:
+            raise _guard(T.G_BUSY)
         if bool(on) != self.files.junk:
             self._selection_edited()
         self.files.junk = bool(on)

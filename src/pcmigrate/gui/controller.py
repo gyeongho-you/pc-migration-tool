@@ -177,6 +177,8 @@ class Controller(FilesMixin, DropMixin, NetMixin, PackageFindMixin, ScanMixin, E
         return fe
 
     def go(self, screen: str) -> None:
+        if self.state.busy and screen != self.state.screen:
+            raise GuardError(T.G_BUSY)  # 작업 중에 화면을 옮기면 진행 중인 작업의 상태(선택 목록, 원본 표식)가 어긋난다
         self._files_on_go(screen)  # stage30a
         if screen != S.AUTO:
             self.auto = None  # 진행 화면을 떠나면 '한 번에' 진행은 끝난 것으로 본다(이어서 하려면 직접 진행)
@@ -254,7 +256,11 @@ class Controller(FilesMixin, DropMixin, NetMixin, PackageFindMixin, ScanMixin, E
             with bind_cancel(token):  # 이 스레드의 모든 반복문(읽기/해시/압축/폴더 순회/하위 프로세스 대기)이 취소를 본다
                 return fn(progress, token)
 
-        tid = self.runner.submit(work, on_done=on_done, on_error=on_error, on_cancel=on_cancel, on_progress=on_progress)
+        try:
+            tid = self.runner.submit(work, on_done=on_done, on_error=on_error, on_cancel=on_cancel, on_progress=on_progress)
+        except Exception as e:  # noqa: BLE001 - 스레드를 시작하지 못함(메모리 부족 등): busy 가 영원히 남지 않게 정리하고 오류로 알린다
+            on_error(e, traceback.format_exc())
+            return
         if self.state.busy and self.state.busy_label == label:  # sync 실행기에서는 이미 끝났을 수 있다
             def abort() -> None:
                 self.runner.abandon(tid)  # 늦게 도착하는 결과는 버린다
