@@ -438,6 +438,8 @@ class RecordView(BaseView):
     def _prog_selected(self, _e=None) -> None:
         if self._loading:
             return
+        if self.c.state.busy:  # 작업 중에는 고르기를 받지 않는다(안내 상자도 띄우지 않고 표만 원래 선택으로 되돌린다)
+            return
         sel = self.prog_tree.selection()
         if sel and sel[0] in self._prog_iids:
             self.guarded(self.c.record_pick, self._prog_iids[sel[0]])

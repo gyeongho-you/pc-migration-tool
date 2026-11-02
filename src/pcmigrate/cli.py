@@ -355,7 +355,13 @@ def _cmd_find_data(args: argparse.Namespace) -> int:
     if args.output_selection:
         _err(f"[선택 파일] {args.output_selection} 를 저장했습니다. 옮길 폴더의 include 를 true 로 바꾼 뒤: "
              "pcmigrate transfer --from-selection <선택 파일> <대상>")
-    return 0
+    # 종료 코드: 훑을 폴더가 없으면 1(오타를 조용히 넘기지 않는다), 시간 상한으로 일부만 훑었으면 3(결과는 그대로 출력함), 아니면 0
+    missing = [r for r in (args.roots or []) if not os.path.isdir(r)]
+    for r in missing:
+        _err(f"[경고] 훑을 폴더를 찾을 수 없습니다: {r}")
+    if not res.complete:
+        _err("[경고] 시간 상한에 닿아 일부만 훑었습니다. 결과는 일부입니다(--time-limit 을 늘려 다시 실행하세요).")
+    return 1 if missing else (0 if res.complete else 3)
 
 
 def _cmd_transfer_selection(args: argparse.Namespace) -> int:

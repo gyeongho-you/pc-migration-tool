@@ -139,11 +139,11 @@ def test_save_keeps_previous_as_single_bak(d):
     fx.save(fx.add(fx.ExtConfig(), ".aaa", "doc").cfg, d)
     first = (d / fx.FILE_NAME).read_text(encoding="utf-8")
     fx.save(fx.add(fx.ExtConfig(), ".bbb", "doc").cfg, d)
-    bak = d / (fx.FILE_NAME + ".bak")
+    bak = d / (fx.FILE_NAME + fx.PREV_SUFFIX)  # 직전 설정 한 벌(번호 .bak 은 초기화·가져오기용이라 따로 둔다)
     assert bak.read_text(encoding="utf-8") == first
     fx.save(fx.add(fx.ExtConfig(), ".ccc", "doc").cfg, d)
     assert json.loads(bak.read_text(encoding="utf-8"))["added"] == {".bbb": "doc"}  # 한 벌만 유지
-    assert not (d / (fx.FILE_NAME + ".bak.1")).exists()
+    assert not list(d.glob(fx.FILE_NAME + ".bak*"))
 
 
 def test_save_atomic_on_replace_failure(d, monkeypatch):

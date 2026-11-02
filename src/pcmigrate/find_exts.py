@@ -24,6 +24,7 @@ CONFIG_VERSION = 1
 SETTINGS_DIR = "%LOCALAPPDATA%\\pcmigrate\\settings"  # 시험이 실제 폴더를 건드리지 않도록 바꿔 끼울 수 있다
 FALLBACK_DIR = "pcmigrate-settings"
 FILE_NAME = "find-exts.json"
+PREV_SUFFIX = ".prev"  # 저장할 때마다 바뀌는 '직전 설정' 한 벌(번호 .bak 은 초기화·가져오기·손상 보관용으로만 쓴다)
 MAX_BYTES = 1024 * 1024
 MAX_ENTRIES = 500
 MAX_EXT_LEN = 16  # 점을 포함한 길이
@@ -377,8 +378,8 @@ def save(cfg: ExtConfig, directory: str | os.PathLike | None = None) -> Path:
             f.flush()
             os.fsync(f.fileno())
         if path.exists():
-            bak = path.with_name(path.name + ".bak")
-            bak.write_bytes(path.read_bytes())  # 복사: 교체가 실패해도 원래 파일이 남는다
+            prev = path.with_name(path.name + PREV_SUFFIX)  # 직전 설정 한 벌: 번호 .bak(초기화·가져오기·손상 보관)과 이름을 나눠 서로 덮지 않는다
+            prev.write_bytes(path.read_bytes())  # 복사: 교체가 실패해도 원래 파일이 남는다
         os.replace(tmp, path)
     except OSError as e:
         _log(str(e), "저장", e)

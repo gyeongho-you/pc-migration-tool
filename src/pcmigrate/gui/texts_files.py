@@ -81,6 +81,7 @@ def install(ns: dict) -> None:
     FD_ADDED = "추가했습니다: {path}"
     G_FD_NOT_FOLDER = "이 경로는 폴더가 아니거나 찾을 수 없습니다. 폴더를 다시 골라 주세요."
     G_FD_ALREADY = "이미 목록에 있는 폴더입니다."
+    G_FD_SYSTEM_FOLDER = "이 폴더는 드라이브 전체나 시스템·프로그램 폴더, 사용자 폴더 전체라서 직접 추가할 수 없습니다. 안쪽의 자료 폴더를 골라 주세요."
     BTN_FD_SELECT_ALL, BTN_FD_CLEAR_ALL = "보이는 항목 전체 선택", "보이는 항목 전체 해제"
     FD_BULK_SELECTED, FD_BULK_CLEARED = "{n}곳을 선택했습니다.", "{n}곳의 선택을 해제했습니다."
     FD_TOTAL = "선택한 {n}개 · 약 {size}"

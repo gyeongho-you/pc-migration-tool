@@ -84,6 +84,9 @@ class DropMixin:
                     from .controller import GuardError
                     if not isinstance(e, GuardError):
                         raise
+                    if str(e) == T.G_FD_SYSTEM_FOLDER:  # 시스템·드라이브 루트 등은 담지 않았으니 '옮겼습니다' 로 세지 않고 읽을 수 없는 항목처럼 알린다
+                        bad += 1
+                        continue
                 folders += 1
                 continue
             k = norm(p)

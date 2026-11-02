@@ -103,6 +103,31 @@ def lan_error_text(code: str, message: str = "") -> str:
     return T.LAN_ERRORS.get(code) or T.LAN_ERROR_DEFAULT
 
 
+_SYSTEM_ENV = ("SystemRoot", "windir", "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432", "ProgramData")
+_SYSTEM_ROOT_NAMES = frozenset({"windows", "program files", "program files (x86)", "programdata"})
+
+
+def unsafe_data_folder(path: str, env: dict | None = None) -> bool:
+    """직접 추가하면 안 되는 폴더: 드라이브 루트, Windows/Program Files/ProgramData(및 그 안), 사용자 홈 루트 자체.
+    자동 찾기가 시스템 폴더를 빼는 기준(find_data.ROOT_LEVEL_SKIP)과 같은 취지다. 읽기만 하는 계산이다."""
+    env = env if env is not None else os.environ
+    full = os.path.abspath(path)
+    if os.path.dirname(full) == full:
+        return True  # 드라이브 루트(C: 의 최상위)
+    p = os.path.normcase(full).rstrip("\\/")
+    for var in _SYSTEM_ENV:
+        v = env.get(var)
+        if v:
+            r = os.path.normcase(os.path.abspath(v)).rstrip("\\/")
+            if p == r or p.startswith(r + os.sep):
+                return True
+    parent, name = os.path.split(full)
+    if os.path.dirname(parent) == parent and name.lower() in _SYSTEM_ROOT_NAMES:  # 다른 드라이브의 <드라이브>\Windows 등
+        return True
+    home = env.get("USERPROFILE") or os.path.expanduser("~")
+    return bool(home) and p == os.path.normcase(os.path.abspath(home)).rstrip("\\/")
+
+
 def short_date(iso: str) -> str:
     return iso[:10] if iso else ""
 

@@ -93,6 +93,8 @@ class RecordMixin:
 
     def record_pick(self, index: int) -> None:
         st = self.record_state
+        if self.state.busy:
+            raise GuardError(T.G_BUSY)  # 작업 중(폴더 추정 등)에 프로그램을 바꾸면 끝난 작업이 다른 프로그램의 계획으로 덮어쓴다
         if not 0 <= index < len(st.programs):
             raise GuardError(T.G_REC_PICK)
         if st.program is st.programs[index].program:
@@ -125,6 +127,8 @@ class RecordMixin:
             return plan, running, self.api.record_resume(self._record_work())
 
         def done(res):
+            if st.program is not program:  # 추정하는 사이 다른 프로그램으로 바뀌었다: 이 결과는 낡은 것이라 반영하지 않는다
+                return
             plan, running, prev = res
             st.plan, st.running = plan, list(running)
             st.previous = rf.previous_summary(prev)
@@ -140,6 +144,8 @@ class RecordMixin:
         """폴더 줄의 체크. 추정한 폴더는 켜고 끄고, 제외 후보는 켜면 '추가'한 폴더가 된다."""
         from .. import record_infer as ri
         st = self.record_state
+        if self.state.busy:
+            raise GuardError(T.G_BUSY)
         if st.plan is None:
             raise GuardError(T.G_REC_NEED_PLAN)
         if st.session is not None:
@@ -159,6 +165,8 @@ class RecordMixin:
     def record_add_folder(self, path: str) -> None:
         from .. import record_infer as ri
         st = self.record_state
+        if self.state.busy:
+            raise GuardError(T.G_BUSY)
         if st.plan is None:
             raise GuardError(T.G_REC_NEED_PLAN)
         if st.session is not None:

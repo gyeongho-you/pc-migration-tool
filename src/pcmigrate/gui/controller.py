@@ -330,3 +330,5 @@ _WRITING_TASKS = _WRITING_TASKS + (T.TASK_UNDO,)
 _WRITING_TASKS = _WRITING_TASKS + (T.TASK_PLACE, T.TASK_PLACE_PREVIEW)
 # stage60: 설정 기록 작업은 기록 폴더에 쓴다(강제로 버린 옛 작업이 아직 같은 파일을 쓰고 있으면 새로 시작하지 않는다)
 _WRITING_TASKS = _WRITING_TASKS + (T.TASK_REC_SNAP, T.TASK_REC_DRAFT, T.TASK_REC_RESET)
+# stage69: LAN 보내기는 설정 묶음 임시 폴더(고정 이름)를 만들고 지운다: 강제로 버린 옛 보내기가 아직 같은 폴더를 쓰고 있으면 새로 시작하지 않는다
+_WRITING_TASKS = _WRITING_TASKS + (T.TASK_LAN_SEND,)
