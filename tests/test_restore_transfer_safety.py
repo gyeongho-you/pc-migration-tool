@@ -212,8 +212,9 @@ def test_dangerous_names_rejected_even_inside_pattern(env, tmp_path):
 
 def test_rule_that_names_extension_explicitly_may_restore_it(env, tmp_path):
     _, old, new, expand_for = env
-    rule = make_rule(paths=[{"path": "%APPDATA%\\Tools\\*.exe", "dest": "demo/tools", "kind": "file"}])
-    ok = forge_pkg(tmp_path / "ok.zip", [("demo", "%APPDATA%\\Tools", "helper.exe", b"MZ")], rules=[rule])
+    # stage78: 실행 확장자(.exe 등)는 path 마지막 패턴으로도 규칙에서 받지 않는다(rules.NEVER_ALLOW_EXTENSIONS). 플러그인 확장자(.lsp)로 같은 구조를 시험한다
+    rule = make_rule(paths=[{"path": "%APPDATA%\\Tools\\*.lsp", "dest": "demo/tools", "kind": "file"}])
+    ok = forge_pkg(tmp_path / "ok.zip", [("demo", "%APPDATA%\\Tools", "helper.lsp", b"(defun)")], rules=[rule])
     assert plan_import(ok, [rule], expand_for(new)).problems == []
 
 
@@ -521,9 +522,11 @@ def test_case_only_duplicate_targets_rejected(env, tmp_path):
     bad = forge_pkg(tmp_path / "dup.zip", [("demo", "%APPDATA%\\Vendor", "Demo 2024/R1/Support/F.txt", b"1"),
                                             ("demo", "%APPDATA%\\Vendor", "demo 2024/r1/support/f.TXT", b"2")])
     plan = plan_import(bad, [make_rule()], expand_for(new))
-    assert any("같은 대상" in p for p in plan.problems)
-    with pytest.raises(PackageError):
-        apply_import(bad, plan)
+    # stage78: 패키지 전체를 막지 않고 뒤 항목만 '복원 안 함'(먼저 나온 항목이 이긴다, 앞 항목을 .bak 으로 밀어내지 않는다)
+    assert plan.problems == [] and [i["status"] for i in plan.items] == ["would_copy", "denied"] and plan.items[1]["skip_kind"] == "duplicate"
+    apply_import(bad, plan)
+    done = list((new / "Vendor").rglob("*.*"))
+    assert len(done) == 1 and done[0].read_bytes() == b"1" and not list((new / "Vendor").rglob("*.bak*"))
 
 
 @pytest.mark.parametrize("name", ["k.lic ", "k.lic.", "k.LIC", "k.lic. ."])
