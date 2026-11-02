@@ -151,10 +151,10 @@ def test_save_atomic_on_replace_failure(d, monkeypatch):
 
     def boom(a, b):
         raise PermissionError("denied")
-    monkeypatch.setattr(os, "replace", boom)
-    with pytest.raises(fx.FindExtsError, match="저장하지 못했습니다"):
-        fx.save(fx.add(fx.ExtConfig(), ".bbb", "doc").cfg, d)
-    monkeypatch.undo()
+    with monkeypatch.context() as m:  # undo() 는 conftest 의 오류 로그 격리까지 풀어 버리므로 쓰지 않는다
+        m.setattr(os, "replace", boom)
+        with pytest.raises(fx.FindExtsError, match="저장하지 못했습니다"):
+            fx.save(fx.add(fx.ExtConfig(), ".bbb", "doc").cfg, d)
     assert (d / fx.FILE_NAME).read_bytes() == before  # 원래 설정 그대로
     assert not (d / (fx.FILE_NAME + ".tmp")).exists()  # 임시 파일 정리
     assert errorlog.last_error() is not None  # 오류 로그에 기록
@@ -207,9 +207,9 @@ def test_reset_failure_reported_and_logged(d, monkeypatch):
 
     def boom(a, b):
         raise PermissionError("denied")
-    monkeypatch.setattr(os, "replace", boom)
-    r = fx.reset(d)
-    monkeypatch.undo()
+    with monkeypatch.context() as m:
+        m.setattr(os, "replace", boom)
+        r = fx.reset(d)
     assert not r.ok and "되돌리지 못했습니다" in r.message and (d / fx.FILE_NAME).exists()
     assert errorlog.last_error() is not None
 

@@ -144,7 +144,7 @@ def test_manual_item_shows_old_version_publisher_or_missing_text():
 def test_checklist_manual_lines_name_old_version_and_guide():
     cl = build_checklist([], [Program("Zeta Modeler", "3.2", "Zeta Co"), Program("Plain Tool")], [])
     lines = "\n".join(cl.install)
-    assert "Zeta Modeler 3.2 [구 PC 버전: 3.2(게시자 Zeta Co)]" in lines
+    assert "Zeta Modeler 3.2 [구 PC 게시자 Zeta Co]" in lines  # 이름 옆에 버전이 이미 보이면 버전을 중복해 쓰지 않는다(v0.3.6)
     assert "Plain Tool [구 PC 버전: 버전 정보 없음 — 구 PC 의 제어판에서 확인]" in lines
     out = render(cl)
     assert "같은 버전을 받아 설치하세요" in out and "제어판 > 프로그램 및 기능" in out and "같은 언어판" in out
