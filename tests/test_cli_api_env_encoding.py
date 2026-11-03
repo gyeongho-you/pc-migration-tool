@@ -443,7 +443,7 @@ def test_api_errors_and_modes(tmp_path, deps, monkeypatch):
 
 def test_api_format_write_error_and_unexpanded():
     lines = api.format_write_error("%TEMP%\\x", FileNotFoundError(3, "경로 없음", "Z:\\a\\x"))
-    assert lines[0] == "출력 경로를 만들 수 없습니다: Z:\\a\\x (경로 없음)" and "드라이브" in lines[1]
+    assert lines[0] == "출력 경로를 만들 수 없습니다: Z:\\a\\x (파일을 찾을 수 없습니다)" and "드라이브" in lines[1]  # stage83: OS 문구 대신 원인 분류
     assert api.check_unexpanded(output="$env:TEMP\\x")[1] == api.SHELL_HINT
     assert api.check_unexpanded(output="C:\\ok") == []
 
