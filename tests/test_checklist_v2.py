@@ -282,7 +282,7 @@ def test_missing_drive_error_has_drive_hint(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(cli, "write_output", boom)
     assert cli.main(["checklist", "--output", "Z:\\nope\\c.md", "--rules", str(rules_dir)]) == 1
     err = err_of(capsys)
-    assert "출력 경로를 만들 수 없습니다: Z:\\nope\\c.md (지정된 경로를 찾을 수 없습니다)" in err
+    assert "출력 경로를 만들 수 없습니다: Z:\\nope\\c.md (파일을 찾을 수 없습니다)" in err  # stage83: OS 가 준 문구 대신 쉬운 원인 분류만 보인다
     assert "드라이브" in err
 
 
