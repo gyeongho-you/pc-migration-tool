@@ -57,7 +57,7 @@ def restore_denied(rel: str, target: Path, rule: Rule | None, base: str) -> str 
     if any(x in DENY_DIR_NAMES for x in parts[:-1]) or parts[-1] in DENY_DIR_NAMES:
         return "복원이 금지된 위치(Excel 시작 폴더 XLSTART)"
     if any(x in DENY_CODE_DIR_NAMES for x in parts[:-1]):
-        return "복원이 금지된 위치(파이썬 site-packages: .pth 등 시작 때 코드가 실행되는 파일이 있음)"
+        return "복원이 금지된 위치(파이썬 site-packages 또는 .git 폴더: 시작/git 실행 때 코드가 실행될 수 있음)"
     if any(len(parts) >= len(s) and tuple(parts[-len(s):]) == s for s in DENY_PATH_SUFFIXES):
         return "복원이 금지된 설정 파일(패키지 관리자 설정/Notepad++ 단축키 등 실행 명령을 바꿀 수 있음)"
     if base == "%USERPROFILE%" and (parts[0] in HOME_DENY_FILES and len(parts) == 1

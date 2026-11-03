@@ -27,6 +27,8 @@ from .find_program import render as render_find
 from .discover import summarize
 from .package import export_package, plan_import, retry_failed_export
 from .rules import default_rules_dir, find_overlaps
+
+PARTIAL_SUCCESS = 3  # export: 패키지는 만들었지만 읽지 못해 빠진 파일이 있음(실패 1 과 구분)
 from .transfer import TransferError, transfer
 from . import data_api, find_data as fd, multi_transfer, place_original
 
@@ -771,7 +773,9 @@ def _cmd_export(args: argparse.Namespace) -> int:
     _print_checklist_hint(r.checklist)
     if r.discovery:
         _print_hint("(자동으로 포함되지 않습니다).", *r.discovery)
-    return 1 if r.hard_failures else 0  # 읽지 못한 파일은 안내만 하고 성공으로 끝낸다(패키지는 검증을 통과했다)
+    if r.hard_failures:
+        return 1
+    return PARTIAL_SUCCESS if r.unreadable else 0  # 사용 중이라 읽지 못한 파일이 있으면 부분 성공(3): 패키지는 검증을 통과했지만 그 파일은 빠졌다(81)
 
 
 def _import_interrupted(args: argparse.Namespace, exc: BaseException, part) -> int:

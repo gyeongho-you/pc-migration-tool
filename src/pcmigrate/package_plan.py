@@ -154,6 +154,7 @@ def _denied_item(f: dict, target: Path, why: str, is_extra: bool, base_path: Pat
     return d
 
 
+UNKNOWN_RULE_HINT = "이 규칙 파일을 신 PC 의 rules 폴더 또는 --rules 폴더에 두면 복원할 수 있습니다"
 ENV_UNKNOWN_HINT = "pcmigrate --env 이름=값 import … 처럼 환경변수를 지정하면 복원할 수 있습니다"
 
 
@@ -238,7 +239,13 @@ def _plan_import_inner(path: Path, rules: list[Rule], expand: Expand, only: list
                 plan.problems.append(f"홈 루트는 점으로 시작하는 항목만 복원할 수 있음: {f['rel']}")
                 continue
         elif rid not in by_id:
-            plan.problems.append(f"알 수 없는 규칙 id: {rid}")
+            # 81: 이 PC 의 규칙 폴더에 없는 규칙의 항목(예: 구 PC 에서 사용자 규칙으로 만든 패키지)은 패키지 전체를 막지 않고 그 항목만 '복원 안 함'으로 두고
+            # 나머지는 복원한다. 쓰지 않는 항목이므로 안전하다(경로 탈출·허용 외 루트 같은 구조 위반은 아래/위에서 전체 거부 그대로).
+            unknown_target = Path(expand(base)).joinpath(*PurePosixPath(f["rel"]).parts)
+            upkey = program_key(f)
+            usel = (not only or any(program_matches(t, upkey) for t in only)) and not any(program_matches(t, upkey) for t in skip)
+            plan.items.append(_skipped_item(f, unknown_target, f"이 PC 의 규칙에 없는 규칙('{rid}')의 항목입니다. {UNKNOWN_RULE_HINT}",
+                                            "unknown_rule", False, Path(expand(base)), upkey, usel))
             continue
         elif base not in allowed[rid]:
             plan.problems.append(f"규칙 {rid} 에 허용되지 않은 복원 위치: {base}")

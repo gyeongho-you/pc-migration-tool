@@ -597,7 +597,12 @@ def _is_root_dir(d: str, roots: list[str] | None = None) -> bool:
 def _dest(slug_: str, path: str, used: set[str]) -> str:
     parts = [x for x in path.replace("%", "").split("\\") if x and x not in (".", "..")]
     parts = [re.sub(r'[<>:"|?*]', "_", x).lower() if i == 0 else re.sub(r'[<>:"|?*]', "_", x) for i, x in enumerate(parts)]
-    base = slug_ + "/" + "/".join(parts)
+    from .package_base import _bad_component  # 늦은 import(순환 방지)
+    fixed = []
+    for x in parts:
+        x = x.rstrip(" .") or "_"  # 끝의 점/공백은 Windows 가 지우므로 패키지 검증에서 거부된다
+        fixed.append(x + "_" if _bad_component(x) else x)  # CON/NUL/COM1 같은 예약 이름은 접미사를 붙인다(81)
+    base = slug_ + "/" + "/".join(fixed)
     d, n = base, 2
     while d.lower() in used:
         d, n = f"{base}-{n}", n + 1

@@ -97,7 +97,8 @@ def test_h1_structure_violations_still_block_whole_package(env):
     tmp, _, expand = env
     z = tmp / "p.zip"
     build(z, [("demo", "%APPDATA%\\Vendor", "Demo/a.cfg", b"a"), ("nope", "%APPDATA%\\Vendor", "Demo/a.cfg", b"a")])
-    assert any("알 수 없는 규칙 id" in p for p in plan_import(z, [make_rule()], expand).problems)
+    p0 = plan_import(z, [make_rule()], expand)  # stage81: 알 수 없는 규칙 id 는 그 항목만 denied(unknown_rule), 패키지 전체는 막지 않는다
+    assert p0.problems == [] and [i.get("skip_kind") for i in p0.items] == [None, "unknown_rule"]
     build(z, [("demo", "%APPDATA%\\Evil", "Demo/a.cfg", b"a")])
     assert plan_import(z, [make_rule()], expand).problems  # 허용 외 위치
     build(z, [("extra", "%WINDIR%", "x.cfg", b"a")])

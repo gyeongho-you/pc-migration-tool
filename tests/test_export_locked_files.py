@@ -223,7 +223,7 @@ def _cli_export(monkeypatch, tmp_path, manifest):
 
 
 def test_cli_export_unreadable_is_prominent_success_with_five_examples(tmp_path, monkeypatch, capsys):
-    assert _cli_export(monkeypatch, tmp_path, _fake_manifest(7)) == 0
+    assert _cli_export(monkeypatch, tmp_path, _fake_manifest(7)) == 3  # stage81: 읽지 못해 빠진 파일이 있으면 부분 성공(3)
     cap = capsys.readouterr()
     assert "읽지 못해 제외된 파일 7개" in cap.err and "Chrome" in cap.err and "닫고 다시" in cap.err
     assert cap.err.count("LOCK") == 5 and "외 2개" in cap.err

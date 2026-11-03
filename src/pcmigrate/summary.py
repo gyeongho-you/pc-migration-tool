@@ -36,6 +36,9 @@ def export_lines(r, output: str) -> list[str]:
         lines.append(f"- {cl}")
     lines += coverage.config_lines(m, "- ")
     lines += coverage.lines(m)
+    co = m.get("cloud_only")
+    if isinstance(co, dict) and co.get("count"):  # 기존 문구 재사용(drop_stage)
+        lines.append(f"- OneDrive 클라우드 전용 {co['count']}개는 내려받지 않고 제외했습니다(파일을 이 PC에 내려받은 뒤 다시 하세요)")
     if r.unreadable:
         lines.append(f"- 사용 중이라 읽지 못한 파일 {len(r.unreadable)}개(해당 프로그램을 닫고 다시 실행하면 담깁니다)")
     if r.hard_failures:
