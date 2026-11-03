@@ -86,6 +86,7 @@ def _int(v: object, lo: int = 0, hi: int = 1 << 62) -> int:
 class _Active:
     def __init__(self, ch: Channel) -> None:
         self.ch = ch
+        self.working = False  # 받은 파일을 해시·설치하는 중이면 True: 네트워크가 조용해도 응답 없는 연결로 보지 않는다
 
 
 @dataclass
@@ -318,7 +319,7 @@ class Receiver:
     def _gate(self, ch: Channel):
         with self._cur_lock:
             if self._cur is not None:
-                if time.monotonic() - self._cur.ch.last_rx > self.takeover_idle:
+                if time.monotonic() - self._cur.ch.last_rx > self.takeover_idle and not self._cur.working:
                     self._cur.ch.close()  # 응답이 없는 이전 연결(케이블 뽑힘 등)은 새 인증된 접속이 이어받는다
                 else:
                     return ("busy", "수신 PC 가 이미 다른 송신 PC 와 전송 중입니다. 한 번에 한 PC 만 받을 수 있습니다.")
@@ -420,6 +421,20 @@ class _Session:
             self.ch.send_json(T_ERROR, {"code": code, "msg": msg})
         except LanError:
             pass
+
+    def _set_working(self, on: bool) -> None:
+        """이 세션이 파일을 해시·설치하는 중인지 알린다(_gate 가 작업 중인 정상 세션을 인계하지 않게)."""
+        rx = self.rx
+        with rx._cur_lock:
+            if rx._cur is not None and rx._cur.ch is self.ch:
+                rx._cur.working = bool(on)
+
+    def _hash_existing(self, dst):
+        self._set_working(True)
+        try:
+            return sha256_file(dst, self.chunk, None, lambda n: self._ping())
+        finally:
+            self._set_working(False)
 
     def _ping(self) -> None:
         now = time.monotonic()
@@ -658,7 +673,7 @@ class _Session:
             os.makedirs(lp(dst.parent), exist_ok=True)
             if wait:
                 if os.path.isfile(lp(dst)) and os.path.getsize(lp(dst)) == size:
-                    if sha256_file(dst, self.chunk, None, lambda n: self._ping()) == sha:  # 이미 같은 파일: 건너뜀
+                    if self._hash_existing(dst) == sha:  # 이미 같은 파일: 건너뜀
                         self.cur = None
                         self.bad.pop(i, None)
                         self.skipped += 1
@@ -790,7 +805,12 @@ class _Session:
             return
         res = FileResult(src="(lan)", dst=str(cur.dst), status=COPIED, size=cur.size, sha256=digest)
         try:
-            if _same_content(cur.dst, cur.size, digest, lambda n: self._ping()):  # 긴 파일을 읽는 동안에도 핑을 보내 송신 쪽 대기 시간 초과를 막는다  # 내용이 같은 파일이 이미 있으면 .bak 으로 옮기지 않고 받은 임시 파일만 버린다
+            self._set_working(True)
+            try:
+                same = _same_content(cur.dst, cur.size, digest, lambda n: self._ping())
+            finally:
+                self._set_working(False)
+            if same:  # 긴 파일을 읽는 동안에도 핑을 보내 송신 쪽 대기 시간 초과를 막는다  # 내용이 같은 파일이 이미 있으면 .bak 으로 옮기지 않고 받은 임시 파일만 버린다
                 os.remove(long_path(cur.part))
             else:
                 _install(cur.part, cur.dst, res, long_path)
@@ -831,6 +851,11 @@ class _Session:
         self.ch.send_json(T_DONE, summary)
         rx.pairing.close()
         success = not self.bad and not failed_sender
+        got = self.ok + self.skipped + len(self.bad)
+        plan_files = _int(self.plan.get("files"), 0, 1 << 40)
+        if got != plan_files:  # 받은 파일 수가 PLAN 과 다르면 조용히 성공으로 두지 않는다(안전한 쪽)
+            summary["count_mismatch"] = {"plan": plan_files, "got": got}
+            success = False
         rx.result = {**summary, "success": success}
         rx.state = "done"
         rx._emit("progress", info=self.tracker.snapshot() if self.tracker else None, message="")

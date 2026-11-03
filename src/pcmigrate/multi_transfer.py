@@ -288,6 +288,9 @@ def summary_lines(rep: MultiReport, dst: str) -> list[str]:
     elif d["verification_complete"] and any(i.status == "skipped_done" for i in rep.items):
         lines.append("다음 할 일: 이번에 보낸 폴더는 검사까지 통과했습니다. 건너뛴 폴더는 이전 실행의 검사 기록을 믿고 건너뛴 것이라 이번에는 검사하지 않았습니다"
                      "(확실히 하려면 --skip-done-items 없이 다시 실행하세요). 원본 정리는 충분히 확인한 뒤 판단하세요.")
+    elif d["verification_complete"] and (c.get("skipped_identical") or any(
+            it.report is not None and it.report.to_dict().get("trusted_state_files") for it in rep.items)):
+        lines.append("다음 할 일: 검사까지 통과했습니다. 재실행 전송의 검사는 크기·수정 시각 기준입니다(내용까지 확인하려면 --strict). 원본 정리는 충분히 확인한 뒤 판단하세요.")
     elif d["verification_complete"]:
         skipped_any = bool(c.get("cloud_only")) or bool(d.get("junk_excluded")) or any(i.get("skipped_links") for i in d["items"])
         lines.append("다음 할 일: 검사까지 통과했습니다. "
@@ -324,14 +327,16 @@ def _read_journal(dst: Path) -> dict:
     return {"version": JOURNAL_VERSION, "items": {}}
 
 
-def _write_journal(dst: Path, journal: dict) -> None:
+def _write_journal(dst: Path, journal: dict) -> bool:
+    """저널을 쓴다. 못 써도 전송 자체는 계속한다(항목 단위 건너뛰기만 못 함). 성공 여부를 돌려준다(호출자가 경고/리포트에 남긴다)."""
     p = _journal_path(dst)
     tmp = p.with_name(p.name + ".part")
     try:
         tmp.write_text(json.dumps(journal, ensure_ascii=False, indent=1), encoding="utf-8")
         os.replace(tmp, p)
+        return True
     except OSError:
-        pass  # 기록을 못 써도 전송 자체는 계속한다(항목 단위 건너뛰기만 못 함)
+        return False
 
 
 def _existing_bytes(folder: Path, cancel) -> int:
@@ -501,6 +506,13 @@ def run_multi(selected: Iterable[SelectedItem | str], dst: str | os.PathLike, tr
         item_dir = final_manifest.with_name(final_manifest.name + ".items")
     total = len(plan.items)
     t0 = time.monotonic()
+    jfail = [False]
+
+    def _jw() -> None:
+        if not _write_journal(dst, journal) and not jfail[0]:
+            jfail[0] = True  # 한 번만 알린다
+            mr.meta["journal_write_failed"] = True
+            warn("이어받기 기록(.pcmigrate-multi.json)을 쓰지 못했습니다. 이전 실행의 기록이 남아 있으면 최신 결과와 다를 수 있으니, 원본을 정리하기 전에 다시 확인하세요.")
     try:
         for n, it in enumerate(plan.items, 1):
             if cancel is not None and cancel():
@@ -536,7 +548,7 @@ def run_multi(selected: Iterable[SelectedItem | str], dst: str | os.PathLike, tr
                 kw["manifest_out"] = item_dir / f"{n:04d}.jsonl"
             if not dry_run:
                 journal["items"][key] = {"src": shown, "rel": it.rel, "status": "pending", **partial}
-                _write_journal(dst, journal)
+                _jw()
             try:
                 rep = transfer_fn(Path(it.src), item_dst, **kw)
             except Cancelled:
@@ -550,7 +562,7 @@ def run_multi(selected: Iterable[SelectedItem | str], dst: str | os.PathLike, tr
                 res = ItemResult(shown, str(item_dst), "error", error=str(e) if str(e) else type(e).__name__)
                 if not dry_run:
                     journal["items"][key] = {"src": shown, "rel": it.rel, "status": "failed", "error": str(e), **partial}
-                    _write_journal(dst, journal)
+                    _jw()
                 mr.items.append(res)
                 warn(f"{label}: 이 폴더는 처리하지 못했습니다 — {e}")
                 if on_item:

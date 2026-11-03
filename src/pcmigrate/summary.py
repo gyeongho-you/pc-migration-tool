@@ -281,8 +281,10 @@ def transfer_lines(d: dict, rep, src: str, dst: str) -> list[str]:
     lines += junk_summary_line(d)
     trusted = d.get("trusted_state_files")
     if trusted and not d.get("strict"):
-        lines.append(f"- 이전 검사 기록을 믿고 다시 읽지 않은 파일 {trusted}개(크기·수정시각이 같음). "
+        lines.append(f"- 재실행 전송의 검사는 크기·수정 시각 기준입니다. 이전 검사 기록을 믿고 다시 읽지 않은 파일 {trusted}개(크기·수정시각이 같음). "
                      "내용까지 모두 다시 확인하려면 --strict 로 실행하세요.")
+    elif counts.get("skipped_identical") and not d.get("strict"):
+        lines.append("- 재실행 전송의 검사는 크기·수정 시각 기준입니다(내용까지 확인하려면 --strict).")
     if bad:
         lines.append("다음 할 일: 원인을 해결한 뒤 같은 명령에 --retry-failed 를 붙여 실패한 파일만 다시 처리하세요.")
     elif d.get("dest_verification") == "deferred":

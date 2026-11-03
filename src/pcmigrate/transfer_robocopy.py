@@ -137,7 +137,7 @@ def base_args(src: Path, dst: Path, log: Path | None, dry_run: bool, copy_mode: 
     if copy_mode not in COPY_MODES:
         raise TransferError(f"알 수 없는 복사 방식: {copy_mode}")
     args = ["robocopy", str(src), str(dst), "/E", f"/R:{retries}", f"/W:{wait}",
-            "/COPY:DAT", "/DCOPY:DAT", "/NP", "/XJ", "/BYTES", "/NJH", "/NJS", "/NDL"]
+            "/COPY:DAT", "/DCOPY:DAT", "/NP", "/XJ", "/XJD", "/XJF", "/BYTES", "/NJH", "/NJS", "/NDL"]  # /XJ 에 더해 디렉터리/파일 정션·링크를 명시적으로도 제외(따라가지 않음)
     if copy_mode == "restartable":
         args.insert(3, "/Z")
     elif copy_mode == "unbuffered":
