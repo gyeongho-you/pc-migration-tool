@@ -103,7 +103,7 @@ def transfer(src: Path, dst: Path, *, dry_run: bool = False, include_cloud: bool
     mode = "dry-run" if dry_run else "verify-only" if verify_only else "retry-failed" if retry_failed else "copy"
     report.meta.update(mode=mode, strict=strict, dest_kind=dest.kind, dest_fs=dest.fs, workers=workers, copy_threads=threads, chunk_bytes=chunk,
                        copy_mode=copy_mode, dest_verification="deferred" if defer else "now",
-                       # 대상 내용 검사가 이 실행에서 끝났는지. 미룬 경우(랜선/네트워크 + 해시 목록) 새 PC 에서 verify 를 해야 끝난다.
+                       # 대상 내용 검사가 이 실행에서 끝났는지. 미룬 경우(공유 폴더/네트워크 + 해시 목록) 새 PC 에서 verify 를 해야 끝난다.
                        verification_complete=not defer and not dry_run)
 
     # ---- 원본 조사(총 용량/파일 수/최상위 구조)
@@ -152,7 +152,7 @@ def transfer(src: Path, dst: Path, *, dry_run: bool = False, include_cloud: bool
         big = sum(1 for _r, s, _m in entries if s > fs.FAT4G)
         report.meta.update(fat32_blocked=True, fat32_big_files=big)
         msg = (f"대상 드라이브가 FAT32 라서 4GB 보다 큰 파일 {big}개({fmt_bytes(scan.max_size)} 포함)를 저장할 수 없습니다. "
-               "NTFS 로 포맷하거나 NTFS 드라이브를 쓰세요. 포맷이 어려우면 --split-large 옵션으로 큰 파일을 조각(.pcm001 ...)으로 나눠 "
+               "Windows 형식(NTFS)으로 포맷하거나 NTFS 드라이브를 쓰세요. 포맷이 어려우면 --split-large 옵션으로 큰 파일을 조각(.pcm001 ...)으로 나눠 "
                "저장하고, 새 PC 에서 pcmigrate join 으로 합칠 수도 있습니다.")
         if dry_run:
             warn(msg)

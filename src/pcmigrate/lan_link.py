@@ -3,7 +3,7 @@
 - 도구는 방화벽/네트워크 설정을 바꾸지 않는다(읽기와 접속 시험만).
 - 검색은 고정 UDP 포트(DISCOVERY_PORT)로 같은 서브넷에 브로드캐스트하고, 켜져 있는 receive 가 이름/포트를 답한다.
   답에는 코드를 넣지 않는다. 검색이 안 되면(공유기가 막거나 서브넷이 다름) 수신 PC 에 표시된 주소를 직접 입력한다.
-- 랜선 직결(링크로컬 169.254.x.x)도 주소 목록과 검색 대상에 포함한다.
+- 네트워크 케이블 직접 연결(링크로컬 169.254.x.x)도 주소 목록과 검색 대상에 포함한다.
 """
 from __future__ import annotations
 
@@ -86,11 +86,11 @@ def local_addresses(*, include_loopback: bool = False) -> list[LocalAddress]:
     return sorted(out, key=lambda a: order[a.kind])
 
 
-KIND_TEXT = {PRIVATE: "사설 네트워크", LINKLOCAL: "랜선 직결(링크로컬)", LOOPBACK: "이 PC 안(시험용)", PUBLIC: "공인 주소(주의)"}
+KIND_TEXT = {PRIVATE: "사설 네트워크", LINKLOCAL: "네트워크 케이블 직접 연결", LOOPBACK: "이 PC 안(시험용)", PUBLIC: "공인 주소(주의)"}
 
 
 def public_warning(ip: str) -> str:
-    return (f"{ip} 는 공인(인터넷) 주소입니다. 이 도구는 전송 내용을 암호화하지 않으므로 사설 LAN(같은 공유기/스위치, 랜선 직결)에서만 쓰세요. "
+    return (f"{ip} 는 공인(인터넷) 주소입니다. 이 도구는 전송 내용을 암호화하지 않으므로 사설 LAN(같은 공유기/스위치, 네트워크 케이블 직접 연결)에서만 쓰세요. "
             "그래도 쓰려면 명시적으로 허용(--allow-public)해야 합니다.")
 
 
@@ -312,7 +312,7 @@ def diagnose(target: str, code: str | None = None, *, timeout: float = 3.0, loca
                          details, port_open=False, same_subnet=sub)
     except (socket.timeout, TimeoutError):
         if sub is False:
-            return Diagnosis(False, "subnet", f"{ip} 에 닿지 않습니다: 서브넷이 다른 것 같습니다. 두 PC 를 같은 공유기/스위치에 연결하거나 랜선으로 직결하세요.",
+            return Diagnosis(False, "subnet", f"{ip} 에 닿지 않습니다: 서브넷이 다른 것 같습니다. 두 PC 를 같은 공유기/스위치에 연결하거나 네트워크 케이블로 직결하세요.",
                              details, port_open=False, same_subnet=False)
         return Diagnosis(False, "port_timeout", f"{ip}:{port} 가 응답하지 않습니다: 수신 PC 의 Windows 방화벽이 막았거나 네트워크 프로필이 '공용'일 수 있습니다"
                          "(수신 PC 에서 처음 실행할 때 뜨는 방화벽 창에서 '개인 네트워크 허용'을 눌렀는지 확인).", details, port_open=False, same_subnet=sub)

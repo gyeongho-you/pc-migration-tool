@@ -8,9 +8,9 @@
 |---|---|
 | 확인됨 | 개발과 시험은 Windows 11 한 대에서 했습니다(자동 시험 포함. `pytest --collect-only -q` 수집 기준 약 2,500개). 요구 조건은 Python 3.10 이상(`pyproject.toml`), 외부 패키지 없음입니다. |
 | 확인됨 | 프로그램 목록은 레지스트리(읽기)와 `winget export`/`winget list` 로 모읍니다. winget 이 없거나 실패하면 winget 쪽 목록은 비어 있게 처리합니다(코드의 `detect.py`). |
-| 확인됨 | 대용량 복사는 Windows 내장 `robocopy` 를 씁니다. |
+| 확인됨 | 내 파일 복사는 Windows 내장 `robocopy` 를 씁니다. |
 | **미확인** | Windows 10 에서 어느 기능이든 실제로 돌려 본 적이 없습니다(exe 포함). 빌드한 exe 를 깨끗한 Windows 설치에서 돌려 본 적도 없습니다. |
-| **미확인** | 이더넷 주소 자동 맞추기(`lan-setup`)는 Windows 11 에서도 **실제 PC 시험을 하지 못했습니다**(가짜 명령 실행기로만 시험). Windows 10 에서는 더 알 수 없습니다. |
+| **미확인** | 유선 네트워크 주소 자동 맞추기(`lan-setup`)는 Windows 11 에서도 **실제 PC 시험을 하지 못했습니다**(가짜 명령 실행기로만 시험). Windows 10 에서는 더 알 수 없습니다. |
 | **미확인** | winget 이 Windows 10 의 어느 버전부터 기본으로 있는지는 이 저장소에서 확인한 적이 없습니다. 아래 1번으로 PC 에서 직접 확인하세요. |
 
 ## 1. Windows 10 버전과 winget 확인
@@ -48,9 +48,9 @@ pcmigrate import %TEMP%\pcm-check\settings.zip --dry-run  # 복원 미리보기(
 - 작은 시험 폴더 복사는 `pcmigrate transfer <시험원본> %TEMP%\pcm-check\복사본 --dry-run` 으로 목록만 확인한 뒤, 되면 `--dry-run` 없이 한 번 실행하고 `verify` 로 확인합니다. `robocopy` 가 있는지 `robocopy /?` 로 먼저 확인하세요.
 - Python 이 없는 PC 라면 릴리스의 exe 묶음(`pcmigrate-win.zip`)으로 같은 순서(`pcmigrate.exe --version` 부터)를 따릅니다. exe 는 서명이 없어 처음에 SmartScreen 이 뜰 수 있습니다.
 
-## 3. 이더넷 주소 맞추기(`lan-setup`)
+## 3. 유선 네트워크 주소 맞추기(`lan-setup`)
 
-랜선 직결에서 두 PC 의 주소 대역이 달라 연결이 안 될 때 쓰는 기능입니다. 어댑터 설정을 **임시로 바꾸는 기능이라 실제 PC 시험이 확인되지 않았습니다.** Windows 10 에서는 반드시 미리보기부터 하세요.
+네트워크 케이블 직접 연결에서 두 PC 의 주소 대역이 달라 연결이 안 될 때 쓰는 기능입니다. 어댑터 설정을 **임시로 바꾸는 기능이라 실제 PC 시험이 확인되지 않았습니다.** Windows 10 에서는 반드시 미리보기부터 하세요.
 
 ```
 pcmigrate lan-setup --status                       # 직결 후보 어댑터 보기(읽기 전용)

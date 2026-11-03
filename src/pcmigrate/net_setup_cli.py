@@ -1,4 +1,4 @@
-"""pcmigrate lan-setup 명령(랜선 직결용 이더넷 주소 임시 맞추기) + receive/send 의 --auto-ip. 동작은 net_setup 에 있다.
+"""pcmigrate lan-setup 명령(네트워크 케이블 직접 연결용 유선 네트워크 주소 임시 맞추기) + receive/send 의 --auto-ip. 동작은 net_setup 에 있다.
 
 기본은 계획만 보여 주는 미리보기이며 --yes 가 있어야 적용한다. 시험은 ENV_FACTORY 를 가짜 runner 가 든 NetEnv 로 바꿔 끼운다.
 """
@@ -20,9 +20,9 @@ def _err(*lines: str) -> None:
 
 
 def add_parsers(sub) -> None:
-    p = sub.add_parser("lan-setup", help="랜선 직결용: 이 PC 이더넷 주소를 같은 대역 고정 IP 로 임시로 맞추고(보내는 쪽 .1 / 받는 쪽 .2), 끝나면 원래대로 되돌린다")
+    p = sub.add_parser("lan-setup", help="네트워크 케이블 직접 연결용: 이 PC 유선 네트워크 주소를 같은 대역 고정 IP 로 임시로 맞추고(보내는 쪽 .1 / 받는 쪽 .2), 끝나면 원래대로 되돌린다")
     p.add_argument("--role", choices=ns.ROLES, help="sender(보내는 쪽 .1) 또는 receiver(받는 쪽 .2)")
-    p.add_argument("--adapter", help="바꿀 이더넷 어댑터 이름(생략하면 직결 후보가 하나일 때 자동). 이름은 --status 로 확인")
+    p.add_argument("--adapter", help="바꿀 유선 네트워크 어댑터 이름(생략하면 직결 후보가 하나일 때 자동). 이름은 --status 로 확인")
     p.add_argument("--peer", help="상대(받는 쪽) 주소. 상대가 고른 대역에 맞춘다(예: 10.254.250.2)")
     p.add_argument("--dry-run", action="store_true", help="계획만 보여 준다(기본 동작. --yes 가 없으면 항상 계획만 보여 줌)")
     p.add_argument("--yes", action="store_true", help="확인하고 실제로 적용(또는 --restore 와 함께 되돌리기)")
@@ -40,7 +40,7 @@ def add_parsers(sub) -> None:
         sp = sub.choices.get(name)
         if sp is not None:
             sp.add_argument("--auto-ip", action="store_true",
-                            help="시작 전에 이 PC 이더넷 주소를 임시로 맞추고(계획을 보여 주고 확인) 끝나면 원래대로 되돌린다(관리자 권한 확인창이 뜰 수 있음)")
+                            help="시작 전에 이 PC 유선 네트워크 주소를 임시로 맞추고(계획을 보여 주고 확인) 끝나면 원래대로 되돌린다(관리자 권한 확인창이 뜰 수 있음)")
 
 
 def cmd_lan_setup(args: argparse.Namespace) -> int:
@@ -95,7 +95,7 @@ def _status(env: ns.NetEnv, as_json: bool) -> int:
 def _restore(env: ns.NetEnv, yes: bool) -> int:
     pend = ns.pending_restore(env)
     if pend is None:
-        print("되돌릴 기록이 없습니다. 이더넷 설정은 원래 그대로입니다.")
+        print("되돌릴 기록이 없습니다. 유선 네트워크 설정은 원래 그대로입니다.")
         return 0
     if pend.get("bad"):
         _err(pend["message"])
@@ -136,7 +136,7 @@ def auto_ip_scope(args: argparse.Namespace, role: str, peer: str | None = None):
             def confirm(text: str) -> bool:
                 print(text)
                 if not (sys.stdin and sys.stdin.isatty()):
-                    _err("확인할 수 없어(터미널이 아님) 이더넷 설정을 바꾸지 않았습니다. 먼저 `pcmigrate lan-setup --role ... --yes` 를 쓰세요.")
+                    _err("확인할 수 없어(터미널이 아님) 유선 네트워크 설정을 바꾸지 않았습니다. 먼저 `pcmigrate lan-setup --role ... --yes` 를 쓰세요.")
                     return False
                 try:
                     return input("이대로 적용할까요? (y/N): ").strip().lower() in ("y", "yes", "예", "ㅇ")
@@ -155,6 +155,6 @@ def auto_ip_scope(args: argparse.Namespace, role: str, peer: str | None = None):
         if applied:
             try:
                 ns.restore_ip_setup(env)
-                print("[주소 복구] 이더넷 설정을 원래대로 되돌렸습니다.", flush=True)
+                print("[주소 복구] 유선 네트워크 설정을 원래대로 되돌렸습니다.", flush=True)
             except ns.NetSetupError as e:
                 _err(str(e), "직접 되돌리려면: pcmigrate lan-setup --restore --yes")

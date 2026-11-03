@@ -466,10 +466,10 @@ def test_manifest_many_rows_streams(tmp_path):
     assert sum(1 for _ in r.rows()) == n and r.header["total_files"] == n
 
 
-# ------------------------------------------------------------------ transfer + manifest 흐름(외장 / 랜선)
+# ------------------------------------------------------------------ transfer + manifest 흐름(외장 드라이브 / 공유 폴더)
 
 def test_transfer_manifest_out_then_verify_local(tmp_path):
-    """랜선 흐름: 구 PC 에서 복사+목록, 새 PC 에서 목록으로 로컬 검사."""
+    """네트워크 케이블 흐름: 구 PC 에서 복사+목록, 새 PC 에서 목록으로 로컬 검사."""
     src = make_src(tmp_path)
     ext = tmp_path / "ext"
     rep = run(src, tmp_path / "net_dst", manifest_out=ext / "m.jsonl", dest_info_fn=info(kind="network"))

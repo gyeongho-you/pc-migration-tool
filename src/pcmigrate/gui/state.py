@@ -25,7 +25,7 @@ TITLES = T.TITLES  # 화면 제목은 texts.py 에서 관리
 def overall_step(screen: str, transfer_mode: str = "", transfer_stage: int = 1, files_stage: int = 0) -> tuple[int, int, str, str] | None:
     """마법사 맨 위의 '전체 단계 n/N' 표시용 (n, N, 흐름 이름, 화면 제목). 시작 화면은 None.
 
-    구 PC / 새 PC 흐름은 4단계, 대용량 복사는 외장/랜선이면 2단계(구 PC에서 보내기 -> 새 PC에서 받아 검사), 같은 PC 면 1단계.
+    구 PC / 새 PC 흐름은 4단계, 내 파일 복사는 외장/공유 폴더이면 2단계(구 PC에서 보내기 -> 새 PC에서 받아 검사), 같은 PC 면 1단계.
     files_stage(1~4)가 있으면 '내 파일 옮기기'(찾기 → 방법 → 연결·복사 → 결과) 4단계 흐름이다(stage30a).
     """
     if files_stage:
@@ -93,7 +93,7 @@ class WizardState:
     install_folder: str = ""  # 설치 목록(winget.json)을 꺼낼 폴더(빈 값이면 바탕화면의 새 폴더)
     install_command: str = ""  # 마지막으로 복사용으로 만든 명령
     install_new: list = field(default_factory=list)  # 다시 확인으로 새로 설치된 것으로 확인된 프로그램 이름
-    # 대용량 복사
+    # 내 파일 복사
     transfer_src: str = ""
     transfer_dst: str = ""
     transfer_preview_key: tuple | None = None  # 마지막으로 dry-run 한 (src, dst)
@@ -102,13 +102,13 @@ class WizardState:
     transfer_report: Any = None  # copier.Report
     transfer_was_dry_run: bool = True
     transfer_mode: str = "external"  # external | network | local (texts.MODE_*)
-    transfer_stage: int = 1  # 외장/랜선은 1단계(구 PC), 2단계(새 PC)
+    transfer_stage: int = 1  # 외장/공유 폴더은 1단계(구 PC), 2단계(새 PC)
     transfer_split: bool = False  # 지금 화면의 '4GB 넘는 파일을 조각으로 나눠 복사' 체크
     transfer_preview_split: bool | None = None  # 미리보기를 만들 때의 같은 값(달라지면 미리보기 무효)
     transfer_blocked: str = ""  # 미리보기에서 드러난 시작 불가 이유(여유 공간 부족, FAT32 4GB 초과)
     transfer_progress: Any = None  # progress.ProgressInfo
-    verify_manifest: str = ""  # 2단계(랜선): 목록 파일
-    verify_target: str = ""  # 2단계(랜선): 검사할 폴더
+    verify_manifest: str = ""  # 2단계(네트워크 케이블): 목록 파일
+    verify_target: str = ""  # 2단계(네트워크 케이블): 검사할 폴더
     # ---- stage30b 구획(프로그램별 복원 선택, 되돌리기, 폴더 전체 담기)
     extra_mode: str = "config"  # 직접 고른 폴더를 담는 방식: config(설정 파일만, 기본) | all(폴더 전체)
     restore_skip: set = field(default_factory=set)  # 복원에서 체크를 끈 프로그램 id

@@ -28,7 +28,7 @@ def test_start_cards_follow_the_real_order_and_keep_screen_ids():
     assert titles[0].startswith("① 쓰던 PC에서 준비하기") and titles[1].startswith("② 내 파일 옮기기") \
         and titles[2].startswith("③ 새 PC에서 설치하고 가져오기")
     assert [c[3] for c in T.START_CHOICES] == [S.OLD_SCAN, S.FIND, S.NEW_PACKAGE]  # 화면 id 는 그대로, 배치만 바뀜
-    assert T.START_WHERE == ("구 PC에서", "양쪽 PC에서: 보내는 쪽은 구 PC, 받는 쪽은 새 PC", "새 PC에서")
+    assert T.START_WHERE == ("지금 구 PC 앞이라면", "두 PC에서 각각 실행합니다: 구 PC는 보내는 쪽, 새 PC는 받는 쪽", "지금 새 PC 앞이라면")
     assert T.OVERALL_FLOWS["old"].startswith("①") and T.OVERALL_FLOWS["files"].startswith("②") and T.OVERALL_FLOWS["new"].startswith("③")
     for scr in (S.FIND, S.METHOD, S.LAN_RECV, S.LAN_SEND, S.TRANSFER):
         assert T.TITLES[scr].startswith("② 내 파일 옮기기"), scr

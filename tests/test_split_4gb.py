@@ -217,7 +217,7 @@ def test_resume_skips_finished_parts_and_restarts_partial_part(tmp_path):
 def test_state_part_records_survive_and_pending_parts_reverified(tmp_path):
     src = make_src(tmp_path)
     dst, m = tmp_path / "dst", tmp_path / "m.jsonl"
-    rep = run(src, dst, split_large=True, manifest_out=m, verify_dest=False)  # 대상 검사 미룸(랜선/네트워크 흐름과 같은 동작)
+    rep = run(src, dst, split_large=True, manifest_out=m, verify_dest=False)  # 대상 검사 미룸(네트워크 케이블/네트워크 흐름과 같은 동작)
     assert rep.meta["dest_verification"] == "deferred" and rep.failures == []
     assert {r.status for r in rep.results if r.src.endswith("model.rvt")} == {"pending_verify"}
     assert rows(m)["proj/model.rvt"]["parts"]

@@ -1,4 +1,4 @@
-"""stage39: 이더넷 주소 자동 맞추기의 컨트롤러(비시각)와 화면(tkinter, 창을 숨긴 채) 시험. 가짜 lan_api + 가짜 runner(net_fakes.FakePC)만 쓴다."""
+"""stage39: 유선 네트워크 주소 자동 맞추기의 컨트롤러(비시각)와 화면(tkinter, 창을 숨긴 채) 시험. 가짜 lan_api + 가짜 runner(net_fakes.FakePC)만 쓴다."""
 import time
 from types import SimpleNamespace
 
@@ -15,7 +15,7 @@ from test_gui_my_files_controller import FakeLan, env  # noqa: F401  (env 는 �
 
 
 class NetLan(FakeLan):
-    """FakeLan + 이더넷 주소 맞추기 함수(진짜 lan_api 함수를 그대로 쓰되 env 로 가짜 PC 가 들어온다)."""
+    """FakeLan + 유선 네트워크 주소 맞추기 함수(진짜 lan_api 함수를 그대로 쓰되 env 로 가짜 PC 가 들어온다)."""
     plan_ip_setup = staticmethod(lan_api.plan_ip_setup)
     apply_ip_setup = staticmethod(lan_api.apply_ip_setup)
     restore_ip_setup = staticmethod(lan_api.restore_ip_setup)
@@ -59,7 +59,7 @@ def test_controller_apply_without_plan_and_plan_errors(env, netpc):
     netpc.adapters[:] = [adapter("Wi-Fi", 3, media="Native 802.11")]
     with pytest.raises(GuardError) as e:
         c.net_plan("sender")
-    assert "랜선" in str(e.value)
+    assert "네트워크 케이블" in str(e.value)
     assert c.net_refresh_adapters() == [] and c.net_status_text() == T.NET_NO_ADAPTER
 
 

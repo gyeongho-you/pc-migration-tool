@@ -1,4 +1,4 @@
-"""랜선 직결용 이더넷 주소 임시 맞추기(stage39). 화면 없는 모듈이며 시험에서는 전부 가짜 runner 를 쓴다.
+"""네트워크 케이블 직접 연결용 유선 네트워크 주소 임시 맞추기(stage39). 화면 없는 모듈이며 시험에서는 전부 가짜 runner 를 쓴다.
 
 - 조회(읽기 전용): PowerShell 고정 스크립트 하나로 어댑터/주소/게이트웨이/DNS/경로를 JSON 으로 읽는다.
 - 직결 후보: 케이블 연결됨(Up) + 유선 Ethernet(802.3) + 실제 장치 + (Wi-Fi/가상/VPN/Bluetooth/루프백이 아님) + 기본 게이트웨이 없음.
@@ -70,22 +70,22 @@ ELEVATE_DENIED = 90
 MESSAGES = {
     "bad_role": "역할은 보내는 쪽(sender) 또는 받는 쪽(receiver) 이어야 합니다.",
     "query_failed": "이 PC 의 네트워크 어댑터 정보를 읽지 못했습니다. Windows 에서만 쓸 수 있습니다.",
-    "no_candidate": "랜선으로 연결된(케이블이 꽂힌) 이더넷 어댑터를 찾지 못했습니다. 두 PC 를 랜선으로 연결했는지 확인해 주세요. "
+    "no_candidate": "네트워크 케이블로 연결된(케이블이 꽂힌) 유선 네트워크 어댑터를 찾지 못했습니다. 두 PC 를 네트워크 케이블로 연결했는지 확인해 주세요. "
                     "인터넷에 연결된 어댑터와 무선·가상 어댑터는 제외합니다.",
     "ambiguous": "후보 어댑터가 여러 개입니다. 어댑터를 하나 골라 주세요: {names}",
-    "unknown_adapter": "이 PC 에서 그 이름의 이더넷 어댑터를 찾지 못했습니다.",
-    "not_wired": "그 어댑터는 랜선 이더넷 어댑터가 아니라 바꿀 수 없습니다(무선·가상·연결 안 됨 포함).",
+    "unknown_adapter": "이 PC 에서 그 이름의 유선 네트워크 어댑터를 찾지 못했습니다.",
+    "not_wired": "그 어댑터는 네트워크 케이블 유선 네트워크 어댑터가 아니라 바꿀 수 없습니다(무선·가상·연결 안 됨 포함).",
     "internet_adapter": "그 어댑터는 인터넷(게이트웨이)에 연결돼 있어 기본적으로 바꾸지 않습니다. 바꾸면 인터넷이 끊길 수 있습니다.",
     "bad_peer": "상대 PC 주소를 이해하지 못했습니다. 숫자 주소(예: 10.254.250.2)를 입력해 주세요.",
     "peer_not_in_range": "상대 PC 주소가 자동 맞추기 대역({bands})이 아닙니다. 상대 PC 가 이 도구로 주소를 맞춘 뒤의 주소를 입력해 주세요.",
     "band_in_use": "상대 PC 의 대역 {band} 를 이 PC 가 이미 다른 연결에서 쓰고 있어 맞출 수 없습니다. 받는 쪽 주소를 다른 대역으로 다시 맞춰 주세요.",
     "no_band": "겹치지 않는 대역이 없어 자동으로 맞출 수 없습니다. 주소를 직접 설정해 주세요.",
-    "declined": "취소했습니다. 이더넷 설정은 바꾸지 않았습니다.",
-    "pending_restore": "이전에 바꾼 이더넷 설정이 아직 원래대로 돌아가지 않았습니다. 먼저 '원래대로 되돌리기'를 해 주세요.",
-    "state_write": "원래 설정을 저장하지 못해 이더넷 설정은 바꾸지 않았습니다(저장 위치에 쓸 수 없음).",
-    "uac_denied": "관리자 권한 확인을 받지 못했습니다. 확인창에서 '예'를 눌러야 바꿀 수 있습니다. 이더넷 설정은 바꾸지 않았습니다.",
+    "declined": "취소했습니다. 유선 네트워크 설정은 바꾸지 않았습니다.",
+    "pending_restore": "이전에 바꾼 유선 네트워크 설정이 아직 원래대로 돌아가지 않았습니다. 먼저 '원래대로 되돌리기'를 해 주세요.",
+    "state_write": "원래 설정을 저장하지 못해 유선 네트워크 설정은 바꾸지 않았습니다(저장 위치에 쓸 수 없음).",
+    "uac_denied": "관리자 권한 확인을 받지 못했습니다. 확인창에서 '예'를 눌러야 바꿀 수 있습니다. 유선 네트워크 설정은 바꾸지 않았습니다.",
     "elevated_failed": "관리자 권한으로 바꾸는 중 문제가 생겼습니다. {detail}",
-    "apply_failed": "이더넷 주소를 바꾸지 못했습니다. 설정을 원래대로 되돌렸습니다. {detail}",
+    "apply_failed": "유선 네트워크 주소를 바꾸지 못했습니다. 설정을 원래대로 되돌렸습니다. {detail}",
     "verify_failed": "바꾼 주소가 확인되지 않아 원래대로 되돌렸습니다.",
     "rollback_failed": "주소를 바꾸다 문제가 생겼고 원래대로 되돌리는 데도 실패했습니다. 나중에 '원래대로 되돌리기'를 다시 눌러 주세요.",
     "restore_failed": "원래 설정으로 되돌리지 못했습니다. 어댑터 연결을 확인하고 다시 시도해 주세요. {detail}",
@@ -370,7 +370,7 @@ class IpPlan:
         return "고정 " + (", ".join(f"{a['ip']}/{a['prefix']}" for a in o.get("addresses", [])) or "주소 없음")
 
     def describe(self) -> str:
-        lines = [f"이 PC 의 이더넷 설정을 임시로 바꿉니다: 어댑터 {self.adapter.name} 를 {self.ip} (/{self.prefix}) 로.",
+        lines = [f"이 PC 의 유선 네트워크 설정을 임시로 바꿉니다: 어댑터 {self.adapter.name} 를 {self.ip} (/{self.prefix}) 로.",
                  f"지금 설정: {self.original_text()}",
                  "전송이 끝나면 원래대로 되돌립니다.",
                  "관리자 권한 확인창이 뜰 수 있습니다. DNS 와 게이트웨이는 바꾸지 않습니다."]
@@ -571,7 +571,7 @@ def pending_restore(env: NetEnv | None = None) -> dict | None:
         return None
     return {"bad": False, "adapter": rec["adapter"]["name"], "index": rec["adapter"]["index"], "ip": rec["applied"]["ip"], "role": rec["role"],
             "created": rec.get("created", ""), "original": rec["original"],
-            "message": f"이전에 이더넷 어댑터 {rec['adapter']['name']} 의 주소를 임시로 {rec['applied']['ip']} 로 바꿨는데 아직 원래대로 되돌리지 않았습니다. "
+            "message": f"이전에 유선 네트워크 어댑터 {rec['adapter']['name']} 의 주소를 임시로 {rec['applied']['ip']} 로 바꿨는데 아직 원래대로 되돌리지 않았습니다. "
                        "`pcmigrate lan-setup --restore --yes` 또는 화면의 '지금 되돌리기'로 되돌려 주세요."}
 
 

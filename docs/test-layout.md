@@ -8,7 +8,7 @@
 | `tests/test_stage8.py` | `tests/test_cli_api_env_encoding.py` | strict 복구, 환경변수 경로 덮어쓰기, UTF-8 출력, api 함수 (단계 8) |
 | `tests/test_rules_stage5.py` | `tests/test_rules_extra_programs.py` | 추가 프로그램 규칙(Rhino 등) (단계 5) |
 | `tests/test_stage12.py` | `tests/test_transfer_safety_manifest.py` | 모드 B 전송: 절전 방지/진행률/검증/사전 검사/해시 목록 |
-| `tests/test_stage12_gui.py` | `tests/test_gui_transfer_modes.py` | 전송 방식(외장/랜선/같은 PC)별 GUI 흐름 |
+| `tests/test_stage12_gui.py` | `tests/test_gui_transfer_modes.py` | 전송 방식(외장/공유 폴더/같은 PC)별 GUI 흐름 |
 | `tests/test_stage14_export.py` | `tests/test_export_locked_files.py` | 잠긴 파일이 있어도 내보내기 완주 |
 | `tests/test_stage14_gui_errors.py` | `tests/test_gui_error_log.py` | GUI 오류 로그 기록/열기/복사 |
 | `tests/test_stage14_repo.py` | `tests/test_repo_hygiene.py` | 저장소 위생(.gitignore/.gitattributes) |

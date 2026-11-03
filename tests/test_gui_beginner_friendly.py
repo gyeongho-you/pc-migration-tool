@@ -76,7 +76,7 @@ def test_start_texts_follow_the_three_situations():  # U-3
     assert all(len(c[0].split("\n")) == 2 for c in T.START_CHOICES)  # 제목은 의도적으로 두 줄: (구 PC)/(신 PC)가 줄 중간에서 끊기지 않는다
     assert T.START_CHOICES[2][0].split("\n")[1] == "가져오기(신 PC)"
     assert titles[1].startswith("② 내 파일 옮기기") and "자동으로 찾아서" in titles[1]  # stage30a: 이름 변경(예전: 큰 파일 옮기기)
-    assert T.START_ORDER_NOTE.startswith("처음이시면 ① → ② → ③ 순서로 진행해 주세요.") and "전체 이전 순서" in T.BTN_ROADMAP_BIG
+    assert T.START_ORDER_NOTE.startswith("처음이시면 ① 구 PC → ② 내 파일 옮기기(두 PC) → ③ 새 PC 순서로 진행해 주세요.") and "전체 이전 순서" in T.BTN_ROADMAP_BIG
     assert len(T.START_INTRO.splitlines()) <= 2  # U-6 소개는 2줄 이내
 
 
