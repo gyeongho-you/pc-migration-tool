@@ -29,6 +29,15 @@ from .package_zip import COMPRESS_MODES, _PartZip, _write_entry, _zi_dump, _zi_l
 RECORD_ONLY_FIELDS = frozenset({"display_icon", "uninstall_string", "install_date"})  # 설정 기록 모드 전용(경로에 사용자 이름이 있을 수 있어 묶음에 넣지 않는다)
 
 
+FILE_ATTRIBUTE_OFFLINE = 0x1000
+
+
+def _is_cloud_only(attrs: int) -> bool:
+    """RECALL_ON_OPEN/RECALL_ON_DATA_ACCESS(OneDrive 온디맨드) 또는 OFFLINE(오프라인 저장소) 속성이 있는 파일."""
+    from .scan import CLOUD_ATTR_MASK
+    return bool(attrs & (CLOUD_ATTR_MASK | FILE_ATTRIBUTE_OFFLINE))
+
+
 def _drop_duplicate_targets(items: list, seen: dict[tuple[str, str], str]) -> tuple[list, list[dict]]:
     """규칙 둘 이상이 같은 파일(같은 base 와 상대 경로, 대소문자 무시)을 가리키면 먼저 담은 규칙의 것만 남기고 뒤의 것은 제외로 기록한다(78).
     그대로 담으면 복원 때 같은 대상으로 가는 중복 항목이 생겨 예전에는 패키지 전체가 막혔다."""
@@ -56,7 +65,8 @@ def export_package(rules: list[Rule], out: Path, programs: list[Program],
                    dest_info_fn: Callable[[str], fs.DestInfo] | None = None,
                    stage_dir: Path | str | None = None, include_caches: bool = False,
                    extra_mode: str = settings_filter.DEFAULT_EXTRA_MODE,
-                   install_items: list | None = None) -> dict:
+                   install_items: list | None = None,
+                   attr_fn: Callable[[os.stat_result], int] | None = None) -> dict:
     """감지된 프로그램의 규칙(rules)으로 설정 패키지를 만든다. manifest dict 반환.
 
     stage_dir: 64MB 를 넘는 파일을 담기 전에 임시로 읽어 두는 폴더의 위치(기본: 출력 파일이 있는 폴더). 출력 드라이브가 느리거나
@@ -87,7 +97,7 @@ def export_package(rules: list[Rule], out: Path, programs: list[Program],
     args = (rules, out, programs, winget_text, expand, winget_list_text, extras, now, progress_info)
     kw = dict(compress=compress, savepoint_bytes=savepoint_bytes, savepoint_seconds=savepoint_seconds,
               notice=notice, clock=clock, dest_info_fn=dest_info_fn, stage_dir=stage_dir, include_caches=include_caches,
-              extra_mode=extra_mode, install_items=install_items)
+              extra_mode=extra_mode, install_items=install_items, attr_fn=attr_fn)
     lock = _OutputLock(out)
     lock.acquire()  # 같은 출력 이름으로 동시에 내보내면 .part 를 서로 망가뜨린다(R1-6)
     try:
@@ -105,7 +115,7 @@ def export_package(rules: list[Rule], out: Path, programs: list[Program],
 
 def _export_once(rules, out, programs, winget_text, expand, winget_list_text, extras, now, progress_info, *,
                  resume, compress, savepoint_bytes, savepoint_seconds, notice, clock, dest_info_fn=None, stage_dir=None,
-                 include_caches=False, extra_mode=settings_filter.DEFAULT_EXTRA_MODE, install_items=None) -> dict:
+                 include_caches=False, extra_mode=settings_filter.DEFAULT_EXTRA_MODE, install_items=None, attr_fn=None) -> dict:
     part, jpath = part_paths(out)
     manifest: dict = {
         "format": FORMAT_VERSION,
@@ -282,9 +292,23 @@ def _export_once(rules, out, programs, winget_text, expand, winget_list_text, ex
             journal.sync()
             last_sp[0], last_sp[1] = clock(), 0
 
+        cloud_only: list[str] = []  # OneDrive 온디맨드(클라우드 전용) 파일: 열어 읽으면 대량 내려받기가 되므로 담지 않는다
+        get_attr = attr_fn or (lambda s: getattr(s, "st_file_attributes", 0))
+
         def add_items(items: list[Item]) -> None:
             for it in items:
                 tracker.set_current(str(it.src))
+                try:
+                    if _is_cloud_only(get_attr(os.lstat(fs.long_path(it.src)))):
+                        cloud_only.append(str(it.src))
+                        if len(cloud_only) <= 50:
+                            manifest["skipped"].append({"rule": it.rule_id, "path": str(it.src),
+                                                        "reason": "OneDrive 클라우드 전용이라 담지 않음(읽으면 내려받게 되므로)"})
+                        tracker.note(SKIPPED, str(it.src))
+                        tracker.add(0, 1)
+                        continue
+                except OSError:
+                    pass  # 상태를 못 읽으면 아래의 일반 읽기 경로가 파일 단위로 실패를 기록한다
                 if it.arc in seen:
                     manifest["failed"].append({"src": str(it.src), "error": f"중복된 패키지 경로 {it.arc}"})
                     tracker.note(FAILED_KIND, str(it.src))
@@ -324,6 +348,8 @@ def _export_once(rules, out, programs, winget_text, expand, winget_list_text, ex
 
         for items in groups:
             add_items(items)
+        if cloud_only:
+            manifest["cloud_only"] = {"count": len(cloud_only), "examples": cloud_only[:20]}
         emit(True)
         savepoint()  # 마무리 단계가 실패해도 담은 파일은 다시 담지 않도록
         journal.close()

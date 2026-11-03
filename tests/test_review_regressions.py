@@ -134,7 +134,8 @@ def test_new_deny_list_entries(rel):
 @pytest.mark.parametrize("rel", [".npmrc", ".wslconfig", ".condarc", ".kube/config", ".docker/config.json", ".yarnrc", ".netrc"])
 def test_home_dotfiles_that_run_commands_are_denied(rel):
     assert restore_denied(rel, Path("C:/u/" + rel), None, "%USERPROFILE%")
-    assert restore_denied(rel, Path("C:/u/" + rel), None, "%APPDATA%") is None  # 홈 바로 아래에서만
+    other = restore_denied(rel, Path("C:/u/" + rel), None, "%APPDATA%")
+    assert (other is not None) if rel == ".npmrc" else (other is None)  # 홈 바로 아래에서만(stage81: .npmrc 는 프로젝트 폴더 등 어디서든 거부)
 
 
 def test_home_gitconfig_and_ordinary_files_still_allowed():
@@ -600,9 +601,10 @@ def test_import_default_output_is_human_readable(env, tmp_path, monkeypatch, cap
 def test_import_blocked_output_lists_problems_in_korean(env, tmp_path, monkeypatch, capsys):
     export(env)
     rd = make_rules_dir(tmp_path / "rules")  # 규칙 id 가 달라 '알 수 없는 규칙'
-    assert cli.main(["import", str(env.out), "--dry-run", "--rules", str(rd)]) == 1
+    # stage81: 알 수 없는 규칙 id 는 패키지 전체를 막지 않고 그 항목만 '건너뛴 항목'(복원 안 함)으로 보인다(힌트 포함)
+    assert cli.main(["import", str(env.out), "--dry-run", "--rules", str(rd)]) == 0
     cap = capsys.readouterr()
-    assert "패키지 검증 실패" in cap.out and "알 수 없는 규칙" in cap.out
+    assert "건너뛴 항목" in cap.out and "알 수 없는" not in cap.out and "rules 폴더" in cap.out
 
 
 def test_verify_and_transfer_default_output_human_readable(tmp_path, monkeypatch, capsys):

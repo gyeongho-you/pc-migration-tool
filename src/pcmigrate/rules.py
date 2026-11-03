@@ -86,6 +86,15 @@ def _check_dest(dest: str, where: str) -> None:
     if (win.is_absolute() or posix.is_absolute() or win.drive
             or ".." in win.parts or ".." in posix.parts):
         raise RuleError(f"{where}: dest '{dest}' 는 안전한 상대 경로여야 합니다")
+    # 81: dest 는 패키지 안의 경로(data/<dest>/...)가 되므로 패키지 검증(verify_package)과 같은 기준으로 미리 거른다. 그러지 않으면 내보내기가 모든 파일을 담은 뒤
+    # 검증 단계에서 통째로 실패한다(예: 'a\b', 'a/*', 'con', 'a/b?', 'a//b', 끝의 점/공백).
+    if "\\" in dest or any(x in ("", ".", "..") for x in dest.split("/")):
+        raise RuleError(f"{where}: dest '{dest}' 는 '/' 로만 나눈 비어 있지 않은 요소여야 합니다(역슬래시·빈 요소 불가)")
+    from .package_base import PackageError, _safe_rel  # 늦은 import: package_base 가 이 모듈을 먼저 import 한다
+    try:
+        _safe_rel(dest)
+    except PackageError as e:
+        raise RuleError(f"{where}: dest '{dest}' 는 패키지 안의 경로로 쓸 수 없습니다({e})") from e
 
 
 # 규칙 path 의 첫 요소로 쓸 수 있는 환경변수(대소문자 무시). 그 밖의 변수(%WINDIR%, %SystemRoot%, %ProgramFiles% 등)와 정의되지 않은 변수는 거부한다(M3).
@@ -147,9 +156,33 @@ def find_overlaps(rules: list[Rule]) -> list[str]:
     return out
 
 
+TOP_KEYS = frozenset({"id", "name", "detect", "paths", "manual_warnings", "version", "exclude", "notes"})
+DETECT_KEYS = frozenset({"display_name_patterns", "install_paths", "registry_keys", "exclude_display_name_patterns"})
+PATH_KEYS = frozenset({"path", "dest", "kind", "description", "allow_extensions"})
+_INSTALL_PATH_RE = re.compile(r"^(%[A-Za-z][A-Za-z0-9_()]*%|[A-Za-z]:)\\[^\\].*$")
+_REG_KEY_RE = re.compile(r"^(HKLM|HKCU|HKCR|HKU|HKEY_LOCAL_MACHINE|HKEY_CURRENT_USER|HKEY_CLASSES_ROOT|HKEY_USERS)\\[^\\].*$")
+
+
+def _check_keys(obj: dict, allowed: frozenset, where: str) -> None:
+    """알 수 없는 키(오타: pahts, allow_extension 등)를 조용히 무시하지 않고 거부한다(81)."""
+    unknown = sorted(set(obj) - allowed)
+    if unknown:
+        raise RuleError(f"{where}: 알 수 없는 키 {', '.join(repr(k) for k in unknown)} (오타가 아닌지 확인하세요. 허용: {', '.join(sorted(allowed))})")
+
+
+def _check_detect_formats(install_paths: tuple[str, ...], reg_keys: tuple[str, ...], source: str) -> None:
+    for ip in install_paths:
+        if not _INSTALL_PATH_RE.match(ip) or ".." in ip.replace("/", "\\").split("\\"):
+            raise RuleError(f"{source}: detect.install_paths '{ip}' 는 %환경변수% 로 시작하는 경로(예: %ProgramFiles% 아래 폴더)이거나 드라이브 절대 경로여야 하고 상위 폴더('..')를 쓸 수 없습니다")
+    for rk in reg_keys:
+        if not _REG_KEY_RE.match(rk) or "\\\\" in rk or rk.endswith("\\"):
+            raise RuleError(f"{source}: detect.registry_keys '{rk}' 는 HKLM/HKCU 등으로 시작하는 레지스트리 키 경로여야 합니다")
+
+
 def parse_rule(data: object, source: str = "<rule>") -> Rule:
     if not isinstance(data, dict):
         raise RuleError(f"{source}: 최상위는 객체여야 합니다")
+    _check_keys(data, TOP_KEYS, source)
     for key in ("id", "name"):
         if not isinstance(data.get(key), str) or not data[key].strip():
             raise RuleError(f"{source}: '{key}' 문자열이 필요합니다")
@@ -159,10 +192,12 @@ def parse_rule(data: object, source: str = "<rule>") -> Rule:
     detect = data.get("detect")
     if not isinstance(detect, dict):
         raise RuleError(f"{source}: 'detect' 객체가 필요합니다")
+    _check_keys(detect, DETECT_KEYS, f"{source}: detect")
     patterns = _str_list(detect, "display_name_patterns", source)
     install_paths = _str_list(detect, "install_paths", source)
     reg_keys = _str_list(detect, "registry_keys", source)
     exclude_patterns = _str_list(detect, "exclude_display_name_patterns", source)
+    _check_detect_formats(install_paths, reg_keys, source)
     if not (patterns or install_paths or reg_keys):
         raise RuleError(f"{source}: detect 에 감지 조건이 하나 이상 필요합니다")
 
@@ -175,6 +210,7 @@ def parse_rule(data: object, source: str = "<rule>") -> Rule:
         where = f"{source}: paths[{i}]"
         if not isinstance(p, dict):
             raise RuleError(f"{where} 는 객체여야 합니다")
+        _check_keys(p, PATH_KEYS, where)
         for key in ("path", "dest"):
             if not isinstance(p.get(key), str) or not p[key].strip():
                 raise RuleError(f"{where}: '{key}' 문자열이 필요합니다")
