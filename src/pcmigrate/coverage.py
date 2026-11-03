@@ -62,7 +62,8 @@ def rows(manifest: dict) -> list[dict]:
                 note = (note + " / " if note else "") + INSTALL_DIR_NOTE
             row = {"program": str(c.get("name") or c.get("rule") or "?"), "what": str(c.get("description") or c.get("path") or ""),
                    "status": status, "files": files, "note": note, "rule": str(c.get("rule", "")),
-                   "path": str(c.get("path", ""))}
+                   "path": str(c.get("path", "")),
+                   "failed": _num(c.get("failed")), "excluded": _num(c.get("excluded"))}  # 화면 표시용: 읽지 못함(실패) / 보안·링크 제외(JSON·CLI 에는 싣지 않는다)
             if isinstance(st, dict) and st.get("id"):
                 row["self_transfer"] = str(st["id"])
             if c.get("config_mode"):  # 허용 방식(설정 파일만)으로 담은 항목: 화면/표가 더 보여 줄 수 있는 세부(없으면 키 자체가 없다)
@@ -81,11 +82,11 @@ def rows(manifest: dict) -> list[dict]:
         n = counts.get(str(r.get("id", "")), 0)
         out.append({"program": str(r.get("name") or r.get("id") or "?"), "what": OLD_PACKAGE_WHAT,
                     "status": ST_OK if n else ST_NONE, "files": n, "note": "" if n else NONE_NOTE,
-                    "rule": str(r.get("id", "")), "path": ""})
+                    "rule": str(r.get("id", "")), "path": "", "failed": 0, "excluded": 0})
     n_extra = counts.get("extra", 0)
     if n_extra:
         out.append({"program": EXTRA_PROGRAM, "what": "직접 고른 폴더", "status": ST_OK, "files": n_extra, "note": "",
-                    "rule": "extra", "path": ""})
+                    "rule": "extra", "path": "", "failed": 0, "excluded": 0})
     return out
 
 

@@ -411,12 +411,15 @@ class Collapsible(tk.Frame):
 
 
 class CoverageBox(_ForgetMixin, ttk.Frame):
-    """프로그램별 설정 확인표: 프로그램 / 옮기는 설정 / 상태 / 담긴 파일 수. '이 PC에 없음' 행은 '해당 없음 N곳' 한 줄로 접고 펼치면 보인다."""
+    """프로그램별로 옮겨지는 것과 직접 해야 할 것(stage86): 프로그램 / 옮겨진 설정 / 직접 해야 할 것(한 줄 요약 + 펼침) / 상태.
+    상태는 모두 옮김 · 일부 뺌(의도적으로 뺀 이유) · 일부 못 읽음(다시 담기 안내) 로 나눠 보이고, 담긴 파일 수는 툴팁으로 내렸다.
+    '이 PC에 없음' 행은 '해당 없음 N곳' 한 줄로 접고, 이름이 맞지 않은 직접 할 일은 '기타 직접 할 일 N건' 한 줄로 모은다."""
 
     STATUS_TAGS = {coverage.ST_OK: OK_FG, coverage.ST_PART: WARN_FG, coverage.ST_UNREAD: DANGER_FG,
-                   coverage.ST_MANUAL: INFO_FG, coverage.ST_EXCL: MUTED_FG, coverage.ST_EMPTY: MUTED_FG}
+                   coverage.ST_MANUAL: INFO_FG, coverage.ST_EXCL: MUTED_FG, coverage.ST_EMPTY: MUTED_FG,
+                   "d_ok": OK_FG, "d_part": WARN_FG, "d_fail": DANGER_FG}  # d_*: 새 표시 상태(모두 옮김/일부 뺌/일부 못 읽음)
 
-    def __init__(self, parent: tk.Misc, title: str = T.COV_TITLE, max_rows: int = 8,
+    def __init__(self, parent: tk.Misc, title: str = T.COV2_TITLE, max_rows: int = 8,
                  explorer: tuple[Callable[[str, bool], bool], Callable[[str, bool], bool]] | None = None) -> None:
         """explorer: (열 수 있는지 검사, 탐색기로 보여 주기) 함수 쌍. 주면 '빠진 파일 예시' 줄에 '탐색기에서 보기'가 생긴다(구 PC 에서만)."""
         super().__init__(parent)
@@ -425,8 +428,8 @@ class CoverageBox(_ForgetMixin, ttk.Frame):
         self.ex_paths: dict[str, tuple[str, bool] | None] = {}  # 예시 줄 -> (폴더 + 예시 이름의 절대 경로, 파일 선택) 또는 열 수 없음(None)
         self.title_label = ttk.Label(self, text=title, font=SUB_FONT)
         self.title_label.pack(anchor="w")
-        cols = [("program", T.COV_COLS[0], 190), ("what", T.COV_COLS[1], 380), ("status", T.COV_COLS[2], 100),
-                ("files", T.COV_COLS[3], 70)]
+        cols = [("program", T.COV2_COLS[0], 170), ("what", T.COV2_COLS[1], 300), ("manual", T.COV2_COLS[2], 190),
+                ("status", T.COV2_COLS[3], 120)]
         self.frame, self.tree = make_tree(self, cols, height=3)
         self.frame.pack(fill="x", pady=(2, 0))
         self.open_btn: ActionButton | None = None
@@ -443,7 +446,7 @@ class CoverageBox(_ForgetMixin, ttk.Frame):
         for st, color in self.STATUS_TAGS.items():
             self.tree.tag_configure(st, foreground=color)
         self.full: dict[str, str] = {}
-        self.tips = TreeTooltip(self.tree, lambda iid, col: self.full.get(iid, "") if col in (1, 2) else "")
+        self.tips = TreeTooltip(self.tree, lambda iid, col: self.full.get(iid, "") if col in (1, 2, 3) else "")
         self.tree.tag_configure("exc", foreground=MUTED_FG)
         self.lines: set[str] = set()   # '제외 N개…' 줄(행 아래에 붙는 자식 행). 선택/눌러서 큰 파일 예시를 펼친다
         self.tree.bind("<Button-1>", self._press_line, add="+")
@@ -454,6 +457,13 @@ class CoverageBox(_ForgetMixin, ttk.Frame):
             self.tree.bind("<Double-Button-1>", self._double_example, add="+")
         self.noext = Notice(self, "", "warn")  # 확장자 없는 파일이 빠졌을 때만 보이는 노란 안내
         self._noext_shown = False
+        self.legend = FoldTLabel(self, text=T.COV2_LEGEND, justify="left", foreground=MUTED_FG)  # 아이콘만으로 알 수 없게 글자로도 설명
+        self.legend.pack(anchor="w", fill="x", pady=(2, 0))
+        autowrap(self.legend, 30)
+        self.misc = Collapsible(self, T.COV2_MISC.format(n=0), T.COV2_MISC_OPEN.format(n=0))  # 이름이 맞지 않은 직접 할 일
+        self.misc_list = tk.Label(self.misc.body, text="", justify="left", anchor="w", bg=self.misc.bg)
+        self.misc_list.pack(anchor="w", fill="x")
+        self._misc_shown = False
         self.fold = Collapsible(self, T.COV_FOLD.format(n=0), T.COV_FOLD_OPEN.format(n=0))
         self.fold_note = self.fold.add_text(T.COV_FOLD_NOTE)
         self.fold_list = tk.Label(self.fold.body, text="", justify="left", anchor="w", bg=self.fold.bg)
@@ -474,6 +484,7 @@ class CoverageBox(_ForgetMixin, ttk.Frame):
         self.rows_shown, self.rows_hidden = [], []
         self._set_noext(0)
         self._set_fold(0)
+        self._set_misc([])
         set_shown(self, False)
 
     def _set_noext(self, n: int) -> None:
@@ -570,6 +581,18 @@ class CoverageBox(_ForgetMixin, ttk.Frame):
                     n += len(self.tree.get_children(ln))
         self.tree.configure(height=min(self.max_rows + 5, max(2, n)))
 
+    def _set_misc(self, items: list[str]) -> None:
+        n = len(items)
+        if n and not self._misc_shown:
+            self.misc.pack(anchor="w", fill="x")
+            self._misc_shown = True
+        elif not n and self._misc_shown:
+            self.misc.pack_forget()
+            self._misc_shown = False
+        self.misc.title, self.misc.title_open = T.COV2_MISC.format(n=n), T.COV2_MISC_OPEN.format(n=n)
+        self.misc.toggle_btn.configure(text=self.misc.title_open if self.misc.open else self.misc.title)
+        self.misc_list.configure(text="\n".join(f"· {i}" for i in items))
+
     def _set_fold(self, n: int) -> None:
         if n and not self._fold_shown:
             self.fold.pack(anchor="w", fill="x")
@@ -580,8 +603,9 @@ class CoverageBox(_ForgetMixin, ttk.Frame):
         self.fold.title, self.fold.title_open = T.COV_FOLD.format(n=n), T.COV_FOLD_OPEN.format(n=n)
         self.fold.toggle_btn.configure(text=self.fold.title_open if self.fold.open else self.fold.title)
 
-    def show(self, table: list[dict]) -> None:
-        """table: coverage.rows() 의 행들. 비어 있으면 안내 한 줄만."""
+    def show(self, table: list[dict], other: list[str] | None = None) -> None:
+        """table: coverage.rows() 의 행들(+ 컨트롤러가 붙인 manual_items). other: 이름이 맞지 않은 직접 할 일. 비어 있으면 안내 한 줄만."""
+        from .. import coverage_view as cv
         set_shown(self, True)  # 결과가 생기면 원래 자리에 다시 나타난다
         clear(self.tree)
         self.full = {}
@@ -596,20 +620,38 @@ class CoverageBox(_ForgetMixin, ttk.Frame):
             self.tree.insert("", "end", values=("", T.COV_NONE, "", ""))
         for r in shown:
             tail = f" — {r['note']}" if r["note"] else ""
-            iid = self.tree.insert("", "end", tags=(r["status"],), values=(r["program"], r["what"], r["status"], f"{r['files']}개"))
-            self.full[iid] = f"{r['program']}: {r['what']}{tail}"
-            if r.get("excluded_line"):  # 빠진 파일 한 줄 요약(+ 눌러서 펼치는 큰 파일 예시, 읽기 전용)
+            state = cv.display_state(r)
+            items = list(r.get("manual_items") or [])
+            tag = {cv.OK: "d_ok", cv.PART: "d_part", cv.FAIL: "d_fail"}.get(state, r["status"])
+            iid = self.tree.insert("", "end", tags=(tag,),
+                                   values=(r["program"], r["what"], cv.manual_summary(items) if r.get("manual_items") is not None else "",
+                                           cv.status_text(r)))
+            self.full[iid] = f"{r['program']}: {r['what']}{tail}\n{T.COV2_FILES_TIP.format(n=r['files'])}"
+            self.tree.item(iid, open=True)
+            if state == cv.FAIL:  # 읽지 못한 파일: 다시 담기 안내(RetryPanel 과 같은 말)
+                note = self.tree.insert(iid, "end", tags=("exc",), values=("", T.COV_EXC_INDENT + cv.fail_note(r), "", ""))
+                self.full[note] = cv.fail_note(r)
+            if r.get("excluded_line") or (state == cv.PART and cv.excluded_count(r)):  # 의도적으로 뺀 것: 이유 한 줄(+ 눌러서 펼치는 큰 파일 예시, 읽기 전용)
+                text = cv.part_note(r)
                 ln = self.tree.insert(iid, "end", tags=("exc",), open=False,
-                                      values=("", T.COV_EXC_INDENT + r["excluded_line"], T.BTN_MORE, ""))
-                self.lines.add(ln)
-                self.tree.item(iid, open=True)
-                self.full[ln] = r["excluded_line"]
+                                      values=("", T.COV_EXC_INDENT + text, "", T.BTN_MORE if r.get("excluded_examples") else ""))
+                if r.get("excluded_examples"):
+                    self.lines.add(ln)
+                self.full[ln] = r.get("excluded_line") or text
                 for e in r.get("excluded_examples", []):
                     ex = self.tree.insert(ln, "end", tags=("exc",), values=("", T.COV_EX_INDENT + coverage.example_text(e), "", ""))
                     self.full[ex] = coverage.example_text(e)
                     if self.explorer is not None:
                         self.ex_paths[ex] = self.example_abs_path(str(r.get("path") or ""), str(e.get("name") or ""))
-        self.tree.configure(height=min(self.max_rows, max(2, len(shown) + len(self.lines) or 1)))
+            if items:  # 직접 해야 할 것 전체(눌러서 펼침)
+                lm = self.tree.insert(iid, "end", tags=("exc",), open=False,
+                                      values=("", T.COV_EXC_INDENT + T.COV2_MANUAL_LINE.format(n=len(items)), "", T.BTN_MORE))
+                self.lines.add(lm)
+                for it in items:
+                    mi = self.tree.insert(lm, "end", tags=("exc",), values=("", T.COV_EX_INDENT + it, "", ""))
+                    self.full[mi] = it
+        self._fit_height()
+        self._set_misc(list(other or []))
         self._set_noext(coverage.noext_total(shown))
         self.fold_list.configure(text="\n".join(f"· {r['program']} — {r['what']}" for r in hidden))
         self._set_fold(len(hidden))

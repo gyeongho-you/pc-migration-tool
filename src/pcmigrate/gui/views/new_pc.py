@@ -136,7 +136,7 @@ class PreviewView(BaseView):
         frame, self.tree = make_tree(body, cols, height=6)
         self.files_frame = frame
         frame.pack(fill="x", pady=4)
-        self.cov_fold = Collapsible(body, f"{T.COV_PREVIEW_TITLE} ▸", f"{T.COV_PREVIEW_TITLE} ▾")  # 설정 확인표도 접어 둔다
+        self.cov_fold = Collapsible(body, f"{T.COV2_PREVIEW_TITLE} ▸", f"{T.COV2_PREVIEW_TITLE} ▾")  # 이 묶음으로 이만큼 복원됩니다(기본으로 펼친다)
         self.cov_fold.pack(fill="x")
         self.cov = CoverageBox(self.cov_fold.body, title="")
         self.cov.title_label.pack_forget()
@@ -304,11 +304,11 @@ class PreviewView(BaseView):
         self._render_programs()
         self._update_gate()
         table = self.c.coverage_table(p)
-        self.cov.show(table)
+        self.cov.show(table, self.c.coverage_other_manual())
         head = self.c.coverage_headline(table)
-        self.cov_fold.title = f"{T.COV_PREVIEW_TITLE}: {head} ▸" if head else f"{T.COV_PREVIEW_TITLE} ▸"
+        self.cov_fold.title = f"{T.COV2_PREVIEW_TITLE}: {head} ▸" if head else f"{T.COV2_PREVIEW_TITLE} ▸"
         self.cov_fold.title_open = self.cov_fold.title.replace("▸", "▾")
-        self.cov_fold.set_open(self.cov_fold.open)
+        self.cov_fold.set_open(True)
 
 
 class ConfirmView(BaseView):
@@ -450,7 +450,7 @@ class ResultView(BaseView):
         self.undo_buttons: dict[str, ttk.Button] = {}
         self.undo_labels: dict[str, ttk.Label] = {}
         self.prog_box.pack(fill="x", pady=(3, 0))
-        self.cov = CoverageBox(body, title=T.COV_PREVIEW_TITLE)  # 묶음 안에 어떤 설정이 담겼는지(프로그램별)
+        self.cov = CoverageBox(body, title=T.COV2_TITLE)  # 프로그램별로 옮겨지는 것과 직접 해야 할 것(기본 펼침. 위의 '프로그램별 결과' 표와는 따로 둔다)
         self.cov.pack(fill="x", pady=(4, 0))
         cols = [("kind", T.RES_COLS[0], 90), ("path", T.RES_COLS[1], 520), ("detail", T.RES_COLS[2], 260)]
         frame, self.tree = make_tree(body, cols, height=6)
@@ -586,7 +586,7 @@ class ResultView(BaseView):
         ok, skipped, failed = self.c.import_counts()
         self.summary.show(ok, skipped, failed, T.RES_ALL_OK, T.RES_IMPORT_FAIL, notice=self.c.interrupted_note())
         self._render_programs()
-        self.cov.show(self.c.coverage_table(r))
+        self.cov.show(self.c.coverage_table(r), self.c.coverage_other_manual())
 
         def add(kind, path, detail, tags=()):
             iid = self.tree.insert("", "end", tags=tags, values=(kind, T.ellipsize_path(path), detail))

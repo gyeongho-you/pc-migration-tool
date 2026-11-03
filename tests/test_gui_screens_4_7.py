@@ -697,7 +697,7 @@ def export_result(failed=()):
                                                   {"rule": "a", "name": "Demo", "description": "플러그인", "status": "이 PC에 없음", "files": 0}]})
 
 
-def test_tk_export_result_area_is_compact_and_cov_folded(ctx, tmp_path):
+def test_tk_export_result_area_is_compact_and_cov_open_by_default(ctx, tmp_path):
     app, c = ctx.app, ctx.c
     c.go(S.OLD_EXPORT)
     app.update()
@@ -707,12 +707,12 @@ def test_tk_export_result_area_is_compact_and_cov_folded(ctx, tmp_path):
     c.state.export_result = res
     v.on_event("export_done", res)
     app.update()
-    assert v.cov_fold.winfo_manager() and not v.cov_fold.body.winfo_manager()  # 확인표는 접혀 있다
+    assert v.cov_fold.winfo_manager() and v.cov_fold.body.winfo_manager() and v.cov.winfo_manager()  # stage86: 확인표는 기본으로 펼쳐 있다
     assert "담김" in v.cov_fold.toggle_btn.cget("text") and "해당 없음 1" in v.cov_fold.toggle_btn.cget("text")
     assert first_int(v.next_box.pack_info()["pady"]) <= 4 and first_int(v.summary.pack_info()["pady"]) <= 3  # 상자 사이 여백을 절반쯤으로
-    v.cov_fold.toggle()
+    v.cov_fold.toggle()  # 사용자가 접을 수 있다
     app.update()
-    assert v.cov.winfo_manager() and v.cov_fold.body.winfo_manager()
+    assert not v.cov_fold.body.winfo_manager()
 
 
 def test_tk_export_exception_shows_retry_restart_buttons(ctx, tmp_path):

@@ -209,9 +209,19 @@ class ScanMixin:
         if not isinstance(m, dict):
             return []
         try:
-            return coverage.rows(m)
+            table = coverage.rows(m)
         except (TypeError, KeyError, AttributeError):
             return []
+        warnings = m.get("manual_warnings")
+        if not isinstance(warnings, list):  # 복원 미리보기/결과: 계획의 경고(이름/항목)
+            warnings = getattr(getattr(res, "plan", None), "warnings", None)
+        from .coverage_view import attach_manual  # 표시용 매핑(CLI/JSON 은 건드리지 않는다)
+        table, self._cov_other_manual = attach_manual(table, warnings)
+        return table
+
+    def coverage_other_manual(self) -> list[str]:
+        """마지막으로 만든 확인표에서 어느 프로그램 행과도 이름이 맞지 않은 직접 할 일 항목들('기타 직접 할 일')."""
+        return list(getattr(self, "_cov_other_manual", []) or [])
 
     def coverage_headline(self, table: list[dict]) -> str:
         """설정 확인표 머리글: '담김 5 · 직접 해야 함 3 · 해당 없음 12'."""

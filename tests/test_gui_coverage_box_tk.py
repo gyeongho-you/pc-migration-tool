@@ -51,7 +51,8 @@ def test_line_summary_under_row_and_examples_collapsed(root):
     assert len(tops) == 1  # 프로그램 행 수는 그대로(요약 줄은 자식 행)
     (line,) = box.tree.get_children(tops[0])
     vals = box.tree.item(line, "values")
-    assert "제외 100개, 3.0GB(이미지·영상 88개, 데이터베이스/데이터 12개)" in vals[1] and vals[2] == T.BTN_MORE
+    assert "의도적으로 뺀 파일 100개(이미지·영상 88개, 데이터베이스/데이터 12개)" in vals[1] and vals[3] == T.BTN_MORE  # stage86: 새 문구, 토글은 상태 열
+    assert "제외 100개, 3.0GB(이미지·영상 88개, 데이터베이스/데이터 12개)" in box.full[line]  # 용량이 든 기존 요약은 툴팁에 남는다
     assert not box.tree.item(line, "open") and len(box.tree.get_children(line)) == 5
     assert "big0.db 9.0MB — 데이터베이스/데이터" in box.tree.item(box.tree.get_children(line)[0], "values")[1]
 
@@ -90,7 +91,8 @@ def test_old_manifest_row_has_line_without_examples(root):
     c.pop("excluded_examples")
     box = make(root, [c])
     (line,) = box.tree.get_children(box.tree.get_children("")[0])
-    assert box.tree.item(line, "values")[1].endswith("제외 100개, 3.0GB") and box.tree.get_children(line) == ()
+    assert "의도적으로 뺀 파일 100개" in box.tree.item(line, "values")[1] and box.tree.get_children(line) == ()
+    assert box.full[line].endswith("제외 100개, 3.0GB")
     assert not box._noext_shown
 
 
