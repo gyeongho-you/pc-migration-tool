@@ -353,7 +353,8 @@ def load_install_selection(path: Path, expand: Expand = expand_env, programs: li
     try:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError) as e:
-        raise SelectionError(f"선택 파일을 읽을 수 없습니다: {e}") from e
+        from . import failure
+        raise SelectionError(f"선택 파일을 읽을 수 없습니다: {failure.user_reason(e, str(path), '선택 파일 읽기')}") from e
     return install_items_from_selection(data, expand, programs)
 
 

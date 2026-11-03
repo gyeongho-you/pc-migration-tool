@@ -171,3 +171,33 @@ def cli_text(text: str) -> str:
     from .fs import plain_path_text
     text = text.replace("'실패한 것만 다시 시도'", "--retry-failed(실패한 것만 다시 시도)")
     return plain_path_text(text)
+
+
+def user_reason(exc: BaseException, path: str = "", context: str = "") -> str:
+    """입력/읽기 오류를 사용자 문장으로 바꾼다(Python/OS 내부 문구 [Errno N]·WinError·영문 메시지는 넣지 않는다). 자세한 내용은 오류 로그에만 남긴다.
+
+    파일 없음 / 폴더를 줌 / 권한 없음·사용 중 / 경로 길이 / 공간 부족 / 연결 끊김 / JSON 형식 / UTF-8 아님 / 그 밖의 순서로 구분한다.
+    """
+    try:  # 자세한 원인은 로그에만(로그 실패가 사용자 문구를 막지 않는다)
+        from . import errorlog
+        errorlog.record(exc, context or "입력 읽기 오류")
+    except Exception:  # noqa: BLE001
+        pass
+    if isinstance(exc, IsADirectoryError):
+        return "파일이 아니라 폴더입니다. 파일을 선택해 주세요"
+    if isinstance(exc, NotADirectoryError):
+        return "폴더가 아니라 파일입니다. 폴더를 선택해 주세요"
+    if isinstance(exc, OSError):
+        f = classify(exc, path)
+        if f.code == NOT_FOUND:
+            return "파일이나 폴더를 찾을 수 없습니다. 경로를 다시 확인해 주세요"
+        if f.code == PERMISSION:
+            return "읽을 권한이 없거나 다른 프로그램이 사용 중입니다. 권한을 확인하고 다시 시도해 주세요"
+        return f.text if f.code != OTHER else "파일을 읽을 수 없습니다. 경로와 상태를 확인해 주세요(자세한 내용은 오류 로그)"
+    if isinstance(exc, UnicodeDecodeError):
+        return "UTF-8 로 저장된 텍스트 파일이 아닙니다"
+    import json as _json
+    if isinstance(exc, _json.JSONDecodeError):
+        return f"형식이 올바르지 않습니다({exc.lineno}번째 줄 {exc.colno}번째 글자 근처)"
+    return "내용을 읽을 수 없습니다(자세한 내용은 오류 로그)"
+

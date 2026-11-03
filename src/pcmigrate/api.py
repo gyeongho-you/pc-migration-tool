@@ -86,8 +86,10 @@ def format_write_error(path: str, exc: OSError) -> list[str]:
     p = exc.filename if isinstance(getattr(exc, "filename", None), str) else path
     if isinstance(exc, IsADirectoryError) or getattr(exc, "errno", None) == errno.EISDIR:
         return [f"출력 경로가 폴더입니다: {p}", "힌트: 파일 이름까지 지정하세요(예: D:/백업/pc-package.zip). 기존 폴더는 건드리지 않았습니다."]
-    cause = getattr(exc, "strerror", None) or str(exc)
-    lines = [f"출력 경로를 만들 수 없습니다: {p} ({cause})"]
+    from . import failure
+    f = failure.classify(exc, p)  # 영문 OS 문구([Errno N] 등)는 쓰지 않고 쉬운 원인 분류만 보인다(자세한 내용은 오류 로그)
+    failure.user_reason(exc, p, "출력 경로 쓰기")
+    lines = [f"출력 경로를 만들 수 없습니다: {p} ({f.label if f.code != failure.OTHER else '쓸 수 없는 위치입니다'})"]
     if UNEXPANDED.search(p):
         lines.append(SHELL_HINT)
     elif isinstance(exc, FileNotFoundError) or getattr(exc, "winerror", None) in (3, 15):

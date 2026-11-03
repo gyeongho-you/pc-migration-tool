@@ -163,7 +163,8 @@ def _save_send_abort(path, exc: BaseException) -> None:
             os.replace(p, _backup_path(p))
         p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     except OSError as e:
-        _err(f"리포트를 저장하지 못했습니다: {e}")
+        _err(f"리포트를 저장하지 못했습니다: {failure.classify(e, str(path)).label}")
+        failure.user_reason(e, str(path), "리포트 저장")
 
 
 def _cmd_send(args: argparse.Namespace) -> int:
@@ -235,7 +236,8 @@ def _cmd_send(args: argparse.Namespace) -> int:
         try:
             Path(args.report).write_text(json.dumps(rep, ensure_ascii=False, indent=2), encoding="utf-8")
         except OSError as e:
-            _err(f"리포트를 저장하지 못했습니다: {e}")
+            _err(f"리포트를 저장하지 못했습니다: {failure.classify(e, str(args.report)).label}")
+            failure.user_reason(e, str(args.report), "리포트 저장")
     if args.json:
         print(json.dumps(rep, ensure_ascii=False))
     else:

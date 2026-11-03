@@ -42,7 +42,7 @@ def export_lines(r, output: str) -> list[str]:
     if r.unreadable:
         lines.append(f"- 사용 중이라 읽지 못한 파일 {len(r.unreadable)}개(해당 프로그램을 닫고 다시 실행하면 담깁니다)")
     if r.hard_failures:
-        lines.append(f"- 실패 {len(r.hard_failures)}개(아래 '실패' 줄 참고)")
+        lines.append(f"- 실패 {len(r.hard_failures)}개(위의 '실패' 줄 참고)")
     lines.append(f"다음 할 일: 새 PC 로 옮긴 뒤 pcmigrate import {_q(output)} --dry-run 으로 미리 확인하고, 이상 없으면 --yes 로 복원하세요.")
     return lines
 
@@ -100,7 +100,11 @@ def import_lines(r, package: str, report=None) -> list[str]:
         lines += [f"- {p}" for p in plan.problems[:10]]
         if len(plan.problems) > 10:
             lines.append(f"- … 외 {len(plan.problems) - 10}건(전체는 --json 으로 확인)")
-        lines.append("다음 할 일: 패키지를 다시 만들거나 파일이 손상되지 않았는지 확인하세요.")
+        from .package_verify import FILE_PROBLEMS
+        if any(p in FILE_PROBLEMS for p in plan.problems):  # 파일을 열지 못한 경우: 손상이 아니라 경로/권한 확인이 먼저다
+            lines.append("다음 할 일: 파일 경로와 읽기 권한을 확인한 뒤 같은 명령을 다시 실행하세요.")
+        else:
+            lines.append("다음 할 일: 패키지를 다시 만들거나 파일이 손상되지 않았는지 확인하세요.")
         return lines
     denied = [it for it in plan.items if it["status"] == "denied"]
     if report is not None:
@@ -132,7 +136,7 @@ def import_lines(r, package: str, report=None) -> list[str]:
     if report is not None:
         bad = report.failures
         if bad:
-            lines.append(f"- 문제가 있는 파일 {len(bad)}개(아래 '실패' 줄 참고)")
+            lines.append(f"- 문제가 있는 파일 {len(bad)}개(위의 '실패' 줄 참고)")
             lines.append("다음 할 일: 원인을 해결한 뒤 같은 명령을 다시 실행하세요(이미 복원된 파일은 건너뜁니다).")
         else:
             lines.append("다음 할 일: pcmigrate checklist 로 수동 작업(라이선스 재활성화, 재로그인 등)을 확인하세요.")
@@ -329,3 +333,46 @@ def retry_lines(r, output: str) -> list[str]:
     else:
         lines.append(f"다음 할 일: 새 PC 로 옮긴 뒤 pcmigrate import {_q(output)} --dry-run 으로 미리 확인하고, 이상 없으면 --yes 로 복원하세요.")
     return lines
+
+
+LICENSE_NOTE = "라이선스는 복원되지 않습니다. 각 프로그램을 재로그인/재활성화하세요."
+MANUAL_MAX_PROGRAMS = 6
+
+
+def manual_work_lines(warnings: list[dict], max_programs: int = MANUAL_MAX_PROGRAMS) -> list[str]:
+    """프로그램 규칙의 '수동 작업 필요' 경고를 한 구역으로 묶는다(출력 정리). 같은 문장은 한 번만 보이고(여러 프로그램이 같은 경고를 내면 이름을 함께 적음),
+    프로그램별로 경고 건수와 첫 경고 한 줄만 보이며 나머지는 `pcmigrate checklist` 로 안내한다. 라이선스 비복원 안내는 항상 맨 끝에 한 줄로 남긴다.
+
+    출력 줄 수가 프로그램 수만큼 늘지 않게 최대 max_programs 개 프로그램만 보인다(JSON 출력은 이 함수와 무관하다)."""
+    seen: dict[str, int] = {}
+    entries: list[dict] = []
+    for w in warnings or []:
+        name = fs.plain_path_text(str(w.get("name") or "")).strip() or "(이름 없음)"
+        for item in w.get("items", []):
+            text = str(item).strip()
+            if not text or text == LICENSE_NOTE:
+                continue
+            if text in seen:  # 같은 경고는 한 번만: 이름만 덧붙인다
+                names = entries[seen[text]]["also"]
+                if name not in names and name != entries[seen[text]]["name"]:
+                    names.append(name)
+                continue
+            seen[text] = len(entries)
+            entries.append({"name": name, "text": text, "also": []})
+    lines: list[str] = []
+    if entries:
+        groups: dict[str, list[dict]] = {}
+        for e in entries:
+            groups.setdefault(e["name"], []).append(e)
+        lines.append(f"수동으로 해야 할 일 {len(entries)}건(프로그램별 요약 — 전체는 pcmigrate checklist 로 확인하세요):")
+        for name, items in list(groups.items())[:max_programs]:
+            first = items[0]
+            also = f" (같은 안내: {', '.join(first['also'])})" if first["also"] else ""
+            more = f" 외 {len(items) - 1}건" if len(items) > 1 else ""
+            lines.append(f"  [{name}] {first['text']}{also}{more}")
+        if len(groups) > max_programs:
+            rest = list(groups.values())[max_programs:]
+            lines.append(f"  … 그 밖의 프로그램 {len(rest)}개({sum(len(g) for g in rest)}건)는 pcmigrate checklist 로 확인하세요.")
+    lines.append(f"[수동 작업 필요] {LICENSE_NOTE}")
+    return lines
+

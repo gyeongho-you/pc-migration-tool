@@ -138,7 +138,7 @@ class ManifestReader:
             with open(long_path(self.path), "r", encoding="utf-8") as f:
                 first = f.readline()
         except OSError as e:
-            raise ManifestError(f"목록 파일을 읽을 수 없습니다: {e}") from e
+            raise ManifestError(f"목록 파일을 읽을 수 없습니다: {failure.user_reason(e, str(self.path), '해시 목록 읽기')}") from e
         except UnicodeDecodeError as e:
             raise ManifestError(NOT_UTF8) from e
         try:

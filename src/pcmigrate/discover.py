@@ -19,7 +19,7 @@ from typing import Callable
 
 from .cancel import Cancelled, checkpoint
 from .checklist import _norm, _norm_company, _norm_display, bundle_reason
-from . import fs
+from . import failure, fs
 from .envpaths import expand_env
 from .detect import Program
 from .discover_data import (BROWSER_VENDOR_DIRS, DOT_HINTS, DOT_SKIP, EXTRA_ROOTS, ROOTS, SECRET_PATTERNS, SKIP_NAMES,
@@ -701,7 +701,7 @@ def load_selection(path: Path, expand: Expand = expand_env) -> list[ExtraItem]:
     try:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError) as e:
-        raise SelectionError(f"선택 파일을 읽을 수 없습니다: {e}") from e
+        raise SelectionError(f"선택 파일을 읽을 수 없습니다: {failure.user_reason(e, str(path), '선택 파일 읽기')}") from e
     return items_from_selection(data, expand)
 
 

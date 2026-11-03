@@ -761,9 +761,9 @@ def load_selection(path: str | os.PathLike) -> list[SelectedItem]:
     try:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
     except OSError as e:
-        raise SelectionFileError(f"선택 파일을 읽을 수 없습니다: {e}") from e
+        raise SelectionFileError(f"선택 파일을 읽을 수 없습니다: {failure.user_reason(e, str(path), '선택 파일 읽기')}") from e
     except (ValueError, RecursionError) as e:
-        raise SelectionFileError(f"선택 파일이 올바른 JSON 이 아닙니다: {e}") from e
+        raise SelectionFileError(f"선택 파일이 올바른 JSON 이 아닙니다: {failure.user_reason(e, str(path), '선택 파일 JSON')}") from e
     return parse_selection(data)
 
 

@@ -119,10 +119,8 @@ def _print_checklist_hint(cl) -> None:
 
 
 def _print_warnings(warnings: list[dict]) -> None:
-    for w in warnings:
-        for item in w.get("items", []):
-            _err(f"[수동 작업 필요] {w.get('name')}: {item}")
-    _err("[수동 작업 필요] 라이선스는 복원되지 않습니다. 각 프로그램을 재로그인/재활성화하세요.")
+    """프로그램 규칙 경고를 한 구역으로 묶어 보인다(같은 문장은 한 번만, 프로그램별 요약, 라이선스 비복원 안내는 항상 맨 끝). 핵심 요약은 이 뒤에 출력한다."""
+    _err(*summary.manual_work_lines(warnings))
 
 
 # --------------------------------------------------------------------------- 서브커맨드(출력만)
@@ -642,7 +640,7 @@ def _cmd_install_check(args: argparse.Namespace) -> int:
         try:
             text = Path(args.winget_list_file).read_text(encoding="utf-8-sig", errors="replace")
         except OSError as e:
-            _err(f"--winget-list-file 을 읽을 수 없습니다: {e}")
+            _err(f"--winget-list-file 을 읽을 수 없습니다: {failure.user_reason(e, str(args.winget_list_file), 'winget 목록 파일 읽기')}")
             return 1
         new_state = ic.NewState([p for p in deps.registry() if p.source == "registry"], [], text, winget_ok=True)
     try:
@@ -755,10 +753,6 @@ def _cmd_export(args: argparse.Namespace) -> int:
         _err(f"[주의] --allow-secrets: 비밀 정보 가능성이 있는 항목 {r.extras.risky}개를 패키지에 포함합니다. "
              "패키지 파일을 안전하게 보관하세요.")
     _err(*r.notes)
-    if args.json:
-        _json_out(r.summary_dict(args.output))
-    else:
-        _print_lines(summary.export_lines(r, args.output))
     if r.denied:
         _err(f"[주의] 보안상 복원하지 않는 형식(실행/스크립트/라이브러리 등) {len(r.denied)}개는 패키지에 넣지 않았습니다. "
              "필요하면 신 PC 에서 해당 프로그램을 설치/설정할 때 직접 옮기세요. 예:")
@@ -773,6 +767,10 @@ def _cmd_export(args: argparse.Namespace) -> int:
     _print_checklist_hint(r.checklist)
     if r.discovery:
         _print_hint("(자동으로 포함되지 않습니다).", *r.discovery)
+    if args.json:  # 핵심 결과 요약(담은 파일 수, 다음 할 일)은 부가 안내 뒤 맨 아래에 둔다(JSON 스키마는 그대로)
+        _json_out(r.summary_dict(args.output))
+    else:
+        _print_lines(summary.export_lines(r, args.output))
     if r.hard_failures:
         return 1
     return PARTIAL_SUCCESS if r.unreadable else 0  # 사용 중이라 읽지 못한 파일이 있으면 부분 성공(3): 패키지는 검증을 통과했지만 그 파일은 빠졌다(81)
@@ -830,10 +828,6 @@ def _cmd_import(args: argparse.Namespace) -> int:
         _err("패키지 검증 실패: 복원하지 않습니다.")
         return 1
     if r.mode in ("dry-run", "needs-confirm"):
-        if args.json:
-            _json_out(r.preview_dict(), indent=2)
-        else:
-            _print_lines(summary.import_lines(r, args.package))
         n_rej = sum(1 for it in r.plan.items if it.get("status") == "rejected")
         if n_rej:
             _err(f"[주의] 복원 위치가 바로가기(정션/링크)를 거쳐 복원되지 않을 파일 {n_rej}개가 있습니다. "
@@ -845,9 +839,13 @@ def _cmd_import(args: argparse.Namespace) -> int:
         _err(*summary.install_notes(r))
         if r.mode == "dry-run":
             _err("미리보기입니다. 실제 변경은 없었습니다.")
-            return 0
-        _err("미리보기만 출력했고 아무것도 쓰지 않았습니다. 실제 복원하려면 --yes 를 붙여 다시 실행하세요.")
-        return NEEDS_CONFIRM
+        else:
+            _err("미리보기만 출력했고 아무것도 쓰지 않았습니다. 실제 복원하려면 --yes 를 붙여 다시 실행하세요.")
+        if args.json:  # 핵심 요약(미리보기 결과, 다음 할 일)은 부가 안내 뒤 맨 아래에 둔다(JSON 스키마는 그대로)
+            _json_out(r.preview_dict(), indent=2)
+        else:
+            _print_lines(summary.import_lines(r, args.package))
+        return 0 if r.mode == "dry-run" else NEEDS_CONFIRM
     if r.mode == "needs-allow-extra":
         _err(f"패키지에 규칙 없이 선택 포함된 파일 {r.n_extra}개가 있습니다. 내용을 미리보기로 확인한 뒤 "
              "--allow-extra 를 붙여 다시 실행하세요(복원하지 않았습니다).")
@@ -870,8 +868,6 @@ def _cmd_import(args: argparse.Namespace) -> int:
                    "success": not report.failures,
                    "programs": r.plan.programs, **({"import_record": r.record_path} if r.record_path else {}),
                    **({"git_config_warning": rd["git_config_warning"]} if rd.get("git_config_warning") else {})})
-    else:
-        _print_lines(summary.import_lines(r, args.package, report))
     n_rej = sum(1 for f in report.failures if f.status == "rejected")
     if n_rej:
         _err(f"[주의] 복원 위치가 바로가기(정션/링크)를 거치는 파일 {n_rej}개는 복원하지 않았습니다(링크 너머에는 쓰지 않습니다). "
@@ -880,6 +876,8 @@ def _cmd_import(args: argparse.Namespace) -> int:
         _err(f"실패: {f.dst} -> {f.error}")
     _print_warnings(r.plan.warnings)
     _err(*summary.install_notes(r))
+    if not args.json:  # 핵심 결과 요약(복원 N / 건너뜀 / 실패, 다음 할 일)은 부가 안내 뒤 맨 아래에 둔다
+        _print_lines(summary.import_lines(r, args.package, report))
     return 1 if report.failures else 0
 
 

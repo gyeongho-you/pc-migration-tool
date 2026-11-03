@@ -21,7 +21,9 @@ class SelectionWriteError(Exception):
     """선택 파일(--output-selection)을 쓰지 못함. 찾기 자체의 읽기 오류(OSError)와 구분하려고 따로 둔다."""
 
     def __init__(self, path: str, exc: OSError) -> None:
-        super().__init__(f"선택 파일을 쓰지 못했습니다: {exc}")
+        from . import failure
+        super().__init__(f"선택 파일을 쓰지 못했습니다: {failure.classify(exc, path).label}")
+        failure.user_reason(exc, path, "선택 파일 쓰기")
         self.path, self.exc = path, exc
 
 

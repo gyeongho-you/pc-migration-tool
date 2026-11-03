@@ -93,16 +93,67 @@ def _file_entry_ok(f: object) -> bool:
     return isinstance(size, int) and not isinstance(size, bool) and size >= 0
 
 
+PKG_NOT_FOUND = "패키지 파일을 찾을 수 없습니다. 경로를 다시 확인해 주세요"
+PKG_IS_DIR = "패키지 자리에 폴더가 지정되었습니다. 설정 패키지(.zip) 파일을 선택해 주세요"
+PKG_DENIED = "패키지 파일을 읽을 권한이 없거나 다른 프로그램이 사용 중입니다. 권한을 확인하고 다시 시도해 주세요"
+PKG_EMPTY = "패키지 파일이 비어 있습니다(0바이트). 복사가 끝나지 않았거나 잘못된 파일입니다"
+PKG_UNREADABLE = "패키지 파일을 읽을 수 없습니다. 경로와 상태를 확인해 주세요(자세한 내용은 오류 로그)"
+PKG_CORRUPT = "zip 파일이 손상되었거나 설정 패키지가 아닙니다. 다시 복사하거나 구 PC 에서 패키지를 다시 만들어 주세요"
+# 파일 자체를 열지 못한 경우(손상이 아님): 안내의 '다음 할 일' 이 '다시 만들기' 가 아니라 '경로/권한 확인' 이 되게 구분한다
+FILE_PROBLEMS = (PKG_NOT_FOUND, PKG_IS_DIR, PKG_DENIED, PKG_EMPTY, PKG_UNREADABLE)
+
+
+def _log_open_error(e: BaseException, path) -> None:
+    try:
+        from . import errorlog
+        errorlog.record(e, "패키지 열기")
+    except Exception:  # noqa: BLE001 - 로그 실패가 사용자 안내를 막지 않는다
+        pass
+
+
+def _os_open_text(e: OSError, path) -> str:
+    from . import failure
+    f = failure.classify(e, str(path))
+    if f.code == failure.NOT_FOUND:
+        return PKG_NOT_FOUND
+    if f.code == failure.PERMISSION or f.code == failure.IN_USE:
+        return PKG_DENIED
+    return PKG_UNREADABLE
+
+
+def open_problem(path) -> str:
+    """zip 을 열기 전에 파일 자체의 문제(없음/폴더/0바이트)를 가려 사용자 문구로 돌려준다. 문제 없으면 빈 문자열."""
+    from .fs import long_path
+    try:
+        st = os.stat(long_path(path))
+    except OSError as e:
+        _log_open_error(e, path)
+        return _os_open_text(e, path)
+    import stat as _stat
+    if _stat.S_ISDIR(st.st_mode):
+        return PKG_IS_DIR
+    if st.st_size == 0:
+        return PKG_EMPTY
+    return ""
+
+
 def verify_package(path: Path) -> tuple[dict | None, list[str]]:
     """zip 구조/경로 안전성과 manifest 해시를 검증한다. (manifest, 문제 목록) 반환.
 
     zip 이나 manifest 가 어떤 모양으로 망가져 있어도 예외를 던지지 않고 문제 목록으로 돌려준다.
     """
     problems: list[str] = []
+    bad = open_problem(path)
+    if bad:
+        return None, [bad]
     try:
         zf = zipfile.ZipFile(path)
-    except (zipfile.BadZipFile, OSError) as e:
-        return None, [f"zip 을 열 수 없음: {e}"]
+    except zipfile.BadZipFile as e:
+        _log_open_error(e, path)
+        return None, [PKG_CORRUPT]
+    except OSError as e:
+        _log_open_error(e, path)
+        return None, [_os_open_text(e, path)]
     with zf:
         infos = zf.infolist()
         names = [i.filename for i in infos]

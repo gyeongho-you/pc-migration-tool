@@ -797,7 +797,7 @@ def discover(recv: Path, maps: dict[str, str], include_unverified: bool, warn: C
     try:
         tops = sorted(os.scandir(long_path(recv)), key=lambda e: e.name.lower())
     except OSError as e:
-        raise TransferError(f"받기 폴더를 읽을 수 없습니다: {recv} ({e})") from e
+        raise TransferError(f"받기 폴더를 읽을 수 없습니다: {recv} ({failure.user_reason(e, str(recv), '받기 폴더 읽기')})") from e
 
     def uncovered(cur_dir: Path, rel_parts: tuple[str, ...], cov: list[tuple[str, ...]], letter: str) -> None:
         """저널이 덮지 않는 하위 항목을 UNKNOWN_LOC 행으로 보고한다(저널이 덮는 경로는 건너뛴다)."""
