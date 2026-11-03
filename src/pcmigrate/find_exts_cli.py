@@ -114,7 +114,7 @@ def _cmd(args: argparse.Namespace) -> int:
     for w in warns:
         _err(f"[경고] {w}")
     # 없는 확장자 삭제는 실패(1), 이미 있는 확장자 추가는 안내(0)
-    ok = ch.changed or act == "add"
+    ok = ch.changed or (act == "add" and not ch.conflict)  # 이미 같은 분류로 있으면 안내(0), 다른 분류로 이미 있어 적용되지 않았으면 실패(1)
     if args.json:
         _out({"ok": ok, "changed": ch.changed, "message": ch.message, "warnings": warns, "saved_to": saved,
               "settings": _settings(ch.cfg)}, True)
@@ -127,7 +127,7 @@ def add_parsers(sub, path_arg=None) -> None:
     p = sub.add_parser("find-exts", help="내 파일 찾기가 찾을 파일 형식(확장자)을 보고, 추가하고, 삭제하고, 기본값으로 되돌린다",
                        epilog="기본값은 코드의 확장자 표(설계/사진/영상/문서/압축)입니다. 설정은 기본값과의 차이만 "
                               "%LOCALAPPDATA%\\pcmigrate\\settings\\find-exts.json 에 저장합니다. "
-                              "종료 코드: 0 = 성공(이미 있는 형식 추가 안내 포함), 1 = 없는 형식 삭제/저장·초기화 실패/가져오기 거부, 2 = 잘못된 입력.")
+                              "종료 코드: 0 = 성공(이미 있는 형식 추가 안내 포함), 1 = 없는 형식 삭제·다른 분류로 이미 있는 형식 추가(적용 안 됨)/저장·초기화 실패/가져오기 거부, 2 = 잘못된 입력.")
     s = p.add_subparsers(dest="action", required=True)
     for name, text in (("list", "현재 찾을 형식 목록(사용자 추가/삭제 표시)"), ("reset", "기본값으로 되돌림(이전 설정은 번호 .bak 으로 보관)")):
         q = s.add_parser(name, help=text)

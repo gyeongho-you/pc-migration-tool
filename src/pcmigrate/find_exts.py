@@ -24,6 +24,7 @@ CONFIG_VERSION = 1
 SETTINGS_DIR = "%LOCALAPPDATA%\\pcmigrate\\settings"  # 시험이 실제 폴더를 건드리지 않도록 바꿔 끼울 수 있다
 FALLBACK_DIR = "pcmigrate-settings"
 FILE_NAME = "find-exts.json"
+MAX_DAMAGED_COPIES = 60  # 손상된 설정 파일 복사본(번호 .bak) 상한: 이만큼 있으면 더 만들지 않는다(같은 내용 검사 범위와 같다)
 PREV_SUFFIX = ".prev"  # 저장할 때마다 바뀌는 '직전 설정' 한 벌(번호 .bak 은 초기화·가져오기·손상 보관용으로만 쓴다)
 MAX_BYTES = 1024 * 1024
 MAX_ENTRIES = 500
@@ -131,6 +132,7 @@ class Change:
     changed: bool
     message: str
     warnings: list[str] = field(default_factory=list)
+    conflict: bool = False  # 바꾸지 못한 이유가 '이미 있음(중복)'이 아니라 기존 항목과의 충돌(다른 분류로 이미 있음)
 
 
 @dataclass
@@ -183,6 +185,9 @@ def _keep_damaged_copy(path: Path, data: bytes, cfg: ExtConfig) -> None:
     """손상된 원본은 그대로 두고, 같은 내용의 .bak 이 없을 때만 번호 .bak 으로 복사해 둔다."""
     try:
         if _same_as_existing_bak(path, data):
+            return
+        if all(os.path.lexists(path.with_name(path.name + (".bak" if i == 0 else f".bak.{i}"))) for i in range(MAX_DAMAGED_COPIES)):
+            cfg.notes.append("손상된 설정 파일의 복사본이 이미 많아 새 복사본은 만들지 않았습니다(원본은 그대로 있습니다).")
             return
         bak = _numbered_bak(path)
         bak.write_bytes(data)
@@ -332,7 +337,7 @@ def add(cfg: ExtConfig, ext: str, category: str) -> Change:
         if e in cfg.added:  # 사용자가 추가한 것은 분류만 바꾼다
             new.added[e] = cat
             return Change(new, True, f"{e} 의 분류를 {CATEGORY_LABELS[cur]} → {CATEGORY_LABELS[cat]} 로 바꿨습니다.", warns)
-        return Change(cfg, False, f"{e} 은(는) 기본으로 {CATEGORY_LABELS[cur]} 목록에 있습니다. 다른 분류로 옮기려면 먼저 삭제한 뒤 추가하세요.", [])
+        return Change(cfg, False, f"{e} 은(는) 기본으로 {CATEGORY_LABELS[cur]} 목록에 있습니다. 다른 분류로 옮기려면 먼저 삭제한 뒤 추가하세요.", [], True)
     if len(new.added) + len(new.removed) >= MAX_ENTRIES:
         raise FindExtsError(f"추가·삭제한 형식이 너무 많습니다(최대 {MAX_ENTRIES}개). 기본값으로 초기화하거나 일부를 정리하세요.")
     if e in fd.EXT_TABLE and e in new.removed and fd.EXT_TABLE[e][0] == cat:  # 삭제했던 기본 형식을 되살림

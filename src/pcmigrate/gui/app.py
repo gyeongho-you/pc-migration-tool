@@ -6,6 +6,7 @@ import logging
 import os
 import sys
 import tempfile
+import time
 import tkinter as tk
 import traceback
 from pathlib import Path
@@ -34,6 +35,7 @@ from .views.record import RecordView  # stage60
 from .views.start import StartView
 from .views.transfer import TransferView
 
+CLOSE_WAIT, CLOSE_WAIT_WRITING = 5.0, 8.0  # 창을 닫을 때 작업이 취소를 마치기를 기다리는 최대 시간(초): 일반 작업, 파일을 쓰는 작업
 LOG_NAME = "pcmigrate-gui.log"
 BASE_SIZE = (1040, 760)  # 96dpi(100%) 기준 시작 크기
 MIN_SIZE = (900, 640)  # 96dpi 기준 최소 크기: 이 크기에서도 입력칸과 주 버튼이 첫 화면에 보여야 한다
@@ -583,6 +585,8 @@ class App(tk.Tk):
                 pass
 
     def _close(self) -> None:
+        if getattr(self, "_closing_label", None) is not None:
+            return  # 이미 닫는 중(작업이 끝나기를 기다리는 중)
         receiving = self.c.lan_receive_active()  # 새 PC 에서 받는 중(대기·연결·수신): 작업 스레드가 없어도 닫으면 받기가 끊긴다
         if self.c.state.busy or receiving:
             msg = T.CLOSE_BUSY if (self.c.can_cancel or not self.c.state.busy) else T.CLOSE_BUSY_NO_CANCEL
@@ -593,8 +597,27 @@ class App(tk.Tk):
                 self.c.lan_receive_stop()  # 받기를 멈추고 정리한다(이더넷 주소 복구 안내 경로는 그대로)
             except Exception as e:  # noqa: BLE001 - 멈추다 난 오류가 창 닫기를 막지 않게
                 errorlog.record(e, "창 닫기: 받기 멈춤")
+        if self.c.state.busy:
+            # 작업 스레드가 정리(임시 폴더, 중단 리포트, 잠금 해제)를 마칠 시간을 준다: 취소한 뒤 끝나기를 짧게 기다렸다 닫는다(UI 스레드는 막지 않는다).
+            from .controller import _WRITING_TASKS
+            writing = self.c.state.busy_label in _WRITING_TASKS
+            self._closing_label = self.c.state.busy_label
+            self._close_deadline = time.monotonic() + (CLOSE_WAIT_WRITING if writing else CLOSE_WAIT)
+            self.c.cancel()  # '중지하는 중' 안내는 기존 상태 줄/현황 카드가 보여 준다
+            self._close_poll()
+            return
         self.c.cancel()
         self.destroy()
+
+    def _close_poll(self) -> None:
+        if not self.c.state.busy:
+            self.destroy()
+            return
+        if time.monotonic() >= self._close_deadline:  # 끝나지 못했다: 기록을 남기고 닫는다(작업은 중단된다)
+            errorlog.record(RuntimeError("창을 닫아 작업을 중단했습니다"), f"창 닫기: {getattr(self, '_closing_label', '')}")
+            self.destroy()
+            return
+        self.after(100, self._close_poll)
 
     # ====================================================================== stage30b 구획: 작업 중지
     def _build_stop_widgets(self, right: ttk.Frame, left: ttk.Frame) -> None:

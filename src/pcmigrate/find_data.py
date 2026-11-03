@@ -537,9 +537,19 @@ class _Finder:
         b = sum(a.cats.get(c, [0, 0])[1] for c in self.want)
         return n > 0 and b >= self.min_size
 
+    def _iso(self, ts: float, path: str) -> str:
+        """수정 시각(UTC ISO). 파일 시스템이 주는 비정상 값(아주 먼 미래 등)은 시각을 비우고 읽기 오류로 기록한다(한 파일 때문에 찾기가 멈추지 않게)."""
+        if not ts:
+            return ""
+        try:
+            return datetime.fromtimestamp(ts, timezone.utc).isoformat(timespec="seconds")
+        except (OverflowError, OSError, ValueError) as e:
+            self._err(path, OSError(f"수정 시각을 읽을 수 없습니다({type(e).__name__})"))
+            return ""
+
     def _item(self, path: str, a: _Agg, kind: str, why: str, label: str = "") -> FolderItem:
         cats = {c: {"files": a.cats[c][0], "bytes": a.cats[c][1]} for c in RESULT_CATEGORIES if c in a.cats}
-        latest = datetime.fromtimestamp(a.latest, timezone.utc).isoformat(timespec="seconds") if a.latest else ""
+        latest = self._iso(a.latest, path)
         bits = [f"{CATEGORY_LABELS[c]} {v['files']}개" for c, v in cats.items()]
         exts = [e for e, _n in a.exts.most_common(5)]
         basis = f"{why}: " + (", ".join(bits) if bits else "분류된 파일 없음") + (f" (대표 {' '.join(exts)})" if exts else "")
@@ -704,11 +714,18 @@ def write_selection(res: FindResult, path: str | os.PathLike) -> Path:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_name(p.name + ".part")
-    tmp.write_text(json.dumps(selection_dict(res), ensure_ascii=False, indent=2), encoding="utf-8")
-    if p.exists():
-        from .copier import _backup_path  # 번호 붙은 백업 규칙을 한 곳(긴 경로 대응)에서 쓴다
-        os.replace(p, _backup_path(p))
-    os.replace(tmp, p)
+    try:
+        tmp.write_text(json.dumps(selection_dict(res), ensure_ascii=False, indent=2), encoding="utf-8")
+        if p.exists():
+            from .copier import _backup_path  # 번호 붙은 백업 규칙을 한 곳(긴 경로 대응)에서 쓴다
+            os.replace(p, _backup_path(p))
+        os.replace(tmp, p)
+    except BaseException:
+        try:
+            tmp.unlink()  # 쓰다 실패하면 남은 임시 파일을 지운다
+        except OSError:
+            pass
+        raise
     return p
 
 

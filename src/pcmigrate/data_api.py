@@ -17,6 +17,14 @@ from .multi_transfer import MultiReport, plan_items, run_multi
 from .progress import ProgressInfo
 
 
+class SelectionWriteError(Exception):
+    """선택 파일(--output-selection)을 쓰지 못함. 찾기 자체의 읽기 오류(OSError)와 구분하려고 따로 둔다."""
+
+    def __init__(self, path: str, exc: OSError) -> None:
+        super().__init__(f"선택 파일을 쓰지 못했습니다: {exc}")
+        self.path, self.exc = path, exc
+
+
 def run_find_data(roots: Iterable[str | os.PathLike] | None = None, *, categories: Iterable[str] = fd.DEFAULT_CATEGORIES,
                   min_size: int = 0, max_depth: int = 4, time_limit: float | None = None,
                   include_removable: bool = False, user_folders: dict[str, str] | None = None,
@@ -54,7 +62,10 @@ def run_find_data(roots: Iterable[str | os.PathLike] | None = None, *, categorie
     except ValueError as e:
         raise ApiError(str(e)) from e
     if output_selection:
-        fd.write_selection(res, output_selection)
+        try:
+            fd.write_selection(res, output_selection)
+        except OSError as e:  # 훑는 중의 읽기 오류와 구분: 선택 파일을 쓰지 못한 경우만 SelectionWriteError
+            raise SelectionWriteError(str(output_selection), e) from e
     return res
 
 

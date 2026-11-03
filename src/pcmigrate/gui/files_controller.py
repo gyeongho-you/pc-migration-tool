@@ -182,6 +182,11 @@ class FilesMixin:
         """선택한 폴더 경로 목록(표 순서)."""
         return [r.path for r in self.data_rows(visible_only=False) if r.selected]
 
+    def hidden_selected_count(self) -> int:
+        """선택돼 있지만 종류별 보기 때문에 지금 표에 보이지 않는 폴더 수(선택은 그대로 유지되어 함께 전송된다)."""
+        visible = {norm(r.path) for r in self.data_rows(visible_only=True)}
+        return sum(1 for r in self.data_rows(visible_only=False) if r.selected and not r.manual and norm(r.path) not in visible)
+
     def data_total(self) -> tuple[int, int, int]:
         """(선택한 폴더 수, 알려진 용량 합계(바이트), 용량을 모르는 폴더 수)."""
         sel = [r for r in self.data_rows(visible_only=False) if r.selected]
@@ -210,6 +215,8 @@ class FilesMixin:
                 return T.DP_TOTAL_ONLY.format(n=dn, size=fmt_bytes(dsize) + (" 이상" if dunknown else "")) + (" · " + T.BUNDLE_INCLUDED if b is not None else "")
             return T.FD_TOTAL_ONLY_BUNDLE.format(note=T.BUNDLE_INCLUDED, size=bsize) if b is not None else T.FD_TOTAL_NONE
         text = T.FD_TOTAL.format(n=n, size=fmt_bytes(size))
+        hidden = self.hidden_selected_count()
+        text += (" " + T.FD_TOTAL_HIDDEN.format(n=hidden) if hidden else "")  # 종류별 보기에서 가려졌지만 선택돼 있어 함께 전송되는 폴더
         text += (" " + T.FD_TOTAL_UNKNOWN.format(k=unknown) if unknown else "")
         if dn:
             text += " + " + T.DP_TOTAL.format(n=dn, size=fmt_bytes(dsize)) + (" " + T.FD_TOTAL_UNKNOWN.format(k=dunknown) if dunknown else "")
@@ -949,6 +956,8 @@ class FilesMixin:
 
     def lan_send_start(self, target: str, code: str, confirmed: bool = False) -> None:
         """연결하고 선택한 폴더를 보낸다. 새 PC 에 쓰는 일이므로 사람의 확인(confirmed)이 있어야 한다. 원본은 읽기만 한다."""
+        if self.state.busy:
+            raise _guard(T.G_BUSY)  # 이전 보내기 결과(tx_*)를 지우기 전에 막는다
         why = self.lan_send_problem(target, code)
         if why:
             raise _guard(why)

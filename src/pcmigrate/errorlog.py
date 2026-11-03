@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 import re
 import tempfile
+import threading
 import traceback
 from collections import deque
 from datetime import datetime, timedelta
@@ -36,6 +37,7 @@ BURST_MAX = 20
 BURST_SECONDS = 60.0
 HOME_TOKEN = "%USERPROFILE%"
 
+_LOCK = threading.RLock()  # _RECENT/_BURST/_LIMITED 갱신 보호(여러 스레드가 동시에 오류를 기록할 수 있다)
 _WRITABLE: dict[str, bool] = {}  # 폴더 -> 쓸 수 있는지(프로세스 동안 한 번만 확인)
 _RECENT: dict[str, list] = {}    # 오류 서명 -> [마지막으로 쓴 시각, 그 뒤 생략한 횟수, 마지막으로 쓴 파일]
 _BURST: deque = deque()          # 최근에 쓴 시각들
@@ -169,6 +171,11 @@ def _append(path: Path, text: str) -> None:
 def record(exc: BaseException, context: str = "", tb: str | None = None, directory: Path | None = None,
            now: datetime | None = None) -> Path | None:
     """오류 한 건을 로그에 덧붙이고 로그 파일 경로를 돌려준다. 실패하면 None(예외를 던지지 않는다)."""
+    with _LOCK:
+        return _record_locked(exc, context, tb, directory, now)
+
+
+def _record_locked(exc: BaseException, context: str, tb: str | None, directory: Path | None, now: datetime | None) -> Path | None:
     try:
         now = now or datetime.now()
         d = Path(directory) if directory is not None else log_dir()

@@ -376,8 +376,8 @@ def _cmd_find_data(args: argparse.Namespace) -> int:
                                      use_user_exts=not args.default_exts)
     except ApiError as e:
         return _fail(e)
-    except OSError as e:
-        return _write_failed(args.output_selection or "", e)
+    except data_api.SelectionWriteError as e:  # 선택 파일 쓰기 실패만 '쓰기 실패'로 알린다(훑는 중의 다른 오류는 일반 오류 처리로)
+        return _write_failed(e.path, e.exc)
     if args.json:
         _json_out(res.to_dict())
     else:

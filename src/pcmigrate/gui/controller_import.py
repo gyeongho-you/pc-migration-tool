@@ -9,6 +9,8 @@ from .controller_common import GuardError, _accepts, _meta_value, _supported
 
 class ImportMixin:
     def start_preview(self, keep_selection: bool = False) -> None:
+        if self.state.busy:
+            raise GuardError(T.G_BUSY)  # _run 이 막기 전에 아래에서 이전 선택/상태를 지우지 않게 먼저 막는다
         if not self.state.package:
             raise GuardError(T.G_NEED_PACKAGE)
         package = self.state.package
@@ -38,6 +40,8 @@ class ImportMixin:
         on = bool(on)
         if on == self.state.install_consent:
             return
+        if self.state.busy:
+            raise GuardError(T.G_BUSY)
         self.state.install_consent = on
         self.state.final_confirmed = False
         self.emit("confirm_changed")
