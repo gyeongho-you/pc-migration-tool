@@ -241,7 +241,7 @@ class AutoMixin:
         self._auto_mark("apply", "warn" if failed or stopped else "done")
         self._auto_finish(stopped or (T.AUTO_FAILED_WARN.format(n=failed) if failed else ""))
 
-    # ---- 대용량: 질문 두 개 -> 폴더 -> 미리보기 -> (복사 시작 직전 확인) -> 복사 / 랜선 새 PC 쪽은 목록·폴더 -> 검사
+    # ---- 대용량: 질문 두 개 -> 폴더 -> 미리보기 -> (복사 시작 직전 확인) -> 복사 / 네트워크 케이블 새 PC 쪽은 목록·폴더 -> 검사
     def _auto_begin_transfer(self) -> None:
         self._auto_wait("questions", "questions")
 
@@ -258,7 +258,7 @@ class AutoMixin:
         self._auto_wait("folders", "folders")
 
     def auto_set_folders(self, first: str, second: str) -> None:
-        """복사: (원본, 대상) / 랜선 새 PC 쪽: (확인용 목록 파일, 검사할 폴더). 점검에 통과해야 이어간다."""
+        """복사: (원본, 대상) / 네트워크 케이블 새 PC 쪽: (확인용 목록 파일, 검사할 폴더). 점검에 통과해야 이어간다."""
         a = self.auto
         if a is None or a.gate != "folders":
             raise GuardError(T.G_NOT_IN_LIST)

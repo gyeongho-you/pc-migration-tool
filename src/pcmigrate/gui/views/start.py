@@ -6,7 +6,7 @@ from tkinter import ttk
 
 from .. import state as S
 from .. import texts as T
-from .common import (BODY_FONT, INFO_BORDER, INFO_FG, MUTED_FG, SUB_FONT, WARN_BG, WARN_FG, ActionButton, BaseView, Collapsible,
+from .common import (BODY_FONT, BOLD_FONT, INFO_BORDER, INFO_FG, MUTED_FG, SUB_FONT, WARN_BG, WARN_FG, ActionButton, BaseView, Collapsible,
                      ScrollBody, add_tooltip, autowrap)
 
 
@@ -34,6 +34,10 @@ class StartView(BaseView):
             box = tk.Frame(grid, highlightbackground=INFO_BORDER, highlightthickness=1, padx=12, pady=10)
             box.grid(row=0, column=i, sticky="nsew", padx=6)
             grid.columnconfigure(i, weight=1, uniform="start")
+            where = tk.Label(box, text=T.START_WHERE[i], anchor="w", justify="left", fg=WARN_FG, font=BOLD_FONT)
+            where.pack(fill="x", pady=(0, 4))  # 어느 PC 앞에서 하는 일인지(카드 맨 위, 굵게)
+            autowrap(where, 40)
+            self.where_labels.append(where)
             head = tk.Label(box, text=title, font=SUB_FONT, anchor="w", justify="left", fg=INFO_FG)
             head.pack(anchor="w", fill="x")
             autowrap(head, 40)
@@ -41,10 +45,6 @@ class StartView(BaseView):
             lbl.pack(anchor="w", fill="x", pady=(6, 10))
             autowrap(lbl, 40)
             flow = ("old", "transfer", "new")[i]  # 카드 순서: ① 구 PC → ② 내 파일 옮기기 → ③ 새 PC
-            where = tk.Label(box, text=T.START_WHERE[i], anchor="w", justify="left", fg=MUTED_FG, font=BODY_FONT)
-            where.pack(side="bottom", fill="x", pady=(6, 0))  # 어느 PC 에서 하는 일인지(카드 맨 아래, 작게)
-            autowrap(where, 40)
-            self.where_labels.append(where)
             auto = ActionButton(box, text=T.BTN_AUTO, command=lambda f=flow: self.guarded(self.c.auto_run, f), kind="plain", pady=3)
             auto.pack(side="bottom", fill="x", pady=(6, 0))  # 보조 단추: 기본 단추 아래에 작게
             add_tooltip(auto, T.TIP_AUTO[flow])

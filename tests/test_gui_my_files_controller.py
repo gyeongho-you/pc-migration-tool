@@ -616,7 +616,7 @@ def test_start_card_two_is_my_files_and_old_name_only_in_help():  # stage34: 카
     title, desc, btn, target = T.START_CHOICES[1]
     assert title.startswith("② 내 파일 옮기기") and "자동으로 찾아서" in title and target == S.FIND
     assert "대용량 복사" not in title + desc + btn
-    assert "대용량 복사" in T.HELP[S.FIND] and "대용량 복사" in T.HELP[S.TRANSFER]
+    assert "대용량 복사" not in T.HELP[S.FIND] + T.HELP[S.TRANSFER]  # stage85: 옛 이름 안내는 도움말에서도 뺐다(용어 통일)
     assert T.TITLES[S.FIND].startswith("② 내 파일 옮기기 · 1/4")
     assert T.TITLES[S.METHOD].startswith("② 내 파일 옮기기 · 2/4")
 

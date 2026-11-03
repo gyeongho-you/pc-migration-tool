@@ -1,4 +1,4 @@
-"""12단계 GUI: 방식 선택(외장/랜선/같은 PC)별 흐름, 사전 점검 차단, 목록 파일 검사, 경고 문구, 드라이브 분리."""
+"""12단계 GUI: 방식 선택(외장/공유 폴더/같은 PC)별 흐름, 사전 점검 차단, 목록 파일 검사, 경고 문구, 드라이브 분리."""
 import threading
 import time
 from types import SimpleNamespace
@@ -153,7 +153,7 @@ def test_layout_lines_show_absolute_root_and_top_folders(flow):
     assert lines[0] == T.TR_LAYOUT_ROOT.format(root="D:\\Projects") and "도면" in lines[1] and "1,200" in lines[1]
 
 
-# ------------------------------------------------------------------ 랜선 1단계/2단계
+# ------------------------------------------------------------------ 공유 폴더 1단계/2단계
 
 def test_network_stage1_and_deferred_note(flow):
     flow.c.set_transfer_flow(T.MODE_NETWORK, 1)
@@ -317,7 +317,7 @@ def test_two_speed_hints_are_different_and_texts_have_no_prices():
     assert "환경에 따라 다를 수 있습니다" in T.HELP_NETWORK
     for needle in ("192.168.50.1", "192.168.50.2", "255.255.255.0", "개인", "ping", "1000", "net use"):
         assert needle in T.HELP_NETWORK, needle
-    assert "랜선이 충분한 경우" in T.HELP_COMPARE and "외장 드라이브가 나은 경우" in T.HELP_COMPARE
+    assert "공유 폴더가 알맞은 경우" in T.HELP_COMPARE and "외장 드라이브가 나은 경우" in T.HELP_COMPARE
     assert "이론" in T.HELP_COMPARE
 
 
@@ -389,7 +389,7 @@ def test_roadmap_covers_required_steps_and_marks_who():
     for key, title, who, detail in (*T.ROADMAP_OLD, *T.ROADMAP_NEW):
         assert who in (T.WHO_TOOL, T.WHO_HUMAN, T.WHO_BOTH) and title and detail
     blob = T.roadmap_text()
-    for needle in ("삭제하거나 포맷하지", "동글", "xref", "미리보기", "윈도우 업데이트", "드라이브 문자", "외장/랜선", "라이선스"):
+    for needle in ("삭제하거나 포맷하지", "동글", "xref", "미리보기", "윈도우 업데이트", "드라이브 문자", "외장/공유 폴더", "라이선스"):
         assert needle in blob, needle
     assert T.roadmap_text({"old1"}).count(T.CHECKED) == 1 and T.UNCHECKED in T.roadmap_text()
 

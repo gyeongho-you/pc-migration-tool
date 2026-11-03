@@ -212,7 +212,7 @@ class Receiver:
             locs = local_addresses() or local_addresses(include_loopback=True)
         self.addresses = [f"{a.ip}:{self.port}" for a in locs]
         self.address_kinds = {f"{a.ip}:{self.port}": a.kind for a in locs}
-        self.warnings.append("이 연결은 암호화되지 않습니다(코드로 상대 확인과 변조 검사만 합니다). 믿을 수 있는 사설 LAN(같은 공유기/스위치, 랜선 직결)에서만 쓰세요.")
+        self.warnings.append("이 연결은 암호화되지 않습니다(코드로 상대 확인과 변조 검사만 합니다). 믿을 수 있는 사설 LAN(같은 공유기/스위치, 네트워크 케이블 직접 연결)에서만 쓰세요.")
         self.warnings.append("처음 실행하면 Windows 방화벽 창이 뜰 수 있습니다. '개인 네트워크'를 허용하세요(공용 네트워크는 허용하지 마세요). "
                              "도구는 방화벽 설정을 바꾸지 않습니다.")
         pub = [a.ip for a in locs if a.kind == PUBLIC]
@@ -1195,7 +1195,7 @@ class _Sender:
             raise LanError(f"{ip}:{self.port} 에서 받는 프로그램이 응답하지 않습니다. 새 PC 에서 `pcmigrate receive` 가 켜져 있는지, "
                            "주소/포트가 같은지 확인하세요. 원인을 보려면 `pcmigrate send --diagnose` 를 실행하세요.", "refused") from e
         except (socket.timeout, TimeoutError) as e:
-            raise LanError(f"{ip}:{self.port} 에 연결하지 못했습니다(응답 없음). 두 PC 가 같은 공유기/스위치(또는 랜선 직결)인지, 새 PC 의 방화벽에서 "
+            raise LanError(f"{ip}:{self.port} 에 연결하지 못했습니다(응답 없음). 두 PC 가 같은 공유기/스위치(또는 네트워크 케이블 직접 연결)인지, 새 PC 의 방화벽에서 "
                            "개인 네트워크를 허용했는지 확인하세요. `pcmigrate send --diagnose` 로 원인을 알아볼 수 있습니다.", "timeout") from e
         except OSError as e:
             raise LanError(f"{ip}:{self.port} 에 연결하지 못했습니다({e.strerror or type(e).__name__}). 케이블/주소를 확인하세요.", "unreachable") from e

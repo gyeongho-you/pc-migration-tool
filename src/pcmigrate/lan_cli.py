@@ -217,7 +217,7 @@ def _cmd_send(args: argparse.Namespace) -> int:
         if ev["type"] == "connected":
             _err(f"[연결] {ev.get('message', '')}")
 
-    _err("[안내] 이 연결은 암호화되지 않습니다. 믿을 수 있는 사설 LAN(같은 공유기/스위치, 랜선 직결)에서만 쓰세요. 원본은 읽기만 합니다.")
+    _err("[안내] 이 연결은 암호화되지 않습니다. 믿을 수 있는 사설 LAN(같은 공유기/스위치, 네트워크 케이블 직접 연결)에서만 쓰세요. 원본은 읽기만 합니다.")
     try:
         rep = run_send(args.target, args.code, selection=args.from_selection, sources=args.sources or None, options=opts,
                        progress_info=on_progress, on_event=on_event, choose=_choose, timeout=args.discover_seconds,
@@ -250,7 +250,7 @@ def _cmd_send(args: argparse.Namespace) -> int:
         if rep["cloud_only_skipped"]:
             print(f"- OneDrive 클라우드 전용 파일 {rep['cloud_only_skipped']}개는 보내지 않았습니다(--include-cloud 로 포함)")
         if rep["skipped_links"]:
-            print(f"- 바로가기/정션(링크) {rep['skipped_links']}개는 따라가지 않았습니다")
+            print(f"- 바로가기(링크) {rep['skipped_links']}개는 따라가지 않았습니다")
         if rep.get("drop_stage"):
             from .drop_stage import summary_lines
             for line in summary_lines(rep["drop_stage"]):

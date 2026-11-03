@@ -1,4 +1,4 @@
-"""큰 파일 옮기기(대용량 복사) 화면: 방식 선택 -> 폴더 입력 -> 미리보기 -> 복사 -> 결과.
+"""내 파일 옮기기(복사하기) 화면: 방식 선택 -> 폴더 입력 -> 미리보기 -> 복사 -> 결과.
 
 위에서 아래로 '방식 선택 → 입력칸'이 먼저 보이고, 주 버튼(미리보기/복사 시작/검사 시작)은 스크롤 밖 하단 고정 막대에 있다.
 '이 단계에서 할 일/검사 방법/복사 전 확인'은 아래의 '자세한 준비 사항 ▸' 접이식에 둔다.
@@ -84,7 +84,7 @@ class TransferView(BaseView):
         self.src_var.trace_add("write", lambda *a: self._check())
         self.dst_var.trace_add("write", lambda *a: self._check())
 
-        # ---- 입력칸(검사 폼: 랜선 2단계 — 확인용 목록 파일과 비교)
+        # ---- 입력칸(검사 폼: 공유 폴더 2단계 — 확인용 목록 파일과 비교)
         self.verify_form = ttk.Frame(body)
         vf = self.verify_form
         self.manifest_var, self.target_var, self.vrep_var = tk.StringVar(), tk.StringVar(), tk.StringVar()
@@ -328,7 +328,7 @@ class TransferView(BaseView):
             self.src_label.configure(text=src_text)
             self.dst_label.configure(text=dst_text)
             self.dst_field.set_hint(self.c.flow_dst_hint())
-            if self.dst_field.drive_box is not None:  # 랜선(공유 폴더) 대상에는 드라이브 선택이 필요 없다
+            if self.dst_field.drive_box is not None:  # 네트워크 케이블(공유 폴더) 대상에는 드라이브 선택이 필요 없다
                 if mode == T.MODE_NETWORK:
                     self.dst_field.drive_box.grid_remove()
                 else:

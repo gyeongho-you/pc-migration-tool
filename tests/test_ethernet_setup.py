@@ -1,4 +1,4 @@
-"""stage39: 랜선 직결용 이더넷 주소 임시 맞추기(net_setup / net_setup_cli / lan_api). 전부 가짜 runner(net_fakes.FakePC) — 실제 네트워크 설정은 건드리지 않는다."""
+"""stage39: 네트워크 케이블 직접 연결용 유선 네트워크 주소 임시 맞추기(net_setup / net_setup_cli / lan_api). 전부 가짜 runner(net_fakes.FakePC) — 실제 네트워크 설정은 건드리지 않는다."""
 import argparse
 import json
 import subprocess

@@ -471,7 +471,7 @@ def test_auto_transfer_questions_then_preview_then_confirmation_before_copy(env,
     c.auto_run("transfer")
     assert c.auto.gate == "questions" and api.calls == []
     with pytest.raises(GuardError):
-        c.auto_answer_questions("local", 1)  # 질문 두 개로는 외장/랜선만
+        c.auto_answer_questions("local", 1)  # 질문 두 개로는 외장/공유 폴더만
     c.auto_answer_questions("external", 1)
     assert c.flow() == ("external", 1) and c.auto.gate == "folders"
     assert [s.key for s in c.auto.steps] == ["questions", "folders", "preview", "copy", "result"]

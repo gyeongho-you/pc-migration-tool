@@ -48,7 +48,8 @@ def real(ctx):
 def test_start_screen_shows_new_order_with_where_labels(ctx):
     v = go(ctx, S.START)
     assert len(v.cards) == 3 and len(v.where_labels) == 3
-    heads = [" ".join(labels_of(card)[0].split()) for card in v.cards]
+    heads = [" ".join(labels_of(card)[1].split()) for card in v.cards]  # [0] 은 맨 위 '어느 PC 앞이라면' 라벨(stage85)
+    assert [labels_of(card)[0] for card in v.cards] == list(T.START_WHERE)
     assert heads[0].startswith("① 쓰던 PC에서 준비하기") and heads[1].startswith("② 내 파일 옮기기") and heads[2].startswith("③ 새 PC에서 설치하고")
     assert [w.cget("text") for w in v.where_labels] == list(T.START_WHERE)
     for card, text in zip(v.cards, T.START_WHERE):

@@ -13,9 +13,9 @@ from .controller_common import GuardError, PathCheck, _accepts, _count_of
 
 
 class TransferMixin:
-    # ------------------------------------------------------------------ 대용량 복사: 방식/단계
+    # ------------------------------------------------------------------ 내 파일 복사: 방식/단계
     def set_transfer_flow(self, mode: str, stage: int = 1) -> None:
-        """'어떻게 옮기시나요?' 선택(외장 / 랜선 / 같은 PC)과 단계. 바뀌면 이전 미리보기와 결과는 무효가 된다."""
+        """'어떻게 옮기시나요?' 선택(외장 드라이브 / 공유 폴더 / 같은 PC)과 단계. 바뀌면 이전 미리보기와 결과는 무효가 된다."""
         if self.state.busy:
             raise GuardError(T.G_BUSY)
         if mode not in (T.MODE_EXTERNAL, T.MODE_NETWORK, T.MODE_LOCAL):
@@ -45,7 +45,7 @@ class TransferMixin:
         return self.state.transfer_mode, self.state.transfer_stage
 
     def is_verify_flow(self) -> bool:
-        """랜선 2단계: 복사 없이 새 PC의 복사본을 목록 파일과 비교만 한다."""
+        """공유 폴더 2단계: 복사 없이 새 PC의 복사본을 목록 파일과 비교만 한다."""
         return self.flow() == (T.MODE_NETWORK, 2)
 
     def flow_labels(self) -> tuple[str, str]:
@@ -61,7 +61,7 @@ class TransferMixin:
         return T.TR_FLOW_STEPS.get(self.flow(), ())
 
     def transfer_step(self) -> tuple[tuple[str, ...], int]:
-        """단계 표시줄용 (단계 이름들, 지금 단계 1부터). 방식 → 폴더 → 미리보기 → 복사 → 결과(랜선 2단계는 방식 → 목록·폴더 → 검사 → 결과)."""
+        """단계 표시줄용 (단계 이름들, 지금 단계 1부터). 방식 → 폴더 → 미리보기 → 복사 → 결과(공유 폴더 2단계는 방식 → 목록·폴더 → 검사 → 결과)."""
         s, rep = self.state, self.state.transfer_report
         done = rep is not None and not s.transfer_was_dry_run
         if self.is_verify_flow():
@@ -81,7 +81,7 @@ class TransferMixin:
         return T.TR_FLOW_TITLES.get(self.flow(), T.TR_HEADING)
 
     def manifest_out_path(self) -> str:
-        """1단계(외장/랜선)에서 확인용 목록 파일을 저장할 위치: 대상(외장 드라이브 또는 새 PC의 공유 폴더) 안."""
+        """1단계(외장/공유 폴더)에서 확인용 목록 파일을 저장할 위치: 대상(외장 드라이브 또는 새 PC의 공유 폴더) 안."""
         s = self.state
         if s.transfer_mode in (T.MODE_EXTERNAL, T.MODE_NETWORK) and s.transfer_stage == 1 and s.transfer_dst:
             return os.path.join(s.transfer_dst, MANIFEST_NAME)
@@ -95,7 +95,7 @@ class TransferMixin:
             return cand if os.path.isfile(cand) else ""
         return ""
 
-    # ------------------------------------------------------------------ 대용량 복사: 점검
+    # ------------------------------------------------------------------ 내 파일 복사: 점검
     def describe_dest(self, dst: str):
         """대상 드라이브 종류/파일 시스템/여유 공간(읽기 전용 조회, 같은 경로는 캐시). 네트워크 경로는 느릴 수 있어 조회하지 않는다."""
         fn = getattr(self.api, "destination_info", None)
@@ -197,7 +197,7 @@ class TransferMixin:
         rep = self.state.transfer_report
         return bool(rep is not None and not self.state.transfer_was_dry_run and rep.failures and not self.is_verify_flow())
 
-    # ------------------------------------------------------------------ 대용량 복사: 실행
+    # ------------------------------------------------------------------ 내 파일 복사: 실행
     @staticmethod
     def _write_abort_report(path: str, reason: str) -> None:
         """시작하지 못했거나 중간에 오류로 끝난 복사의 최소 결과 리포트(이유만, 파일 이름·내용 없음). 같은 이름 파일은 번호 .bak 으로 보관한다.
@@ -325,7 +325,7 @@ class TransferMixin:
         self._run(label, work, done, cancellable=True)
 
     def start_verify(self, report_path: str = "") -> None:
-        """랜선 2단계(새 PC): 목록 파일과 로컬 폴더를 비교한다. 폴더는 읽기만 한다(결과 파일도 그 폴더 밖에만 저장)."""
+        """공유 폴더 2단계(새 PC): 목록 파일과 로컬 폴더를 비교한다. 폴더는 읽기만 한다(결과 파일도 그 폴더 밖에만 저장)."""
         s = self.state
         check = self.check_verify_inputs(s.verify_manifest, s.verify_target)
         if not check.ok:
@@ -347,7 +347,7 @@ class TransferMixin:
                     self.emit("error", self.report_error(e, T.TASK_VERIFY))
         self._run(T.TASK_VERIFY, work, done, cancellable=True)
 
-    # ------------------------------------------------------------------ 대용량 복사: 결과
+    # ------------------------------------------------------------------ 내 파일 복사: 결과
     def location_warning(self) -> str:
         """복사/검사한 위치가 원래 경로와 다르면 노란 경고 문구(같으면 빈 문자열)."""
         rep, s = self.state.transfer_report, self.state

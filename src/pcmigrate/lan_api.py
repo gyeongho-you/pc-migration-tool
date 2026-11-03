@@ -98,7 +98,7 @@ def run_diagnose(target: str, code: str | None = None, **kw) -> Diagnosis:
     return diagnose(target, code, **kw)
 
 
-# --------------------------------------------------------------------------- stage39: 랜선 직결용 이더넷 주소 임시 맞추기(net_setup 의 얇은 창구)
+# --------------------------------------------------------------------------- stage39: 네트워크 케이블 직접 연결용 유선 네트워크 주소 임시 맞추기(net_setup 의 얇은 창구)
 # env 는 시험에서 가짜 runner 가 든 net_setup.NetEnv 를 넣는 자리(None 이면 실제 PC).
 from . import net_setup as _ns  # noqa: E402
 from .net_setup import NetSetupError  # noqa: E402,F401
