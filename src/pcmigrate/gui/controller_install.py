@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 
 from .. import fs
-from ..install_check import INSTALLED, WINGET, import_command, newly_installed, safe_winget_ids, selected_commands
+from ..install_check import AMBIGUOUS, INSTALLED, MANUAL, WINGET, import_command, newly_installed, safe_winget_ids, selected_commands
 from ..detect import valid_winget_id
 from . import state as S, texts as T
 from .controller_common import GuardError, _supported
@@ -65,7 +65,8 @@ class InstallMixin:
             if not version and it.needs_action:
                 version = T.INST_NO_VERSION_COL  # 구 PC 버전을 모르면 빈 칸 대신 알려 준다
             rows.append({"name": it.name, "status": it.status, "label": T.INST_LABELS[key], "version": version,
-                         "reason": it.reason, "hint": it.hint, "old_info": it.old_info if it.needs_action else "", "markable": it.needs_action, "diff": it.version_diff,
+                         "reason": it.reason, "hint": it.hint, "old_info": it.old_info if it.needs_action else "",
+                         "vendor_url": it.vendor_url if it.status in (MANUAL, AMBIGUOUS) else "", "markable": it.needs_action, "diff": it.version_diff,
                          "mark": it.name in self.state.install_marks,
                          "pickable": self._pickable(it), "pick": self._pickable(it) and it.name in self.state.install_picks})
         return rows

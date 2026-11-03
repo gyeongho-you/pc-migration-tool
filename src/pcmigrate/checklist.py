@@ -18,7 +18,7 @@ from .checklist_data import (common_warning_pairs, BUNDLE_PATTERNS, BUNDLE_REGEX
                              LOGIN_KEYWORDS, CommonItem)
 from .copier import _backup_path
 from .fs import long_path
-from .detect import DEFAULT_LOCALE, Program, parse_winget_export, safe_install_command
+from .detect import DEFAULT_LOCALE, Program, parse_winget_export, safe_install_command, sanitize_vendor_url
 from .rules import Rule
 
 WINGET_IMPORT_GUIDE: tuple[str, ...] = (
@@ -44,6 +44,9 @@ NO_VERSION_TEXT = "버전 정보 없음 — 구 PC 의 제어판에서 확인"
 
 
 _CTRL = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b[@-Z\\-_]|[\x00-\x1f\x7f-\x9f]")
+
+
+VENDOR_SITE_LABEL = "제조사 사이트"
 
 
 def clean_text(s: str) -> str:
@@ -272,9 +275,11 @@ def describe_manual(p: Program, m: Match | None) -> str:
         head = f"{display} [구 PC 게시자 {clean_text(p.publisher)}]" if p.publisher else display
     else:
         head = f"{display} [{old_version_text(p)}]"
+    url = sanitize_vendor_url(p.vendor_url)
+    site = f" — {VENDOR_SITE_LABEL}: {url}" if url else ""  # 값이 없으면 아무것도 붙이지 않는다(지어내지 않음)
     if m is None:
-        return f"{head} — 매칭 근거: {NONE}"
-    return f"{head} — 매칭 근거: {m.grade}({m.reason}: {m.winget_id}) → 실제 설치 여부 확인"
+        return f"{head} — 매칭 근거: {NONE}{site}"
+    return f"{head} — 매칭 근거: {m.grade}({m.reason}: {m.winget_id}) → 실제 설치 여부 확인{site}"
 
 
 # --------------------------------------------------------------------------- 체크리스트 구성
@@ -551,7 +556,8 @@ def load_package_programs(path: Path) -> tuple[list[Program], list[Program], str
                         continue
                     name = _str_field(d, "name")
                     if name:
-                        registry.append(Program(name, _str_field(d, "version"), _str_field(d, "publisher")))
+                        registry.append(Program(name, _str_field(d, "version"), _str_field(d, "publisher"),
+                                            vendor_url=sanitize_vendor_url(d.get("vendor_url"))))  # 패키지는 신뢰할 수 없는 입력이라 다시 정화한다(옛 패키지는 값이 없다)
             if "programs/winget.json" in names:
                 winget = parse_winget_export(zf.read("programs/winget.json").decode("utf-8-sig"))
             if "programs/winget-list.txt" in names:

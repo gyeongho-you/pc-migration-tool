@@ -106,6 +106,7 @@ class Item:
     hint: str = ""  # 수동 설치 시 알아 둘 점(체크리스트 문구 재사용)
     publisher: str = ""  # 구 PC 레지스트리의 게시자(있으면)
     winget_version: str = ""  # 묶음의 winget 목록에 적힌 구 PC 버전(winget install --version 에 쓰는 값; 없으면 빈 문자열)
+    vendor_url: str = ""  # 구 PC 레지스트리에 제조사가 적어 둔 안내 주소(검증된 http/https 만, 없으면 빈 문자열). 접속하지 않고 글자로만 보여 준다
 
     @property
     def old_info(self) -> str:
@@ -314,13 +315,13 @@ def check_install(old_registry: list[Program], old_winget: list[Program], old_li
         if found is not None and found.grade == CERTAIN:
             diff = bool(ov and found.version and not _same_version(ov, found.version))
             return Item(p.name, INSTALLED, f"{found.reason}: {found.name}", ov, found.version, found.name, wid, CERTAIN,
-                        diff, hint=hint, publisher=p.publisher, winget_version=wv)
+                        diff, hint=hint, publisher=p.publisher, winget_version=wv, vendor_url=p.vendor_url)
         if found is not None:
             return Item(p.name, AMBIGUOUS, f"{found.reason}: {found.name}", ov, found.version, found.name, wid, PROBABLE,
                         in_import_file=route == WINGET and wid.lower() in in_file, would_be=route, hint=hint,
-                        publisher=p.publisher, winget_version=wv)
+                        publisher=p.publisher, winget_version=wv, vendor_url=p.vendor_url)
         return Item(p.name, route, route_reason, ov, "", "", wid, "", in_import_file=route == WINGET and wid.lower() in in_file,
-                    hint=hint if route == MANUAL else "", publisher=p.publisher, winget_version=wv)
+                    hint=hint if route == MANUAL else "", publisher=p.publisher, winget_version=wv, vendor_url=p.vendor_url)
 
     claimed: set[str] = set()
     for p, why in cls.reference:

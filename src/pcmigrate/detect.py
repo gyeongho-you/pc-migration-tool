@@ -34,6 +34,8 @@ class Program:
     display_icon: str = ""
     uninstall_string: str = ""
     install_date: str = ""
+    # 제조사 안내 페이지 주소(레지스트리 URLInfoAbout > HelpLink > URLUpdateInfo 의 첫 유효 값). 검증을 통과한 http(s) 주소만 담고, 도구는 접속하지 않고 글자로만 보여 준다.
+    vendor_url: str = ""
 
     @property
     def display(self) -> str:
@@ -55,6 +57,51 @@ def display_with_version(name: str, version: str) -> str:
 RegistryReader = Callable[[], list[Program]]
 # runner(args) -> (returncode, stdout). 기본 구현은 subprocess.
 Runner = Callable[[list[str]], tuple[int, str]]
+
+
+VENDOR_URL_MAX = 300
+_URL_CHARS = re.compile(r"^[A-Za-z0-9\-._~:/?#\[\]@!$&()*+,;=%]+$")
+_URL_HOST = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?::\d{1,5})?$")
+
+
+def sanitize_vendor_url(value: object) -> str:
+    """제조사 주소를 검증해 안전한 http/https 주소만 돌려주고, 아니면 빈 문자열(상태를 알 수 없거나 위험하면 표시하지 않는다).
+
+    통과 조건: 문자열, 앞뒤 공백만 제거 후 300자 이하, http:// 또는 https:// 로 시작(스킴은 소문자로 정규화), 제어 문자·공백·따옴표·꺾쇠·역슬래시·ASCII 밖 문자 없음,
+    사용자 정보(user:pass@host) 없음, 호스트는 영숫자/점/하이픈(+포트)이고 점이 하나 이상 있음. javascript:/file:/ftp: 등 다른 스킴은 거부한다.
+    이 함수는 주소를 열거나 접속하지 않는다(네트워크 접근 없음)."""
+    if not isinstance(value, str):
+        return ""
+    text = value.strip()
+    if not text or len(text) > VENDOR_URL_MAX or not _URL_CHARS.match(text):
+        return ""
+    m = re.match(r"^(https?)://(.*)$", text, re.IGNORECASE)
+    if not m:
+        return ""
+    rest = m.group(2)
+    authority = re.split(r"[/?#]", rest, maxsplit=1)[0]
+    if "@" in authority or not _URL_HOST.match(authority) or "." not in authority.split(":")[0]:
+        return ""
+    return f"{m.group(1).lower()}://{rest}"
+
+
+def pick_vendor_url(get: Callable[[str], str]) -> str:
+    """Uninstall 키 값 읽기 함수 get(이름) 으로 제조사 주소를 고른다: URLInfoAbout 을 우선하고 없으면 HelpLink, 그다음 URLUpdateInfo 의 첫 유효 값."""
+    for key in ("URLInfoAbout", "HelpLink", "URLUpdateInfo"):
+        url = sanitize_vendor_url(get(key))
+        if url:
+            return url
+    return ""
+
+
+def program_from_values(get: Callable[[str], str]) -> "Program | None":
+    """Uninstall 키 하나(값 읽기 함수 get)에서 Program 을 만든다. 표시 이름이 없거나 시스템 구성요소·업데이트 항목이면 None. 시험에서 가짜 값을 넣을 수 있게 분리했다."""
+    name = get("DisplayName")
+    if not name or get("SystemComponent") == "1" or is_update_noise(name, get("ReleaseType")):
+        return None
+    return Program(name, get("DisplayVersion"), get("Publisher"),
+                   install_location=get("InstallLocation"), display_icon=get("DisplayIcon"),
+                   uninstall_string=get("UninstallString"), install_date=get("InstallDate"), vendor_url=pick_vendor_url(get))
 
 
 _UPDATE_TRAILING_KB = re.compile(r"\(KB\d{6,8}\)\s*$", re.IGNORECASE)
@@ -97,12 +144,9 @@ def read_registry_programs() -> list[Program]:
                                 return str(winreg.QueryValueEx(k, n)[0])
                             except OSError:
                                 return ""
-                        name = val("DisplayName")
-                        if not name or val("SystemComponent") == "1" or is_update_noise(name, val("ReleaseType")):
+                        p = program_from_values(val)
+                        if p is None:
                             continue
-                        p = Program(name, val("DisplayVersion"), val("Publisher"),
-                                    install_location=val("InstallLocation"), display_icon=val("DisplayIcon"),
-                                    uninstall_string=val("UninstallString"), install_date=val("InstallDate"))
                         found[(p.name, p.version)] = p
                 except OSError:
                     continue

@@ -410,7 +410,8 @@ INST_KIND_NAMES = {"installed": "설치됨", "winget": "설치 도구로 설치 
                    "not_needed": "설치 불필요"}
 INST_VERSION_DIFF = "구 {old} → 새 {new}"
 INST_SPACE_HINT = "'표시' 칸 클릭 또는 Space 키로 '설치 끝냄'을 표시해 둘 수 있습니다(기억용이며 판정에는 쓰이지 않습니다)."
-INST_DETAIL = "{name} · {status} · 근거: {reason}{old}{hint}"
+INST_DETAIL = "{name} · {status} · 근거: {reason}{old}{vendor}{hint}"
+INST_DETAIL_VENDOR = " · 제조사 사이트: {url}"  # 제조사가 적어 둔 안내 주소(글자로만 보여 주고 열거나 접속하지 않는다)
 INST_DETAIL_OLD = " · {old}"
 INST_NO_VERSION_COL = "(버전 정보 없음)"
 INST_OLD_VERSION_GUIDE = ("직접 설치하는 프로그램은 같은 버전을 받아 설치해 주세요. 구 PC의 제어판 > 프로그램 및 기능에서 확인한 값입니다(줄을 누르면 아래에 표시). "

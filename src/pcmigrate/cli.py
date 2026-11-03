@@ -15,7 +15,7 @@ from .api import (NEEDS_CONFIRM, ApiError, Deps, check_outputs_outside, check_pa
                   run_discover, run_export, run_export_retry, run_find_program, run_import, run_install_check, run_join, run_manifest,
                   run_scan, run_transfer,
                   run_undo_import, run_verify, run_winget_extract, run_winget_list, same_file, selection_json)
-from .checklist import write_output
+from .checklist import VENDOR_SITE_LABEL, write_output
 from .detect import read_registry_programs, winget_export_raw, winget_list_raw
 from . import install_check as ic
 from . import selftransfer
@@ -609,6 +609,8 @@ def _install_check_text(r: ic.InstallCheck, package: str) -> str:
             extra = f" [{i.hint}]" if i.hint else ""
             lines.append(f"  {mark} {i.name} — {i.reason}{extra}")
             lines.append(f"      {i.old_info}")
+            if i.vendor_url and status in (ic.AMBIGUOUS, ic.MANUAL):  # 수동 설치 항목에만: 제조사가 적어 둔 안내 주소(글자로만, 접속하지 않음)
+                lines.append(f"      {VENDOR_SITE_LABEL}: {i.vendor_url}")
         if status in (ic.AMBIGUOUS, ic.MANUAL):
             lines.append("  ※ " + ic.OLD_VERSION_GUIDE)
         lines.append("")

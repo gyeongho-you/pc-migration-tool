@@ -230,7 +230,8 @@ class InstallPanel(ttk.Frame):
         self.detail.configure(text=T.INST_DETAIL.format(
             name=row["name"], status=T.INST_KIND_NAMES[key], reason=row["reason"],
             hint=T.INST_DETAIL_HINT.format(hint=row["hint"]) if row["hint"] else "",
-            old=T.INST_DETAIL_OLD.format(old=row["old_info"]) if row["old_info"] else ""))
+            old=T.INST_DETAIL_OLD.format(old=row["old_info"]) if row["old_info"] else "",
+            vendor=T.INST_DETAIL_VENDOR.format(url=row["vendor_url"]) if row.get("vendor_url") else ""))
 
 
 class InstallView(BaseView):
