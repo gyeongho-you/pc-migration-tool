@@ -431,6 +431,10 @@ def stage_files(plan: StagePlan, stage: Path, *, cancel=None, progress: Callable
         checkpoint()
         if cancel is not None and cancel():
             raise Cancelled()
+        if i % 200 == 0:  # 하드 링크가 계속 성공해 continue 하더라도 표식 갱신/진행 표시가 건너뛰어지지 않게 앞에서 처리한다
+            touch_marker(stage)
+            if progress:
+                progress(f"끌어다 놓은 파일 준비 중 {i:,}/{len(plan.files):,}")
         out = stage / dest_rel(src)
         try:
             if len(str(out)) > MAX_STAGE_PATH:
@@ -449,10 +453,6 @@ def stage_files(plan: StagePlan, stage: Path, *, cancel=None, progress: Callable
         except OSError as e:
             plan.failed.append({"path": src, "reason": reason_text(e)})
             errorlog.record(e, f"drop-stage link {src}")
-        if i % 200 == 0:
-            touch_marker(stage)
-            if progress:
-                progress(f"끌어다 놓은 파일 준비 중 {i:,}/{len(plan.files):,}")
     need = sum(t[2] for t in todo)
     free = free_fn(str(stage))
     if todo and free is not None and free < int(need * (1 + SPACE_MARGIN)):
