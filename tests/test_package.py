@@ -220,7 +220,8 @@ def test_forged_manifest_base_not_in_rule_rejected(env):
 def test_forged_manifest_unknown_rule_and_license_rejected(env):
     out, rules, new, expand_for = build(env)
     bad = forge_manifest(out, rules, lambda m: m["files"][0].update(rule="nope"))
-    assert any("알 수 없는" in p for p in plan_import(bad, rules, expand_for(new)).problems)
+    p0 = plan_import(bad, rules, expand_for(new))  # stage81: 알 수 없는 규칙 id 는 그 항목만 denied(unknown_rule), 패키지 전체는 막지 않는다
+    assert p0.problems == [] and p0.items[0]["status"] == "denied" and p0.items[0]["skip_kind"] == "unknown_rule"
     bad2 = forge_manifest(out, rules, lambda m: m["files"][0].update(rel="Demo 2024/R1/Support/k.lic"))
     plan2 = plan_import(bad2, rules, expand_for(new))  # stage68(H1): 라이선스 파일은 패키지 전체를 막지 않고 그 항목만 '복원 안 함'
     assert plan2.problems == [] and plan2.items[0]["status"] == "denied"
