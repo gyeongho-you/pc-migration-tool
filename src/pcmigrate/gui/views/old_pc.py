@@ -661,7 +661,7 @@ class ExportView(BaseView):
         self.summary = ResultSummary(body)
         self.summary.pack(fill="x", pady=3)
         self.summary.box.pack_configure(pady=(3, 0))
-        self.cov_fold = Collapsible(body, T.EXP_CHECK_FOLD, T.EXP_CHECK_FOLD_OPEN)  # 설정 확인표는 접어 둔다
+        self.cov_fold = Collapsible(body, f"{T.COV2_TITLE} ▸", f"{T.COV2_TITLE} ▾")  # 프로그램별로 옮겨지는 것과 직접 해야 할 것(끝나면 기본으로 펼친다)
         self.cov = CoverageBox(self.cov_fold.body, title="",  # 끝난 뒤: 프로그램별 설정 확인표(빠진 파일 예시는 탐색기에서 볼 수 있다: 구 PC 에서만)
                                explorer=(self.c.can_show_in_explorer, self.c.show_in_explorer))
         self.cov.title_label.pack_forget()
@@ -814,12 +814,12 @@ class ExportView(BaseView):
         set_text(self.result, lines)
         self.next_box.pack(fill="x", pady=(3, 0), before=self.lic_link)
         table = self.c.coverage_table(payload)
-        self.cov.show(table)
+        self.cov.show(table, self.c.coverage_other_manual())
         head = self.c.coverage_headline(table)
-        self.cov_fold.title = f"{T.EXP_CHECK_TITLE}: {head} ▸" if head else T.EXP_CHECK_FOLD
+        self.cov_fold.title = f"{T.COV2_TITLE}: {head} ▸" if head else f"{T.COV2_TITLE} ▸"
         self.cov_fold.title_open = self.cov_fold.title.replace("▸", "▾")
-        self.cov_fold.set_open(self.cov_fold.open)
-        self.cov_fold.pack(fill="x", pady=(2, 0), before=self.lic_link)
+        self.cov_fold.set_open(True)  # 결과가 나오면 기본으로 펼친다(사용자가 접을 수 있음)
+        self.cov_fold.pack(fill="x", pady=(2, 0), before=self.next_box)  # 결과 요약 바로 아래(다음에 할 일 위)
         note = self.c.cache_skipped_text(payload)
         self.cache_note.configure(text=note)
         if note:

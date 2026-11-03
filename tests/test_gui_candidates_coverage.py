@@ -213,7 +213,7 @@ def test_export_view_include_caches_checkbox_and_coverage_box(ctx, tmp_path):
     c.state.export_output = str(tmp_path / "x.zip")
     v.on_event("export_done", SimpleNamespace(manifest=m))
     app.update()
-    assert [r["values"][2] for r in children(v.cov.tree)] == ["담김"]
+    assert [r["values"][3] for r in children(v.cov.tree)] == [T.COV2_ST_OK]  # stage86: 열이 프로그램/옮겨진 설정/직접 해야 할 것/상태
     assert "해당 없음 1곳" in v.cov.fold.toggle_btn.cget("text") and v.cov.winfo_manager()
     assert "임시 저장물 폴더 1개" in v.cache_note.cget("text")
     v.cov.fold.toggle()
@@ -233,7 +233,9 @@ def test_preview_and_result_show_coverage(ctx):
     c.go(S.NEW_PREVIEW)
     app.update()
     v = app.views[S.NEW_PREVIEW]
-    assert [r["values"][2] for r in children(v.cov.tree)] == ["담김", "직접 해야 함"]
+    assert [r["values"][3] for r in children(v.cov.tree)] == [T.COV2_ST_OK, T.COV2_ST_MANUAL]
+    assert v.cov_fold.open  # 미리보기에서도 기본으로 펼친다
+    assert v.cov_fold.toggle_btn.cget("text").startswith(T.COV2_PREVIEW_TITLE)
     assert "담김 1" in v.cov_fold.toggle_btn.cget("text")
     # 오래된 패키지(coverage 없음)도 표가 깨지지 않는다
     p2 = real_api.ImportResult(plan([]), "dry-run", 0)
