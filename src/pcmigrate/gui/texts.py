@@ -910,13 +910,9 @@ from .texts_exts import install as _install_exts_texts  # noqa: E402  (stage61: 
 _install_exts_texts(globals())
 from .texts_record import install as _install_record_texts  # noqa: E402  (stage60: 바꿔 보며 설정 찾기 화면 문구)
 _install_record_texts(globals())
-<<<<<<< HEAD
-START_CHOICES = (START_CHOICES[0], START_CARD3, START_CHOICES[1])  # noqa: F821  (② 카드 문구는 texts_files.py: 내 파일 옮기기)
-=======
 from .texts_coverage import install as _install_coverage_texts  # noqa: E402  (stage86: 프로그램별 옮겨지는 것/직접 해야 할 것 확인표 문구)
 _install_coverage_texts(globals())
-START_CHOICES = (START_CHOICES[0], START_CARD3, START_CHOICES[2])  # noqa: F821  (② 카드만 새 문구로)
->>>>>>> stage86-coverage-table
+START_CHOICES = (START_CHOICES[0], START_CARD3, START_CHOICES[1])  # noqa: F821  (② 카드 문구는 texts_files.py: 내 파일 옮기기)
 
 # --------------------------------------------------------------------------- 전체 이전 순서(? 도움말에서 열림, README 와 같은 원본)
 BTN_ROADMAP = "전체 이전 순서 보기"
