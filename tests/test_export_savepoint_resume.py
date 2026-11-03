@@ -370,7 +370,7 @@ def test_savepoint_resume_progress_reports_resumed_count(env, monkeypatch):
     sm.begin(T.TASK_EXPORT)
     for e in events:
         sm.info(e)
-    assert "4" in sm.snapshot().resumed_line and "저장점" in sm.snapshot().resumed_line
+    assert "4" in sm.snapshot().resumed_line and "중단된 지점" in sm.snapshot().resumed_line  # v0.3.7: 용어 통일(저장점→중단된 지점)
 
 
 def test_resume_hint_and_inspect(env, monkeypatch):
